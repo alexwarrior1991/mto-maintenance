@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetResponse;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetUpdateRequest;
@@ -48,7 +49,7 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
         if (repository.existsByCode(code)) {
             throw new DuplicateCodeException("Catenary asset", code);
         }
-        new KilometricRange(request.startKp(), request.endKp());
+        domain(() -> new KilometricRange(request.startKp(), request.endKp()));
 
         CatenaryAsset asset = CatenaryAsset.builder()
                 .code(code)
@@ -116,7 +117,7 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
                 asset.setTrackKind(request.trackKind());
             }
             if (asset.getStartKp() != null && asset.getEndKp() != null) {
-                new KilometricRange(asset.getStartKp(), asset.getEndKp());
+                domain(() -> new KilometricRange(asset.getStartKp(), asset.getEndKp()));
             }
         }
 

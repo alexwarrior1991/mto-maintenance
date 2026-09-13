@@ -223,13 +223,14 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         if (!task.isOpen()) {
             throw new InvalidTransitionException("Task " + task.getSequence() + " is " + task.getStatus() + " and cannot be completed");
         }
-        MaintenanceShift shift = workingShift(task, request.shiftId());
-        Instant now = Instant.now();
-
+        // Los tipos de tarea se aplican ANTES de comprobar el turno: son ellos los que dicen si el
+        // trabajo exige posesion total.
         if (request.taskTypeCodes() != null && !request.taskTypeCodes().isEmpty()) {
             task.getTaskTypes().clear();
             task.getTaskTypes().addAll(lookups.taskTypes(request.taskTypeCodes()));
         }
+        MaintenanceShift shift = workingShift(task, request.shiftId());
+        Instant now = Instant.now();
         if (request.notes() != null) {
             task.setNotes(request.notes());
         }

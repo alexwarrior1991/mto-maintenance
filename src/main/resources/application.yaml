@@ -158,28 +158,6 @@ springdoc:
     disable-swagger-default-url: true
   show-actuator: ${SPRINGDOC_SHOW_ACTUATOR:false}
 
-# Aislamiento de fallos hacia mto-stock. Con el circuito abierto las llamadas fallan al instante y
-# la linea de material queda en FAILED para reintentarla con /sync.
-resilience4j:
-  circuitbreaker:
-    configs:
-      default:
-        sliding-window-type: COUNT_BASED
-        sliding-window-size: 10
-        minimum-number-of-calls: 5
-        failure-rate-threshold: 50
-        wait-duration-in-open-state: 30s
-        permitted-number-of-calls-in-half-open-state: 3
-        automatic-transition-from-open-to-half-open-enabled: true
-    instances:
-      stock:
-        base-config: default
-  retry:
-    instances:
-      stock:
-        max-attempts: 2
-        wait-duration: 300ms
-
 app:
   security:
     # Cliente de Keycloak que representa a esta API. Sus roles de cliente son los permisos que
@@ -266,3 +244,12 @@ app:
     base-url: ${MTO_STOCK_URL:http://localhost:8080}
     # Registro de spring.security.oauth2.client con el que se pide el token de la cuenta de servicio.
     client-registration-id: mto-services
+    # Aislamiento de fallos: con el circuito abierto las llamadas fallan al instante y la linea de
+    # material queda en FAILED para reintentarla con /sync. Se configura aqui y no en resilience4j.*
+    # porque el starter de Spring Cloud CircuitBreaker no lee esas propiedades.
+    circuit-breaker:
+      sliding-window-size: ${APP_STOCK_CB_SLIDING_WINDOW_SIZE:10}
+      minimum-number-of-calls: ${APP_STOCK_CB_MINIMUM_NUMBER_OF_CALLS:5}
+      failure-rate-threshold: ${APP_STOCK_CB_FAILURE_RATE_THRESHOLD:50}
+      wait-duration-in-open-state: ${APP_STOCK_CB_WAIT_DURATION_IN_OPEN_STATE:30s}
+      timeout: ${APP_STOCK_CB_TIMEOUT:10s}

@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectRequest;
@@ -81,7 +82,7 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
         if (request.startKp() != null || request.endKp() != null) {
             defect.setStartKp(request.startKp() != null ? request.startKp() : request.endKp());
             defect.setEndKp(request.endKp() != null ? request.endKp() : request.startKp());
-            new KilometricRange(defect.getStartKp(), defect.getEndKp());
+            domain(() -> new KilometricRange(defect.getStartKp(), defect.getEndKp()));
         }
 
         CatenaryDefect saved = repository.save(defect);

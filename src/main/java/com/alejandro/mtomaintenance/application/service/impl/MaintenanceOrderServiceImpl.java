@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.order.AssignOrderRequest;
@@ -157,7 +158,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
                 order.setStockProjectId(request.stockProjectId());
             }
             if (order.getStartKp() != null && order.getEndKp() != null) {
-                new KilometricRange(order.getStartKp(), order.getEndKp());
+                domain(() -> new KilometricRange(order.getStartKp(), order.getEndKp()));
             }
         }
         return toResponse(repository.save(order));

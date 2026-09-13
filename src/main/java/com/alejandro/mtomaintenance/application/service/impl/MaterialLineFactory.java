@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.stock.StockMaterial;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
@@ -38,7 +39,7 @@ class MaterialLineFactory {
         if (resolvedUnit == null) {
             throw new ValidationException("unit is required when the material cannot be resolved against stock");
         }
-        Quantity quantity = new Quantity(plannedQuantity, resolvedUnit);
+        Quantity quantity = domain(() -> new Quantity(plannedQuantity, resolvedUnit));
 
         return MaintenanceMaterialUsage.builder()
                 .order(order)

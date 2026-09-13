@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageRequest;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageResponse;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageUpdateRequest;
@@ -79,10 +80,10 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
             if (usage.getStockReservationId() != null) {
                 throw new MaterialUsageException("The planned quantity of a reserved line cannot change; cancel and register it again");
             }
-            usage.setPlannedQuantity(new Quantity(request.plannedQuantity(), usage.getUnit()).amount());
+            usage.setPlannedQuantity(domain(() -> new Quantity(request.plannedQuantity(), usage.getUnit())).amount());
         }
         if (request.consumedQuantity() != null) {
-            Quantity consumed = new Quantity(request.consumedQuantity(), usage.getUnit());
+            Quantity consumed = domain(() -> new Quantity(request.consumedQuantity(), usage.getUnit()));
             if (consumed.amount().compareTo(usage.getPlannedQuantity()) > 0 && !usage.getAllowOverConsumption()) {
                 throw new MaterialUsageException("Consumed quantity " + consumed.amount() + " exceeds the planned "
                         + usage.getPlannedQuantity() + " " + usage.getUnit() + " and over-consumption is not allowed for this line");

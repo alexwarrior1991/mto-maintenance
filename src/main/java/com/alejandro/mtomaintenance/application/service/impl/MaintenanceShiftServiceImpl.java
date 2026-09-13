@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
@@ -336,7 +337,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
 
     private static void validate(MaintenanceShift shift) {
         if (shift.getStartKp() != null && shift.getEndKp() != null) {
-            new KilometricRange(shift.getStartKp(), shift.getEndKp());
+            domain(() -> new KilometricRange(shift.getStartKp(), shift.getEndKp()));
         }
         if (shift.getPlannedStart() != null && shift.getPlannedEnd() != null && !shift.getPlannedStart().isBefore(shift.getPlannedEnd())) {
             throw new ValidationException("plannedStart must be before plannedEnd");
