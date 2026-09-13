@@ -1,10 +1,26 @@
 package com.alejandro.mtomaintenance;
 
+import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataEntityNames;
+import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
+import com.alejandro.mtomaintenance.application.service.CatenaryDefectService;
 import com.alejandro.mtomaintenance.application.service.EntityAuditService;
 import com.alejandro.mtomaintenance.application.service.InboxMessageService;
+import com.alejandro.mtomaintenance.application.service.InspectionTemplateService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator;
+import com.alejandro.mtomaintenance.application.service.MaintenanceInspectionService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceReportService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceTaskService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceTaskTypeService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceTeamService;
 import com.alejandro.mtomaintenance.application.service.MasterDataEntityHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor;
+import com.alejandro.mtomaintenance.application.service.StatusHistoryService;
+import com.alejandro.mtomaintenance.application.service.StockClient;
+import com.alejandro.mtomaintenance.application.service.WorkloadEstimator;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
 import io.micrometer.tracing.Tracer;
 import org.junit.jupiter.api.Test;
@@ -86,11 +102,30 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
     /** Lista viva: cada fase que anade un servicio lo anade aqui. */
     static final class BusinessServices {
         static final List<Class<?>> ALL = List.of(
+                CatenaryAssetService.class,
+                CatenaryDefectService.class,
                 EntityAuditService.class,
                 InboxMessageService.class,
-                MasterDataEventProcessor.class);
+                InspectionTemplateService.class,
+                MaintenanceCodeGenerator.class,
+                MaintenanceInspectionService.class,
+                MaintenanceMaterialUsageService.class,
+                MaintenanceOrderService.class,
+                MaintenanceReportService.class,
+                MaintenanceShiftService.class,
+                MaintenanceTaskService.class,
+                MaintenanceTaskTypeService.class,
+                MaintenanceTeamService.class,
+                MasterDataEventProcessor.class,
+                StatusHistoryService.class,
+                StockClient.class,
+                WorkloadEstimator.class);
 
-        static final List<String> HANDLED_ENTITIES = List.of();
+        static final List<String> HANDLED_ENTITIES = List.of(
+                MasterDataEntityNames.PROFILE,
+                MasterDataEntityNames.DISCONNECTOR,
+                MasterDataEntityNames.SECTION_INSULATOR,
+                MasterDataEntityNames.TRACK);
 
         private BusinessServices() {
         }
