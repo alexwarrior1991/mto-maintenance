@@ -1,0 +1,61 @@
+{
+  "users": [
+    {
+      "username": "mantenimiento.lector",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Laura",
+      "lastName": "Lectora",
+      "email": "mantenimiento.lector@mto.local",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "mto-maintenance-viewer"
+      ]
+    },
+    {
+      "username": "mantenimiento.tecnico",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Tomas",
+      "lastName": "Tecnico",
+      "email": "mantenimiento.tecnico@mto.local",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "mto-maintenance-technician"
+      ]
+    },
+    {
+      "username": "mantenimiento.responsable",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Marta",
+      "lastName": "Responsable",
+      "email": "mantenimiento.responsable@mto.local",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "mto-maintenance-manager"
+      ]
+    }
+  ]
+}

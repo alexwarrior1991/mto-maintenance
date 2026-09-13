@@ -1,0 +1,259 @@
+### MTO Maintenance API - IntelliJ HTTP Client
+# Walks through a preventive shift the way the daily report of 27.01.2026 recorded it:
+# track section Raanana-Herzliya track 2 -> preventive order -> tasks per profile -> plan
+# (stock reservation) -> shift of team A -> start -> complete tasks with an inline defect ->
+# close the shift -> shift report -> complete the order -> progress report.
+@host = localhost
+@port = 8083
+@baseUrl = http://{{host}}:{{port}}/api/v1/maintenance
+@keycloakUrl = http://auth.mto.local:8082
+@realm = mto
+@clientId = mto-frontend
+@username = mantenimiento.responsable
+@password = local
+@trackId = 2
+@executionPackageId = 6
+@teamId = 0195a000-0000-7000-8000-000000000001
+
+### Auth - access token (mantenimiento.lector / .tecnico / .responsable, password 'local')
+POST {{keycloakUrl}}/realms/{{realm}}/protocol/openid-connect/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id={{clientId}}&username={{username}}&password={{password}}
+
+> {%
+    client.global.set("accessToken", response.body.access_token);
+%}
+
+### Assets - profiles synchronized from mto-configuration on track 2
+GET {{baseUrl}}/assets?type=PROFILE&trackId={{trackId}}&enabled=true&size=50
+Authorization: Bearer {{accessToken}}
+
+### Assets - create the track section (the only asset type created here)
+POST {{baseUrl}}/assets
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "code": "SEC-T2-RAAN-HER",
+  "name": "Raanana - Herzliya, track 2",
+  "trackKind": "MAIN",
+  "trackId": {{trackId}},
+  "executionPackageId": {{executionPackageId}},
+  "startKp": 12847.990,
+  "endKp": 14078.090,
+  "preventiveIntervalDays": 180
+}
+
+> {%
+    client.global.set("sectionId", response.body.id);
+%}
+
+### Task types - the RG/RP catalogue
+GET {{baseUrl}}/task-types?functionalGroup=STRUCTURAL_SUPPORTS
+Authorization: Bearer {{accessToken}}
+
+### Orders - create the preventive order on the section
+POST {{baseUrl}}/orders
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Preventive revision T2 Raanana-Herzliya",
+  "type": "PREVENTIVE",
+  "priority": "MEDIUM",
+  "assetId": "{{sectionId}}",
+  "teamId": "{{teamId}}"
+}
+
+> {%
+    client.global.set("orderId", response.body.id);
+%}
+
+### Orders - generate one task per profile (default types RG-01, RG-05, RG-08, RG-10, RG-11, RG-12, RG-13, RP-08)
+POST {{baseUrl}}/orders/{{orderId}}/tasks/generate
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Orders - tasks with their estimate
+GET {{baseUrl}}/orders/{{orderId}}/tasks
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.global.set("taskId", response.body[0].id);
+%}
+
+### Orders - register a material (ids from mto-stock)
+POST {{baseUrl}}/orders/{{orderId}}/materials
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "materialCode": "DROPPER-STD",
+  "warehouseId": "018f60be-1b9a-7cc3-8c6b-2f93e8c6a001",
+  "plannedQuantity": 6,
+  "unit": "UNIT"
+}
+
+> {%
+    client.global.set("usageId", response.body.id);
+%}
+
+### Orders - plan (reserves the materials in mto-stock)
+POST {{baseUrl}}/orders/{{orderId}}/plan
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "plannedDate": "2026-01-27"
+}
+
+### Shifts - create the night shift of team A (partial possession, main track)
+POST {{baseUrl}}/shifts
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "shiftDate": "2026-01-27",
+  "teamId": "{{teamId}}",
+  "possessionType": "PARTIAL",
+  "trackId": {{trackId}},
+  "startKp": 12847.990,
+  "endKp": 14078.090,
+  "plannedStart": "2026-01-27T21:00:00Z",
+  "plannedEnd": "2026-01-28T05:00:00Z",
+  "baseName": "Rishpon",
+  "vehicle": "Maintenance vehicle A",
+  "personnel": "Foreman + 4 linemen"
+}
+
+> {%
+    client.global.set("shiftId", response.body.id);
+%}
+
+### Orders - start
+POST {{baseUrl}}/orders/{{orderId}}/start
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Shifts - start (actual start and voltage cut-off)
+POST {{baseUrl}}/shifts/{{shiftId}}/start
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "actualStart": "2026-01-27T21:10:00Z",
+  "voltageCutoffAt": "2026-01-27T23:40:00Z"
+}
+
+### Tasks - complete the first profile with an inline defect resolved in the shift
+POST {{baseUrl}}/orders/{{orderId}}/tasks/{{taskId}}/complete
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "shiftId": "{{shiftId}}",
+  "notes": "Clean insulators, tighten cantilever screws and steady arm, straighten droppers",
+  "workComplete": true,
+  "inlineDefects": [
+    {
+      "severity": "LOW",
+      "description": "Damaged dropper at 13-2.01",
+      "correctionType": "Replacement",
+      "partsReplaced": "1 dropper"
+    }
+  ],
+  "materials": [
+    {
+      "materialCode": "DROPPER-STD",
+      "warehouseId": "018f60be-1b9a-7cc3-8c6b-2f93e8c6a001",
+      "quantity": 1,
+      "unit": "UNIT"
+    }
+  ]
+}
+
+### Shifts - close (computes net work minutes, releases unfinished tasks back to PENDING)
+POST {{baseUrl}}/shifts/{{shiftId}}/close
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "actualEnd": "2026-01-28T04:30:00Z",
+  "observations": "Voltage cut-off delayed by traffic"
+}
+
+### Shifts - daily report (one row per profile)
+GET {{baseUrl}}/shifts/{{shiftId}}/report
+Authorization: Bearer {{accessToken}}
+
+### Orders - complete (consumes the reservations; force=true needs maintenance-supervise)
+POST {{baseUrl}}/orders/{{orderId}}/complete
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "closingNotes": "Profiles 12-2.27 to 14-2.02 revised"
+}
+
+### Orders - history and revisions
+GET {{baseUrl}}/orders/{{orderId}}/history
+Authorization: Bearer {{accessToken}}
+
+### Reports - progress of EP06 on track 2
+GET {{baseUrl}}/reports/progress?executionPackageId={{executionPackageId}}&trackId={{trackId}}
+Authorization: Bearer {{accessToken}}
+
+### Reports - monthly figures
+GET {{baseUrl}}/reports/monthly?executionPackageId={{executionPackageId}}&month=2026-01
+Authorization: Bearer {{accessToken}}
+
+### Inspections - technical inspection of a disconnector (template copied automatically)
+GET {{baseUrl}}/assets?type=DISCONNECTOR&size=1
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.global.set("disconnectorId", response.body.content[0].id);
+%}
+
+###
+POST {{baseUrl}}/inspections
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "assetId": "{{disconnectorId}}",
+  "inspectionDate": "2026-01-28",
+  "inspector": "T. Tecnico",
+  "inspectionKind": "TECHNICAL",
+  "result": "UNSAFE",
+  "description": "Broken contact blade",
+  "detectedDefects": "Blade cracked, cannot be operated under load",
+  "recommendedActions": "Replace the disconnector"
+}
+
+> {%
+    client.global.set("inspectionId", response.body.id);
+%}
+
+### Inspections - create the defect and the urgent corrective order (both idempotent)
+POST {{baseUrl}}/inspections/{{inspectionId}}/create-defect
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+###
+POST {{baseUrl}}/inspections/{{inspectionId}}/create-corrective-order
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{}
+
+### Materials - retry the stock synchronization of a FAILED line
+POST {{baseUrl}}/orders/{{orderId}}/materials/{{usageId}}/sync
+Authorization: Bearer {{accessToken}}

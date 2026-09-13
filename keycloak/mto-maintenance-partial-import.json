@@ -1,0 +1,110 @@
+{
+  "roles": {
+    "client": {
+      "mto-maintenance-api": [
+        {
+          "name": "maintenance-read",
+          "description": "Consulta de activos, ordenes, tareas, turnos, inspecciones, defectos, materiales e informes"
+        },
+        {
+          "name": "maintenance-write",
+          "description": "Alta y modificacion de ordenes, tareas, turnos, inspecciones, defectos y materiales; transiciones ordinarias (plan, assign, start, complete)"
+        },
+        {
+          "name": "maintenance-delete",
+          "description": "Desactivacion de activos"
+        },
+        {
+          "name": "maintenance-supervise",
+          "description": "Decisiones de supervision. Se pide ADEMAS de maintenance-write: cancelar ordenes, completar con force, resolver, cerrar y descartar defectos"
+        },
+        {
+          "name": "ops-metrics",
+          "description": "Lectura de los endpoints de Actuator de mto-maintenance"
+        },
+        {
+          "name": "ops-write",
+          "description": "Operaciones de Actuator de mto-maintenance que modifican estado"
+        }
+      ]
+    },
+    "realm": [
+      {
+        "name": "mto-maintenance-viewer",
+        "description": "Consulta de mantenimiento: activos, ordenes, turnos, inspecciones, defectos e informes",
+        "composite": true,
+        "composites": {
+          "client": {
+            "mto-maintenance-api": [
+              "maintenance-read"
+            ]
+          }
+        }
+      },
+      {
+        "name": "mto-maintenance-technician",
+        "description": "Trabajo de campo: ordenes, tareas por perfil, turnos, inspecciones, defectos y materiales",
+        "composite": true,
+        "composites": {
+          "client": {
+            "mto-maintenance-api": [
+              "maintenance-read",
+              "maintenance-write"
+            ]
+          }
+        }
+      },
+      {
+        "name": "mto-maintenance-manager",
+        "description": "Responsables de mantenimiento: ademas del trabajo de campo, cancelan ordenes, cierran defectos y desactivan activos",
+        "composite": true,
+        "composites": {
+          "client": {
+            "mto-maintenance-api": [
+              "maintenance-read",
+              "maintenance-write",
+              "maintenance-delete",
+              "maintenance-supervise"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "mto-maintenance-api",
+      "name": "API de mantenimiento MTO",
+      "description": "Resource server. No inicia ningun flujo: existe para declarar los permisos como roles de cliente y para ser la audiencia de los tokens.",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "mto-maintenance-svc",
+      "name": "Cuenta de servicio de mto-maintenance",
+      "description": "Llamadas salientes a mto-stock (reservas, consumos y salidas de material) mediante client_credentials.",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "audiencia-mto-stock-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "mto-stock-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}
