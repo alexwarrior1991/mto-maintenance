@@ -1,6 +1,8 @@
 package com.alejandro.mtomaintenance.infrastructure.persistence.entity;
 
+import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -13,6 +15,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
@@ -31,6 +34,8 @@ import org.hibernate.type.SqlTypes;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Turno nocturno: la unidad real de ejecucion y el origen del informe diario. Cubre UNA via; con
@@ -43,7 +48,6 @@ import java.time.LocalDate;
         uniqueConstraints = @UniqueConstraint(name = "uq_maintenance_shift_code", columnNames = "code"),
         indexes = {
                 @Index(name = "idx_maintenance_shift_date_team", columnList = "shift_date, team_id"),
-                @Index(name = "idx_maintenance_shift_track_date", columnList = "track_id, shift_date"),
                 @Index(name = "idx_maintenance_shift_status", columnList = "status")
         }
 )
@@ -124,10 +128,21 @@ public class MaintenanceShift extends AuditableEntity {
     @Column(name = "execution_package_id")
     private Long executionPackageId;
 
-    @NotNull
+    /**
+     * Vias (ids de mto-configuration) que recorre el turno. Una noche puede cubrir mas de una via;
+     * mas de un EP es raro y se registra como dos turnos. La tarea de un perfil solo entra en el turno
+     * si su via esta aqui.
+     */
+    @NotEmpty
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(
+            name = "maintenance_shift_track",
+            joinColumns = @JoinColumn(name = "shift_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_track_shift"))
+    )
     @Column(name = "track_id", nullable = false)
+    @Builder.Default
     @ToString.Include
-    private Long trackId;
+    private Set<Long> trackIds = new LinkedHashSet<>();
 
     @Digits(integer = 9, fraction = 3)
     @Column(name = "start_kp", precision = 12, scale = 3)
@@ -157,5 +172,9 @@ public class MaintenanceShift extends AuditableEntity {
 
     public boolean isInProgress() {
         return ShiftStatus.IN_PROGRESS == status;
+    }
+
+    public boolean worksOn(Long trackId) {
+        return trackId != null && trackIds.contains(trackId);
     }
 }

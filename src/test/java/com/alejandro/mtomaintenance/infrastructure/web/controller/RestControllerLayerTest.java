@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageMetadataResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.order.CancelOrderRequest;
@@ -9,9 +10,12 @@ import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasks
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
 import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskService;
 import com.alejandro.mtomaintenance.application.service.StatusHistoryService;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderStatus;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -79,6 +83,22 @@ class RestControllerLayerTest {
         assertSame(order, cancelResponse.getBody());
         assertSame(generated, generateResponse.getBody());
         verify(orderService).search(MaintenanceOrderStatus.PLANNED, null, MaintenancePriority.HIGH, null, null, 2L, null, null, from, to, null, null, null, null, null, pageable);
+    }
+
+    @Test
+    void shiftControllerExposesTheProfilesReviewedAndFiltersItsTasksByStatus() {
+        MaintenanceShiftService shiftService = mock(MaintenanceShiftService.class);
+        MaintenanceTaskService taskService = mock(MaintenanceTaskService.class);
+        MaintenanceShiftController controller = new MaintenanceShiftController(shiftService, taskService);
+        UUID shiftId = UUID.randomUUID();
+        List<CatenaryAssetSummaryResponse> profiles = List.of(new CatenaryAssetSummaryResponse(UUID.randomUUID(), "PRF-1", "12-2.27",
+                CatenaryAssetType.PROFILE, 2L, new BigDecimal("12847.990"), new BigDecimal("12847.990"), "A/S", true));
+        when(shiftService.profiles(shiftId, null)).thenReturn(profiles);
+        when(taskService.findByShift(shiftId, MaintenanceTaskStatus.COMPLETED)).thenReturn(List.of());
+
+        assertSame(profiles, controller.profiles(shiftId, null).getBody());
+        assertEquals(List.of(), controller.tasks(shiftId, MaintenanceTaskStatus.COMPLETED).getBody());
+        verify(taskService).findByShift(shiftId, MaintenanceTaskStatus.COMPLETED);
     }
 
     private static void assertController(Class<?> controller, String basePath, String tag) {

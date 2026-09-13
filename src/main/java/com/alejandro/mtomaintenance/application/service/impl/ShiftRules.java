@@ -8,9 +8,10 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Possession
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 
 /**
- * Ventanas de ejecucion del plan OCS: entre semana solo se corta una via principal entre dos
+ * Ventanas de ejecucion del plan OCS: entre semana se corta la via principal entre dos
  * seccionadores (posesion parcial) y quedan prohibidos los grupos 3 y 5 y RP-12; las vias desviadas
- * y esos trabajos esperan a la posesion total de fin de semana o festivo.
+ * y esos trabajos esperan a la posesion total de fin de semana o festivo. Un turno puede recorrer
+ * varias vias en la misma noche: lo que se exige es que la via del perfil sea una de ellas.
  */
 final class ShiftRules {
 
@@ -21,8 +22,8 @@ final class ShiftRules {
         Long taskTrack = task.getAsset() != null && task.getAsset().getTrackId() != null
                 ? task.getAsset().getTrackId()
                 : task.getOrder().getTrackId();
-        if (taskTrack != null && !taskTrack.equals(shift.getTrackId())) {
-            throw new ShiftException("Shift " + shift.getCode() + " works on track " + shift.getTrackId()
+        if (taskTrack != null && !shift.worksOn(taskTrack)) {
+            throw new ShiftException("Shift " + shift.getCode() + " works on tracks " + shift.getTrackIds().stream().sorted().toList()
                     + " but the task belongs to track " + taskTrack);
         }
     }

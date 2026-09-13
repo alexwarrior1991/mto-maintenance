@@ -17,7 +17,8 @@ GET/POST        /teams        GET/PUT /teams/{id}
 
 GET/POST        /shifts                       date, dateFrom, dateTo, teamId, trackId, executionPackageId, status, possessionType
 GET/PUT         /shifts/{id}                  POST /shifts/{id}/start | /close | /cancel
-GET             /shifts/{id}/tasks | /report | /revisions
+GET             /shifts/{id}/tasks?status= | /profiles?status= | /report | /revisions
+                                              /profiles: PROFILE assets of the shift's tasks by kp (default status=COMPLETED = reviewed)
 POST            /shifts/{id}/tasks/{taskId}   assigns a task to the shift (track and window rules)
 
 GET/POST        /orders                       status, type, priority, assetId, assetType, trackId, stationId, executionPackageId,

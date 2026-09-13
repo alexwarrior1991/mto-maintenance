@@ -6,15 +6,19 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.InspectionTemplateRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceOrderRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceShiftRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTaskTypeRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.specification.CatenaryAssetSpecification;
 import com.alejandro.mtomaintenance.infrastructure.persistence.specification.MaintenanceOrderSpecification;
+import com.alejandro.mtomaintenance.infrastructure.persistence.specification.MaintenanceShiftSpecification;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceException;
@@ -35,6 +39,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
 
@@ -68,6 +73,9 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
 
     @Autowired
     private InspectionTemplateRepository templateRepository;
+
+    @Autowired
+    private MaintenanceShiftRepository shiftRepository;
 
     @Test
     void theCatalogueSeedsArePresentWithTheirExecutionWindows() {
@@ -175,6 +183,29 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
             assetRepository.save(section);
             entityManager.flush();
         });
+    }
+
+    @Test
+    void aShiftIsFoundByAnyOfTheTracksItCoversAndOnlyOnce() {
+        long trackA = System.nanoTime();
+        long trackB = trackA + 1;
+        long trackC = trackA + 2;
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        shiftRepository.save(MaintenanceShift.builder().code("SH-AB-" + suffix).shiftDate(LocalDate.of(2026, 1, 27)).possessionType(PossessionType.FULL)
+                .trackIds(new LinkedHashSet<>(List.of(trackA, trackB))).build());
+        shiftRepository.save(MaintenanceShift.builder().code("SH-C-" + suffix).shiftDate(LocalDate.of(2026, 1, 27)).possessionType(PossessionType.PARTIAL)
+                .trackIds(new LinkedHashSet<>(List.of(trackC))).build());
+        entityManager.flush();
+        entityManager.clear();
+
+        List<MaintenanceShift> onB = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnTrack(trackB));
+        List<MaintenanceShift> onC = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnTrack(trackC));
+        List<MaintenanceShift> both = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnTrack(trackA).or(MaintenanceShiftSpecification.worksOnTrack(trackB)));
+
+        assertEquals(List.of("SH-AB-" + suffix), onB.stream().map(MaintenanceShift::getCode).toList());
+        assertEquals(List.of("SH-C-" + suffix), onC.stream().map(MaintenanceShift::getCode).toList());
+        assertEquals(1, both.size(), "Un turno con dos vias no sale dos veces");
+        assertEquals(List.of(trackA, trackB), onB.getFirst().getTrackIds().stream().sorted().toList());
     }
 
     private int upsert(String sourceId, String name, Long sequence) {

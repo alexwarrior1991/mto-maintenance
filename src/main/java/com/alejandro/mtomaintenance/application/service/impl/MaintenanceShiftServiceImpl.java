@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
 import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
@@ -13,6 +14,7 @@ import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse
 import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
+import com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapper;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceShiftMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
 import com.alejandro.mtomaintenance.application.service.EntityAuditService;
@@ -50,9 +52,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 import java.util.stream.Collectors;
 
 @Service
@@ -66,6 +71,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     private final CatenaryDefectRepository defectRepository;
     private final MaintenanceMaterialUsageRepository materialRepository;
     private final MaintenanceShiftMapper mapper;
+    private final CatenaryAssetMapper assetMapper;
     private final MaintenanceLookups lookups;
     private final MaintenanceCodeGenerator codeGenerator;
     private final EntityAuditService auditService;
@@ -87,7 +93,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
                 .earthingPoints(request.earthingPoints())
                 .parkingPlace(request.parkingPlace())
                 .executionPackageId(request.executionPackageId())
-                .trackId(request.trackId())
+                .trackIds(new LinkedHashSet<>(request.trackIds()))
                 .startKp(request.startKp())
                 .endKp(request.endKp())
                 .personnel(request.personnel())
@@ -104,7 +110,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         }
         validate(shift);
         MaintenanceShift saved = repository.save(shift);
-        LOGGER.info("Shift created: code={}, date={}, track={}, possession={}", saved.getCode(), saved.getShiftDate(), saved.getTrackId(), saved.getPossessionType());
+        LOGGER.info("Shift created: code={}, date={}, tracks={}, possession={}", saved.getCode(), saved.getShiftDate(), saved.getTrackIds(), saved.getPossessionType());
         return mapper.toResponse(saved);
     }
 
@@ -151,8 +157,12 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         if (request.executionPackageId() != null) {
             shift.setExecutionPackageId(request.executionPackageId());
         }
-        if (request.trackId() != null) {
-            shift.setTrackId(request.trackId());
+        if (request.trackIds() != null) {
+            if (request.trackIds().isEmpty()) {
+                throw new ValidationException("A shift must cover at least one track");
+            }
+            shift.getTrackIds().clear();
+            shift.getTrackIds().addAll(request.trackIds());
         }
         if (request.startKp() != null) {
             shift.setStartKp(request.startKp());
@@ -188,7 +198,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         LocalDate to = date != null ? date : dateTo;
         Specification<MaintenanceShift> specification = MaintenanceShiftSpecification.dateBetween(from, to)
                 .and(MaintenanceShiftSpecification.teamIdEquals(teamId))
-                .and(MaintenanceShiftSpecification.trackIdEquals(trackId))
+                .and(MaintenanceShiftSpecification.worksOnTrack(trackId))
                 .and(MaintenanceShiftSpecification.executionPackageIdEquals(executionPackageId))
                 .and(MaintenanceShiftSpecification.statusEquals(status))
                 .and(MaintenanceShiftSpecification.possessionTypeEquals(possessionType));
@@ -307,7 +317,28 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         int pendingTasks = (int) tasks.stream().filter(MaintenanceTask::isOpen).count();
         int defectsFound = defectsByTask.values().stream().mapToInt(List::size).sum();
         int defectsResolved = (int) defectRepository.countByResolvedInShiftId(id);
-        return new ShiftReportResponse(mapper.toResponse(shift), completed, pendingTasks, defectsFound, defectsResolved, rows);
+        int profilesReviewed = (int) profileAssets(tasks, MaintenanceTaskStatus.COMPLETED).count();
+        return new ShiftReportResponse(mapper.toResponse(shift), completed, pendingTasks, profilesReviewed, defectsFound, defectsResolved, rows);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CatenaryAssetSummaryResponse> profiles(UUID id, MaintenanceTaskStatus status) {
+        lookups.shift(id);
+        return profileAssets(taskRepository.findByShiftIdOrderBySequenceAsc(id), status == null ? MaintenanceTaskStatus.COMPLETED : status)
+                .map(assetMapper::toSummary)
+                .toList();
+    }
+
+    /** Perfiles de las tareas en un estado, por kp y sin repetir (dos tareas sobre el mismo perfil cuentan una vez). */
+    private static Stream<CatenaryAsset> profileAssets(List<MaintenanceTask> tasks, MaintenanceTaskStatus status) {
+        return tasks.stream()
+                .filter(task -> task.getStatus() == status)
+                .map(MaintenanceTask::getAsset)
+                .filter(asset -> asset != null && asset.getType() == CatenaryAssetType.PROFILE)
+                .collect(Collectors.toMap(CatenaryAsset::getId, asset -> asset, (first, second) -> first, LinkedHashMap::new))
+                .values().stream()
+                .sorted(Comparator.comparing((CatenaryAsset asset) -> nvl(asset.getStartKp())).thenComparing(CatenaryAsset::getCode));
     }
 
     @Override

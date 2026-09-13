@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.Set;
 
 public record MaintenanceShiftUpdateRequest(
         LocalDate shiftDate,
@@ -22,7 +23,7 @@ public record MaintenanceShiftUpdateRequest(
         @Size(max = 500) String earthingPoints,
         @Size(max = 255) String parkingPlace,
         Long executionPackageId,
-        Long trackId,
+        Set<Long> trackIds,
         @Digits(integer = 9, fraction = 3) BigDecimal startKp,
         @Digits(integer = 9, fraction = 3) BigDecimal endKp,
         String personnel,

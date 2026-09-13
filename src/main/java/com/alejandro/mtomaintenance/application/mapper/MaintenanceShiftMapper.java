@@ -5,6 +5,8 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 
+import java.util.List;
+
 @Mapper(config = MapStructCentralConfig.class, uses = {AuditableMapper.class, MaintenanceTeamMapper.class})
 public interface MaintenanceShiftMapper {
 
@@ -13,5 +15,10 @@ public interface MaintenanceShiftMapper {
     @Mapping(target = "blockADisconnectorCode", source = "blockADisconnector.code")
     @Mapping(target = "blockBDisconnectorId", source = "blockBDisconnector.id")
     @Mapping(target = "blockBDisconnectorCode", source = "blockBDisconnector.code")
+    @Mapping(target = "trackIds", expression = "java(sortedTracks(shift))")
     MaintenanceShiftResponse toResponse(MaintenanceShift shift);
+
+    default List<Long> sortedTracks(MaintenanceShift shift) {
+        return shift.getTrackIds() == null ? List.of() : shift.getTrackIds().stream().sorted().toList();
+    }
 }

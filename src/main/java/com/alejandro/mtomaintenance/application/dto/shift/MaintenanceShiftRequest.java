@@ -3,12 +3,14 @@ package com.alejandro.mtomaintenance.application.dto.shift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.Set;
 
 public record MaintenanceShiftRequest(
         @NotNull LocalDate shiftDate,
@@ -23,7 +25,7 @@ public record MaintenanceShiftRequest(
         @Size(max = 500) String earthingPoints,
         @Size(max = 255) String parkingPlace,
         Long executionPackageId,
-        @NotNull Long trackId,
+        @NotEmpty Set<Long> trackIds,
         @Digits(integer = 9, fraction = 3) BigDecimal startKp,
         @Digits(integer = 9, fraction = 3) BigDecimal endKp,
         String personnel,

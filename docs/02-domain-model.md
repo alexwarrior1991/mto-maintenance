@@ -63,13 +63,15 @@ anchorage components, turnouts and section insulators, diagnostics, none),
 A shift is the unit of execution and the source of the daily report: date, team, base, vehicle,
 `possessionType` (`PARTIAL` on weekdays on main track, `FULL` on weekends), planned and actual
 window, `voltageCutoffAt`, `netWorkMinutes` (computed at close), blocking disconnectors A/B,
-earthing points, parking place, one `trackId`, kp range, personnel, equipment, observations.
+earthing points, parking place, the `trackIds` it covers (one or more tracks of the same night; a
+second execution package is a second shift), kp range, personnel, equipment, observations.
 States `PLANNED → IN_PROGRESS → CLOSED`, `CANCELLED` before closing. Closing requires the actual
 times and returns to `PENDING` (without shift) the tasks that were not completed.
 
-Window rules: a `PARTIAL` shift only on `MAIN` track; a task whose types require full possession
-cannot be assigned to or completed in a `PARTIAL` shift; a `DIVERTED` section only accepts `FULL`
-shifts. Teams (`A` Rishpon, `B` Mishmar) carry the execution packages they cover.
+Window rules: a task's profile must be on one of the shift's tracks; a task whose types require
+full possession cannot be assigned to or completed in a `PARTIAL` shift; a `DIVERTED` section only
+accepts `FULL` shifts. The profiles reviewed in a shift are the `PROFILE` assets of its `COMPLETED`
+tasks (`GET /shifts/{id}/profiles`). Teams (`A` Rishpon, `B` Mishmar) carry the execution packages they cover.
 
 ## Inspections (`MaintenanceInspection`) and templates
 

@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatu
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 public record MaintenanceShiftResponse(
@@ -31,7 +32,7 @@ public record MaintenanceShiftResponse(
         String earthingPoints,
         String parkingPlace,
         Long executionPackageId,
-        Long trackId,
+        List<Long> trackIds,
         BigDecimal startKp,
         BigDecimal endKp,
         String personnel,

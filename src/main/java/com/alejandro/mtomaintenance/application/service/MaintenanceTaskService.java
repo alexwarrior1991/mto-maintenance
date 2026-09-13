@@ -7,6 +7,7 @@ import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasks
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.task.StartTaskRequest;
 
@@ -37,5 +38,6 @@ public interface MaintenanceTaskService {
     /** Asigna una tarea a un turno comprobando via y ventana de posesion. */
     MaintenanceTaskResponse assignToShift(UUID shiftId, UUID taskId);
 
-    List<MaintenanceTaskResponse> findByShift(UUID shiftId);
+    /** Tareas del turno, opcionalmente solo las de un estado (COMPLETED = perfiles revisados). */
+    List<MaintenanceTaskResponse> findByShift(UUID shiftId, MaintenanceTaskStatus status);
 }

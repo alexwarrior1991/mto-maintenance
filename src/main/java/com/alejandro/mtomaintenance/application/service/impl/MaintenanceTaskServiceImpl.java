@@ -326,9 +326,12 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<MaintenanceTaskResponse> findByShift(UUID shiftId) {
+    public List<MaintenanceTaskResponse> findByShift(UUID shiftId, MaintenanceTaskStatus status) {
         lookups.shift(shiftId);
-        return repository.findByShiftIdOrderBySequenceAsc(shiftId).stream().map(mapper::toResponse).toList();
+        return repository.findByShiftIdOrderBySequenceAsc(shiftId).stream()
+                .filter(task -> status == null || task.getStatus() == status)
+                .map(mapper::toResponse)
+                .toList();
     }
 
     private MaintenanceTask task(UUID orderId, UUID taskId) {

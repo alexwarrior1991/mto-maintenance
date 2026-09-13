@@ -19,6 +19,11 @@ import com.alejandro.mtomaintenance.application.exception.InspectionException;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceShiftRepository;
+import com.alejandro.mtomaintenance.application.mapper.MaintenanceShiftMapper;
+import com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapper;
+import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryDefectMapper;
@@ -402,6 +407,16 @@ class BusinessLayerTest {
         when(fixture.lookups.shift(otherTrack.getId())).thenReturn(otherTrack);
         assertThrows(ShiftException.class, () -> fixture.service.complete(order.getId(), task.getId(), complete(otherTrack.getId(), List.of("RG-01"))));
 
+        // Un turno que recorre las vias 1 y 2 si admite el perfil de la via 2.
+        MaintenanceShift twoTracks = shift(Set.of(1L, 2L), PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        when(fixture.lookups.shift(twoTracks.getId())).thenReturn(twoTracks);
+        when(fixture.lookups.taskTypes(List.of("RG-01"))).thenReturn(taskTypes("RG-01"));
+        MaintenanceTask onTwoTracks = task(order, MaintenanceTaskStatus.PENDING);
+        onTwoTracks.setAsset(profile("12-2.28", "12900.000"));
+        when(fixture.repository.findByIdAndOrderId(onTwoTracks.getId(), order.getId())).thenReturn(Optional.of(onTwoTracks));
+        fixture.service.complete(order.getId(), onTwoTracks.getId(), complete(twoTracks.getId(), List.of("RG-01")));
+        assertEquals(MaintenanceTaskStatus.COMPLETED, onTwoTracks.getStatus());
+
         MaintenanceShift partial = shift(2L, PossessionType.PARTIAL, ShiftStatus.IN_PROGRESS);
         when(fixture.lookups.shift(partial.getId())).thenReturn(partial);
         when(fixture.lookups.taskTypes(List.of("RG-03"))).thenReturn(fullPossessionTypes());
@@ -549,6 +564,74 @@ class BusinessLayerTest {
 
     // -------------------------------------------------------------- fixtures
 
+    @Test
+    void closingAShiftComputesTheNetMinutesFromTheVoltageCutOffAndReleasesUnfinishedTasks() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(Set.of(1L, 2L), PossessionType.PARTIAL, ShiftStatus.IN_PROGRESS);
+        shift.setActualStart(Instant.parse("2026-01-27T21:10:00Z"));
+        shift.setVoltageCutoffAt(Instant.parse("2026-01-27T23:40:00Z"));
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceTask unfinished = task(order, MaintenanceTaskStatus.IN_PROGRESS);
+        unfinished.setShift(shift);
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        when(fixture.taskRepository.findByShiftIdAndStatusIn(eq(shift.getId()), any())).thenReturn(List.of(unfinished));
+
+        assertThrows(ValidationException.class, () -> fixture.service.close(shift.getId(), new CloseShiftRequest(Instant.parse("2026-01-27T20:00:00Z"), null, null, null)));
+        fixture.service.close(shift.getId(), new CloseShiftRequest(Instant.parse("2026-01-28T04:30:00Z"), null, null, "late cut-off"));
+
+        assertEquals(ShiftStatus.CLOSED, shift.getStatus());
+        assertEquals(290, shift.getNetWorkMinutes(), "De 23:40 a 04:30");
+        assertEquals(MaintenanceTaskStatus.PENDING, unfinished.getStatus());
+        assertNull(unfinished.getShift(), "La tarea vuelve a la cola de la orden sin turno");
+    }
+
+    @Test
+    void theProfilesReviewedInAShiftAreTheCompletedTasksAssetsByKpWithoutDuplicates() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(2L, PossessionType.PARTIAL, ShiftStatus.CLOSED);
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        CatenaryAsset far = profile("13-2.02", "13060.290");
+        CatenaryAsset near = profile("12-2.27", "12847.990");
+        CatenaryAsset pendingProfile = profile("14-2.02", "14078.090");
+        MaintenanceTask farTask = task(order, MaintenanceTaskStatus.COMPLETED);
+        farTask.setAsset(far);
+        MaintenanceTask nearTask = task(order, MaintenanceTaskStatus.COMPLETED);
+        nearTask.setAsset(near);
+        MaintenanceTask nearAgain = task(order, MaintenanceTaskStatus.COMPLETED);
+        nearAgain.setAsset(near);
+        MaintenanceTask pendingTask = task(order, MaintenanceTaskStatus.PENDING);
+        pendingTask.setAsset(pendingProfile);
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        when(fixture.taskRepository.findByShiftIdOrderBySequenceAsc(shift.getId())).thenReturn(List.of(farTask, nearTask, nearAgain, pendingTask));
+
+        List<CatenaryAssetSummaryResponse> reviewed = fixture.service.profiles(shift.getId(), null);
+        List<CatenaryAssetSummaryResponse> pending = fixture.service.profiles(shift.getId(), MaintenanceTaskStatus.PENDING);
+
+        assertEquals(List.of("12-2.27", "13-2.02"), reviewed.stream().map(CatenaryAssetSummaryResponse::name).toList());
+        assertEquals(List.of("14-2.02"), pending.stream().map(CatenaryAssetSummaryResponse::name).toList());
+        assertEquals(2, fixture.service.report(shift.getId()).profilesReviewed());
+    }
+
+    private static final class ShiftFixture {
+        final MaintenanceShiftRepository repository = mock(MaintenanceShiftRepository.class);
+        final MaintenanceTaskRepository taskRepository = mock(MaintenanceTaskRepository.class);
+        final CatenaryDefectRepository defectRepository = mock(CatenaryDefectRepository.class);
+        final MaintenanceLookups lookups = mock(MaintenanceLookups.class);
+        final MaintenanceShiftServiceImpl service;
+
+        ShiftFixture() {
+            when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+            CatenaryAssetMapper assetMapper = mock(CatenaryAssetMapper.class);
+            when(assetMapper.toSummary(any())).thenAnswer(invocation -> {
+                CatenaryAsset asset = invocation.getArgument(0);
+                return new CatenaryAssetSummaryResponse(asset.getId(), asset.getCode(), asset.getName(), asset.getType(), asset.getTrackId(),
+                        asset.getStartKp(), asset.getEndKp(), asset.getSectioning(), asset.getEnabled());
+            });
+            service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, mock(MaintenanceMaterialUsageRepository.class),
+                    mock(MaintenanceShiftMapper.class), assetMapper, lookups, mock(MaintenanceCodeGenerator.class), mock(EntityAuditService.class));
+        }
+    }
+
     private static final class OrderFixture {
         final MaintenanceOrderRepository repository = mock(MaintenanceOrderRepository.class);
         final CatenaryAssetRepository assetRepository = mock(CatenaryAssetRepository.class);
@@ -676,8 +759,12 @@ class BusinessLayerTest {
     }
 
     private static MaintenanceShift shift(Long trackId, PossessionType possession, ShiftStatus status) {
-        MaintenanceShift shift = MaintenanceShift.builder().code("SH-" + trackId + possession).shiftDate(LocalDate.now()).trackId(trackId)
-                .possessionType(possession).status(status).build();
+        return shift(Set.of(trackId), possession, status);
+    }
+
+    private static MaintenanceShift shift(Set<Long> trackIds, PossessionType possession, ShiftStatus status) {
+        MaintenanceShift shift = MaintenanceShift.builder().code("SH-" + trackIds + possession).shiftDate(LocalDate.now())
+                .trackIds(new LinkedHashSet<>(trackIds)).possessionType(possession).status(status).build();
         ReflectionTestUtils.setField(shift, "id", UUID.randomUUID());
         return shift;
     }

@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
@@ -12,6 +13,7 @@ import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskService;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import io.swagger.v3.oas.annotations.Operation;
@@ -103,10 +105,16 @@ public class MaintenanceShiftController {
         return ResponseEntity.ok(shiftService.cancel(id, request));
     }
 
-    @Operation(summary = "Tasks worked in the shift", tags = "Tasks")
+    @Operation(summary = "Tasks worked in the shift", tags = "Tasks", description = "Optionally filtered by status: COMPLETED gives the profiles actually reviewed.")
     @GetMapping("/{id}/tasks")
-    public ResponseEntity<List<MaintenanceTaskResponse>> tasks(@PathVariable UUID id) {
-        return ResponseEntity.ok(taskService.findByShift(id));
+    public ResponseEntity<List<MaintenanceTaskResponse>> tasks(@PathVariable UUID id, @RequestParam(required = false) MaintenanceTaskStatus status) {
+        return ResponseEntity.ok(taskService.findByShift(id, status));
+    }
+
+    @Operation(summary = "Profiles reviewed in the shift", description = "The PROFILE assets of the shift's tasks, by kp and without duplicates. Defaults to the COMPLETED tasks (the profiles reviewed); pass status=PENDING to see what is left.")
+    @GetMapping("/{id}/profiles")
+    public ResponseEntity<List<CatenaryAssetSummaryResponse>> profiles(@PathVariable UUID id, @RequestParam(required = false) MaintenanceTaskStatus status) {
+        return ResponseEntity.ok(shiftService.profiles(id, status));
     }
 
     @Operation(summary = "Assign a pending task to the shift", tags = "Tasks", description = "Checks that the task belongs to the shift's track and that its work is allowed under the shift's possession.")

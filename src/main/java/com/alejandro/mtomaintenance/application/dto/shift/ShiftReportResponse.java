@@ -7,6 +7,7 @@ public record ShiftReportResponse(
         MaintenanceShiftResponse shift,
         int tasksCompleted,
         int tasksPending,
+        int profilesReviewed,
         int defectsFound,
         int defectsResolved,
         List<ShiftReportRowResponse> rows

@@ -79,8 +79,8 @@ that jumps `DRAFT → IN_PROGRESS` and is born `CRITICAL`. A preventive order on
 generates one `MaintenanceTask` per enabled `PROFILE` in the range (`POST /orders/{id}/tasks/generate`),
 each carrying the `MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan,
 with standard minutes that feed `WorkloadEstimator`). Tasks are executed inside a
-`MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one track): a task can only be
-completed with the order and a shift on the same track both `IN_PROGRESS`, a task type that requires
+`MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one or more tracks): a task can
+only be completed with the order and a shift covering its track both `IN_PROGRESS`, a task type that requires
 full possession cannot be done in a `PARTIAL` shift, and a `DIVERTED` section only accepts `FULL`
 shifts. Completing a task can record `CatenaryDefect`s inline (`RESOLVED` in the shift if the work
 was finished, `OPEN` with `repairPlannedDate` if not). A `MaintenanceInspection` copies the active
@@ -125,9 +125,9 @@ failing the order transition. `NoOpStockClient` replaces it with `app.stock.enab
 
 ### Auditing
 
-Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join),
+Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track collection),
 `MaintenanceTaskCheckItem`, `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`,
-`MaintenanceMaterialUsage`, `MaintenanceShift`. Not audited on purpose: `MaintenanceStatusHistory`
+`MaintenanceMaterialUsage`. Not audited on purpose: `MaintenanceStatusHistory`
 (append-only), `InboxMessage` (native SQL only), `MaintenanceTeam`, `MaintenanceTaskType`,
 `InspectionTemplate`/`Item` (catalogues). `JpaEntityModelTest` guards the split. History at
 `GET /<resource>/{id}/revisions`.

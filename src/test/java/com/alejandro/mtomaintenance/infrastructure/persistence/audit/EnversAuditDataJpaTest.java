@@ -106,7 +106,8 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
                 "select table_name from information_schema.tables where table_schema = 'public' and table_name like '%_aud'", String.class).getResultList());
 
         assertTrue(tables.containsAll(List.of("catenary_asset_aud", "maintenance_order_aud", "maintenance_task_aud", "maintenance_shift_aud",
-                "maintenance_inspection_aud", "catenary_defect_aud", "maintenance_material_usage_aud", "maintenance_task_task_type_aud")));
+                "maintenance_inspection_aud", "catenary_defect_aud", "maintenance_material_usage_aud", "maintenance_task_task_type_aud",
+                "maintenance_shift_track_aud")));
         assertFalse(tables.contains("maintenance_status_history_aud"));
         assertFalse(tables.contains("maintenance_task_type_aud"));
         assertFalse(tables.contains("inbox_message_aud"));

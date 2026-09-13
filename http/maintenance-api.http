@@ -119,7 +119,7 @@ Content-Type: application/json
   "shiftDate": "2026-01-27",
   "teamId": "{{teamId}}",
   "possessionType": "PARTIAL",
-  "trackId": {{trackId}},
+  "trackIds": [{{trackId}}],
   "startKp": 12847.990,
   "endKp": 14078.090,
   "plannedStart": "2026-01-27T21:00:00Z",
@@ -189,6 +189,14 @@ Content-Type: application/json
 
 ### Shifts - daily report (one row per profile)
 GET {{baseUrl}}/shifts/{{shiftId}}/report
+Authorization: Bearer {{accessToken}}
+
+### Shifts - profiles reviewed (COMPLETED tasks, by kp) and what is left
+GET {{baseUrl}}/shifts/{{shiftId}}/profiles
+Authorization: Bearer {{accessToken}}
+
+###
+GET {{baseUrl}}/shifts/{{shiftId}}/tasks?status=PENDING
 Authorization: Bearer {{accessToken}}
 
 ### Orders - complete (consumes the reservations; force=true needs maintenance-supervise)

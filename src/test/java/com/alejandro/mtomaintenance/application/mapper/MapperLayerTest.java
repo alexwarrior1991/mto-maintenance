@@ -90,9 +90,11 @@ class MapperLayerTest {
             MaintenanceShiftMapper mapper = context.getBean(MaintenanceShiftMapper.class);
             CatenaryAsset blockA = CatenaryAsset.builder().code("DSC-1").name("HSA-NS5").type(CatenaryAssetType.DISCONNECTOR).build();
             MaintenanceShift shift = MaintenanceShift.builder().code("SH-000001").shiftDate(LocalDate.of(2026, 1, 27))
-                    .possessionType(PossessionType.PARTIAL).trackId(2L).blockADisconnector(blockA).build();
+                    .possessionType(PossessionType.PARTIAL).trackIds(new java.util.LinkedHashSet<>(java.util.List.of(2L, 1L))).blockADisconnector(blockA).build();
 
             MaintenanceShiftResponse response = mapper.toResponse(shift);
+
+            assertEquals(java.util.List.of(1L, 2L), response.trackIds(), "Las vias salen ordenadas");
 
             assertEquals("DSC-1", response.blockADisconnectorCode());
             assertNull(response.blockBDisconnectorCode());

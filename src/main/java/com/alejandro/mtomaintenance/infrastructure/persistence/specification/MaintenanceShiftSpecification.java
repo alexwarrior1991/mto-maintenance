@@ -21,8 +21,15 @@ public final class MaintenanceShiftSpecification {
         return SpecificationUtils.associationIdEquals("team", teamId);
     }
 
-    public static Specification<MaintenanceShift> trackIdEquals(Long trackId) {
-        return SpecificationUtils.equalsLong("trackId", trackId);
+    /** Turnos que recorren la via: 'trackIds' es una coleccion, asi que se hace join y no equals. */
+    public static Specification<MaintenanceShift> worksOnTrack(Long trackId) {
+        if (trackId == null) {
+            return SpecificationUtils.alwaysTrue();
+        }
+        return (root, query, builder) -> {
+            query.distinct(true);
+            return builder.equal(root.join("trackIds"), trackId);
+        };
     }
 
     public static Specification<MaintenanceShift> executionPackageIdEquals(Long executionPackageId) {
