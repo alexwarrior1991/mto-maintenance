@@ -4,9 +4,9 @@ Estos ficheros son la definición de lo que `mto-maintenance` necesita en el ser
 Se versionan para que la configuración de Keycloak se revise en pull request como cualquier otro
 cambio, y para que los entornos no diverjan por lo que alguien pinchó un día en la consola.
 
-No contienen ningún secreto. La cuenta de servicio `mto-maintenance-svc` sí tiene un secreto de
-cliente, pero lo genera Keycloak al importar y se lee desde la consola (o se fija por variable de
-entorno en `mto-platform`); aquí no se guarda.
+La parcial no contiene ningún secreto: el de la cuenta de servicio `mto-maintenance-svc` lo genera
+Keycloak al importar y se lee desde la consola. Solo el fichero de desarrollo lo fija a un valor
+conocido, para que el stack local arranque sin copiar nada a mano.
 
 ## El realm es compartido
 
@@ -21,7 +21,7 @@ propio repositorio lo suyo. Este trae dos ficheros:
 | Fichero | Qué aporta |
 |---|---|
 | `mto-maintenance-partial-import.json` | Los clientes `mto-maintenance-api` y `mto-maintenance-svc`, los permisos y los perfiles `mto-maintenance-*`. Vale para cualquier entorno. |
-| `mto-maintenance-dev.json` | Los tres usuarios de desarrollo. Aparte a propósito, para poder aplicar lo anterior en un entorno desplegado sin arrastrarlos. |
+| `mto-maintenance-dev.json` | Los tres usuarios de desarrollo y el secreto fijo de la cuenta de servicio (`mto-maintenance-svc-secret`, el mismo que `MTO_MAINTENANCE_SERVICE_CLIENT_SECRET` en `mto-platform/.env.example`). Aparte a propósito, para poder aplicar lo anterior en un entorno desplegado sin arrastrarlos. |
 
 Los aplica `mto-platform/keycloak/apply-partials.sh`, que fija el orden: primero las parciales que
 crean los clientes, después `mto-ops-cross-service.json`, que los nombra.
@@ -95,7 +95,7 @@ reejecutar.
    aquí a propósito: qué puede tocar un servicio en el almacén de otro es una decisión, no un valor
    por defecto. `mto-platform/keycloak/apply-partials.sh` lo hace en local.
 2. **Copiar el secreto del cliente** `mto-maintenance-svc` (Clients → Credentials) a
-   `KEYCLOAK_SERVICE_CLIENT_SECRET`.
+   `KEYCLOAK_SERVICE_CLIENT_SECRET`. En local no hace falta: `mto-maintenance-dev.json` lo fija.
 3. **Crear los usuarios y asignarles su perfil.** La parcial no trae ninguno; los de desarrollo están
    en `mto-maintenance-dev.json`.
 

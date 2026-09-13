@@ -1,4 +1,10 @@
 {
+  "clients": [
+    {
+      "clientId": "mto-maintenance-svc",
+      "secret": "mto-maintenance-svc-secret"
+    }
+  ],
   "users": [
     {
       "username": "mantenimiento.lector",
