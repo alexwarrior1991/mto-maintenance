@@ -1,0 +1,68 @@
+# Only the application. PostgreSQL, RabbitMQ, Keycloak and the trace collector live in mto-platform,
+# which is the single shared local environment for the whole domain; mto-stock, which this service
+# calls to reserve and consume material, runs there too ('docker compose --profile stock up -d').
+#
+#   cd ../mto-platform && docker compose --profile stock up -d   # infrastructure + stock
+#   docker compose up -d --build                                  # this service against it
+#
+# Normally you do not need this file at all: 'docker compose --profile maintenance up -d' in
+# mto-platform runs the published image. Use this one to run a local build against that same
+# infrastructure.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mto-maintenance:${APP_IMAGE_TAG:-latest}
+    container_name: mto-maintenance-app
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      SERVER_PORT: ${SERVER_PORT:-8080}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      DATABASE_USERNAME: ${DATABASE_USERNAME:?DATABASE_USERNAME must be set}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD must be set}
+      SPRING_FLYWAY_ENABLED: ${SPRING_FLYWAY_ENABLED:-true}
+      SPRING_RABBITMQ_HOST: ${SPRING_RABBITMQ_HOST:-host.docker.internal}
+      SPRING_RABBITMQ_PORT: ${SPRING_RABBITMQ_PORT:-5672}
+      SPRING_RABBITMQ_USERNAME: ${SPRING_RABBITMQ_USERNAME:?SPRING_RABBITMQ_USERNAME must be set}
+      SPRING_RABBITMQ_PASSWORD: ${SPRING_RABBITMQ_PASSWORD:?SPRING_RABBITMQ_PASSWORD must be set}
+      SPRING_RABBITMQ_VIRTUAL_HOST: ${SPRING_RABBITMQ_VIRTUAL_HOST:-/}
+      APP_RABBITMQ_ENABLED: ${APP_RABBITMQ_ENABLED:-true}
+      APP_RABBITMQ_MASTER_DATA_LISTENER_ENABLED: ${APP_RABBITMQ_MASTER_DATA_LISTENER_ENABLED:-true}
+      SPRING_RABBITMQ_LISTENER_OBSERVATION_ENABLED: ${SPRING_RABBITMQ_LISTENER_OBSERVATION_ENABLED:-true}
+      MESSAGING_SIGNATURE_SECRET: ${MESSAGING_SIGNATURE_SECRET:-}
+      MESSAGING_SIGNATURE_MODE: ${MESSAGING_SIGNATURE_MODE:-OPTIONAL}
+      # mto-stock, reached through the host like the rest of the platform.
+      APP_STOCK_ENABLED: ${APP_STOCK_ENABLED:-true}
+      MTO_STOCK_URL: ${MTO_STOCK_URL:-http://host.docker.internal:8080}
+      KEYCLOAK_TOKEN_URI: ${KEYCLOAK_TOKEN_URI:-http://auth.mto.local:8082/realms/mto/protocol/openid-connect/token}
+      KEYCLOAK_SERVICE_CLIENT_ID: ${KEYCLOAK_SERVICE_CLIENT_ID:-mto-maintenance-svc}
+      KEYCLOAK_SERVICE_CLIENT_SECRET: ${KEYCLOAK_SERVICE_CLIENT_SECRET:?KEYCLOAK_SERVICE_CLIENT_SECRET must be set}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://otel.mto.local:4318/v1/traces}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:?KEYCLOAK_ISSUER_URI must be set}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:?KEYCLOAK_CLIENT_ID must be set}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:?KEYCLOAK_AUDIENCE must be set}
+      KEYCLOAK_AUDIENCE_VALIDATION_ENABLED: ${KEYCLOAK_AUDIENCE_VALIDATION_ENABLED:-true}
+      APP_SECURITY_EXPOSE_API_DOCS: ${APP_SECURITY_EXPOSE_API_DOCS:-false}
+      APP_CORS_ALLOWED_ORIGIN: ${APP_CORS_ALLOWED_ORIGIN:?APP_CORS_ALLOWED_ORIGIN must be set}
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: ${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:-health,info,metrics,prometheus}
+      MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: ${MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS:-never}
+      MANAGEMENT_HEALTH_RABBIT_ENABLED: ${MANAGEMENT_HEALTH_RABBIT_ENABLED:-false}
+      LOGGING_LEVEL_ROOT: ${LOGGING_LEVEL_ROOT:-INFO}
+      LOGGING_LEVEL_APP: ${LOGGING_LEVEL_APP:-INFO}
+      JAVA_OPTS: ${JAVA_OPTS:-}
+    # The token 'iss' is http://auth.mto.local:8082 and the application must resolve that exact
+    # name to fetch the JWK Set and to ask for its own service-account token.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "auth.mto.local:host-gateway"
+      - "otel.mto.local:host-gateway"
+    ports:
+      - "${APP_PORT:-8083}:${SERVER_PORT:-8080}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://localhost:$${SERVER_PORT:-8080}/actuator/health/readiness || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s

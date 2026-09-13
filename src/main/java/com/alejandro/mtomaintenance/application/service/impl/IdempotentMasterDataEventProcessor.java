@@ -1,0 +1,53 @@
+package com.alejandro.mtomaintenance.application.service.impl;
+
+import com.alejandro.mtomaintenance.application.dto.messaging.InboxMessageCommand;
+import com.alejandro.mtomaintenance.application.dto.messaging.InboxProcessingResult;
+import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataChangedMessage;
+import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataEventContext;
+import com.alejandro.mtomaintenance.application.service.InboxMessageService;
+import com.alejandro.mtomaintenance.application.service.MasterDataEventHandler;
+import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.InboxMessageRepository;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+/**
+ * Joins the inbox and the master data handler: the handler runs once per message, ever.
+ *
+ * <p>Esta clase no es transaccional, y eso es deliberado. La transacción del intento la abre
+ * {@link InboxMessageService#process}, de modo que cuando el {@code catch} de aquí se ejecuta esa
+ * transacción ya ha revertido y ha soltado sus bloqueos: solo entonces se puede escribir el estado
+ * fallido sin que las dos transacciones se esperen mutuamente.</p>
+ *
+ * <p>La excepción se relanza siempre. El contenedor de listeners es quien decide reintentar y
+ * acabar mandando el mensaje a la DLQ; tragársela aquí confirmaría al broker un mensaje que no se
+ * ha aplicado.</p>
+ */
+@Service
+@RequiredArgsConstructor
+class IdempotentMasterDataEventProcessor implements MasterDataEventProcessor {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(IdempotentMasterDataEventProcessor.class);
+
+    private final InboxMessageService inboxMessageService;
+    private final MasterDataEventHandler masterDataEventHandler;
+
+    @Override
+    public InboxProcessingResult process(InboxMessageCommand command, MasterDataChangedMessage message) {
+        try {
+            MasterDataEventContext context = new MasterDataEventContext(command.sequenceNumber());
+
+            return inboxMessageService.process(command, () -> masterDataEventHandler.handle(message, context));
+        } catch (RuntimeException failure) {
+            LOGGER.error("Master data message failed and was recorded as failed in the inbox: "
+                            + "messageId={}, sourceService={}, eventType={}",
+                    command.messageId(), command.sourceService(), command.eventType(), failure);
+
+            inboxMessageService.recordFailure(command, failure);
+
+            throw failure;
+        }
+    }
+}
