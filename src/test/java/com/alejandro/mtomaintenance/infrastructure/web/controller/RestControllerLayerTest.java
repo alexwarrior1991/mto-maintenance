@@ -19,6 +19,33 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetResponse;
+import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectRequest;
+import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectResponse;
+import com.alejandro.mtomaintenance.application.dto.defect.ResolveDefectRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.CreateCorrectiveOrderRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.CreateDefectFromInspectionRequest;
+import com.alejandro.mtomaintenance.application.dto.report.MonthlyReportResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
+import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
+import com.alejandro.mtomaintenance.application.dto.tasktype.MaintenanceTaskTypeResponse;
+import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamRequest;
+import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamResponse;
+import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
+import com.alejandro.mtomaintenance.application.service.CatenaryDefectService;
+import com.alejandro.mtomaintenance.application.service.InspectionTemplateService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceInspectionService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceReportService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceTaskTypeService;
+import com.alejandro.mtomaintenance.application.service.MaintenanceTeamService;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
+import java.time.YearMonth;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -111,5 +138,106 @@ class RestControllerLayerTest {
         return new MaintenanceOrderResponse(id, "MO-000001", "Preventive T2", null, MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT,
                 MaintenancePriority.MEDIUM, null, 6L, 2L, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 0, 0, BigDecimal.ZERO, 0, null);
+    }
+
+    @Test
+    void defectControllerAnswersCreatedWithALocationAndChecksTheDefectExistsBeforeReadingItsHistory() {
+        CatenaryDefectService defectService = mock(CatenaryDefectService.class);
+        StatusHistoryService historyService = mock(StatusHistoryService.class);
+        CatenaryDefectController controller = new CatenaryDefectController(defectService, historyService);
+        UUID defectId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        CatenaryDefectResponse defect = mock(CatenaryDefectResponse.class);
+        when(defect.id()).thenReturn(defectId);
+        CatenaryDefectRequest request = new CatenaryDefectRequest(UUID.randomUUID(), DefectSeverity.HIGH, "kink", null, null, null, null, null, null, null, null, null, null);
+        ResolveDefectRequest resolve = new ResolveDefectRequest("fixed", null, null, null);
+        when(defectService.create(request)).thenReturn(defect);
+        when(defectService.resolve(defectId, resolve)).thenReturn(defect);
+        when(defectService.linkOrder(defectId, orderId)).thenReturn(defect);
+        when(defectService.findById(defectId)).thenThrow(new NotFoundException("Catenary defect", defectId));
+
+        var created = controller.create(request);
+
+        assertEquals(HttpStatus.CREATED, created.getStatusCode());
+        assertEquals("/api/v1/maintenance/defects/" + defectId, created.getHeaders().getLocation().toString());
+        assertSame(defect, controller.resolve(defectId, resolve).getBody());
+        assertSame(defect, controller.linkOrder(defectId, orderId).getBody());
+        assertThrows(NotFoundException.class, () -> controller.history(defectId));
+        verify(historyService, never()).findByDefect(any());
+    }
+
+    @Test
+    void shiftAndInspectionControllersTurnAMissingBodyIntoAnEmptyRequest() {
+        MaintenanceShiftService shiftService = mock(MaintenanceShiftService.class);
+        MaintenanceShiftController shifts = new MaintenanceShiftController(shiftService, mock(MaintenanceTaskService.class));
+        MaintenanceInspectionService inspectionService = mock(MaintenanceInspectionService.class);
+        MaintenanceInspectionController inspections = new MaintenanceInspectionController(inspectionService);
+        MaintenanceOrderService orderService = mock(MaintenanceOrderService.class);
+        MaintenanceOrderController orders = new MaintenanceOrderController(orderService, mock(MaintenanceTaskService.class),
+                mock(MaintenanceMaterialUsageService.class), mock(StatusHistoryService.class));
+        UUID id = UUID.randomUUID();
+
+        shifts.start(id, null);
+        shifts.close(id, null);
+        inspections.createDefect(id, null);
+        inspections.createCorrectiveOrder(id, null);
+        orders.start(id, null);
+
+        verify(shiftService).start(id, new StartShiftRequest(null, null));
+        verify(shiftService).close(id, new CloseShiftRequest(null, null, null, null));
+        verify(inspectionService).createDefect(id, new CreateDefectFromInspectionRequest(null, null, null, null));
+        verify(inspectionService).createCorrectiveOrder(id, new CreateCorrectiveOrderRequest(null, null, null, null, null));
+        verify(orderService).start(id, null);
+    }
+
+    @Test
+    void assetTeamReportTaskTypeAndTemplateControllersDelegateToTheirServices() {
+        CatenaryAssetService assetService = mock(CatenaryAssetService.class);
+        MaintenanceOrderService orderService = mock(MaintenanceOrderService.class);
+        CatenaryAssetController assets = new CatenaryAssetController(assetService, orderService);
+        MaintenanceTeamService teamService = mock(MaintenanceTeamService.class);
+        MaintenanceTeamController teams = new MaintenanceTeamController(teamService);
+        MaintenanceReportService reportService = mock(MaintenanceReportService.class);
+        MaintenanceReportController reports = new MaintenanceReportController(reportService);
+        MaintenanceTaskTypeService taskTypeService = mock(MaintenanceTaskTypeService.class);
+        MaintenanceTaskTypeController taskTypes = new MaintenanceTaskTypeController(taskTypeService);
+        InspectionTemplateService templateService = mock(InspectionTemplateService.class);
+        InspectionTemplateController templates = new InspectionTemplateController(templateService);
+        UUID assetId = UUID.randomUUID();
+        UUID teamId = UUID.randomUUID();
+        Pageable pageable = PageRequest.of(0, 20);
+        CatenaryAssetRequest assetRequest = new CatenaryAssetRequest("SEC-1", "T2", null, 6L, 2L, null, new BigDecimal("12847.990"),
+                new BigDecimal("14078.090"), TrackKind.MAIN, null);
+        CatenaryAssetResponse asset = mock(CatenaryAssetResponse.class);
+        when(asset.id()).thenReturn(assetId);
+        when(assetService.createTrackSection(assetRequest)).thenReturn(asset);
+        MaintenanceTeamRequest teamRequest = new MaintenanceTeamRequest("A", "Team A", null, null, null, null);
+        MaintenanceTeamResponse team = mock(MaintenanceTeamResponse.class);
+        when(team.id()).thenReturn(teamId);
+        when(teamService.create(teamRequest)).thenReturn(team);
+        MonthlyReportResponse monthly = mock(MonthlyReportResponse.class);
+        when(reportService.monthly(YearMonth.of(2026, 1), 6L)).thenReturn(monthly);
+        MaintenanceTaskTypeResponse taskType = mock(MaintenanceTaskTypeResponse.class);
+        when(taskTypeService.findByCode("RG-01")).thenReturn(taskType);
+
+        var createdAsset = assets.create(assetRequest);
+        var disabled = assets.disable(assetId);
+        var createdTeam = teams.create(teamRequest);
+
+        assertEquals(HttpStatus.CREATED, createdAsset.getStatusCode());
+        assertEquals("/api/v1/maintenance/assets/" + assetId, createdAsset.getHeaders().getLocation().toString());
+        assertEquals(HttpStatus.NO_CONTENT, disabled.getStatusCode());
+        verify(assetService).disable(assetId);
+        assets.orders(assetId, pageable);
+        verify(orderService).findByAsset(assetId, pageable);
+        assertEquals("/api/v1/maintenance/teams/" + teamId, createdTeam.getHeaders().getLocation().toString());
+        assertSame(monthly, reports.monthly(YearMonth.of(2026, 1), 6L).getBody());
+        reports.progress(6L, 2L, CatenaryAssetType.PROFILE, null, null);
+        verify(reportService).progress(6L, 2L, CatenaryAssetType.PROFILE, null, null);
+        assertSame(taskType, taskTypes.findByCode("RG-01").getBody());
+        taskTypes.findAll(null, true, null);
+        verify(taskTypeService).findAll(null, true, null);
+        templates.findAll();
+        verify(templateService).findAll();
     }
 }

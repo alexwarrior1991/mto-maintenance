@@ -7,7 +7,9 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
+import org.hibernate.envers.RevisionType;
 import jakarta.persistence.EntityManager;
 import org.hibernate.envers.AuditReader;
 import org.hibernate.envers.AuditReaderFactory;
@@ -61,6 +63,9 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private CatenaryAssetRepository assetRepository;
 
     @AfterEach
     void tearDown() {
@@ -119,5 +124,40 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
 
     private <T> T reading(Function<AuditReader, T> work) {
         return inTransaction(em -> work.apply(AuditReaderFactory.get(em)));
+    }
+
+    @Test
+    void masterDataUpsertsLeaveNoRevisionWhileAnApiEditOfTheSameAssetDoes() {
+        String sourceId = "prf-" + UUID.randomUUID();
+        inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27", "PROFILE",
+                6L, 2L, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", true, 10L));
+        UUID assetId = inTransaction(em -> assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getId());
+
+        assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId)).isEmpty(), "Native SQL bypasses Envers on purpose");
+
+        inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27 renamed", "PROFILE",
+                6L, 2L, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", true, 11L));
+        assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId)).isEmpty());
+
+        inTransaction(em -> {
+            CatenaryAsset asset = em.find(CatenaryAsset.class, assetId);
+            asset.setDescription("Edited through the API");
+            asset.setPreventiveIntervalDays(180);
+            return null;
+        });
+
+        List<Number> revisions = reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId));
+        assertEquals(1, revisions.size());
+        CatenaryAsset audited = reading(reader -> reader.find(CatenaryAsset.class, assetId, revisions.getFirst()));
+        assertEquals("Edited through the API", audited.getDescription());
+        assertEquals("12-2.27 renamed", audited.getName(), "The revision snapshots the row as the event left it");
+        List<Object[]> rows = reading(reader -> {
+            @SuppressWarnings("unchecked")
+            List<Object[]> result = reader.createQuery().forRevisionsOfEntity(CatenaryAsset.class, false, true)
+                    .add(org.hibernate.envers.query.AuditEntity.id().eq(assetId)).getResultList();
+            return result;
+        });
+        assertEquals(RevisionType.MOD, rows.getFirst()[2], "Without an ADD revision the first API edit is recorded as a modification");
+        assertEquals("system", ((AuditRevision) rows.getFirst()[1]).getUsername(), "No authenticated user: the system is the author");
     }
 }

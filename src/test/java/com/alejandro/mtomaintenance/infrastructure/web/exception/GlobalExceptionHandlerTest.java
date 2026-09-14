@@ -10,6 +10,17 @@ import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
+import com.alejandro.mtomaintenance.application.dto.defect.DefectCommentRequest;
+import com.alejandro.mtomaintenance.application.dto.error.ValidationError;
+import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamRequest;
+import com.alejandro.mtomaintenance.application.exception.BusinessException;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.Validation;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +30,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GlobalExceptionHandlerTest {
 
@@ -79,5 +91,60 @@ class GlobalExceptionHandlerTest {
 
     private static MockHttpServletRequest request(String method, String uri) {
         return new MockHttpServletRequest(method, uri);
+    }
+
+    @Test
+    void genericBusinessExceptionsAnswer422AndUnknownAggregatesFallBackToTheAppPrefix() {
+        MockHttpServletRequest request = request("POST", "/api/v1/maintenance/teams");
+
+        assertEquals("BUS-001", codeOf(handler.handleBusiness(new BusinessException("odd"), request), HttpStatus.UNPROCESSABLE_CONTENT));
+        assertEquals("APP-404", codeOf(handler.handleNotFound(new NotFoundException("Widget", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
+        assertEquals("TEA-409", codeOf(handler.handleDuplicateCode(new DuplicateCodeException("Maintenance team", "A"), request), HttpStatus.CONFLICT));
+        assertEquals("SHF-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance shift", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
+        assertEquals("TSK-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance task", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void securityFailuresAnswer401And403WithAFixedMessage() {
+        MockHttpServletRequest request = request("GET", "/api/v1/maintenance/orders");
+
+        ResponseEntity<ApiErrorResponse> unauthenticated = handler.handleAuthentication(new BadCredentialsException("token expired"), request);
+        ResponseEntity<ApiErrorResponse> forbidden = handler.handleAccessDenied(new AccessDeniedException("needs supervise"), request);
+
+        assertEquals("AUTH-401", codeOf(unauthenticated, HttpStatus.UNAUTHORIZED));
+        assertEquals("Authentication is required to access this resource.", unauthenticated.getBody().message());
+        assertEquals("AUTH-403", codeOf(forbidden, HttpStatus.FORBIDDEN));
+        assertEquals("The authenticated user is not allowed to perform this operation.", forbidden.getBody().message(),
+                "The cause of the denial is never echoed to the client");
+    }
+
+    @Test
+    void malformedRequestsAnswer400OrTheirOwnHttpStatusNamingTheOffendingParameter() {
+        MockHttpServletRequest request = request("GET", "/api/v1/maintenance/orders/not-a-uuid");
+        MethodArgumentTypeMismatchException mismatch = new MethodArgumentTypeMismatchException("not-a-uuid", UUID.class, "id", null,
+                new IllegalArgumentException("Invalid UUID"));
+
+        ResponseEntity<ApiErrorResponse> response = handler.handleMethodArgumentTypeMismatch(mismatch, request);
+
+        assertEquals("REQ-400", codeOf(response, HttpStatus.BAD_REQUEST));
+        assertEquals(List.of(new ValidationError("id", "must be a valid UUID")), response.getBody().validationErrors());
+        assertEquals("REQ-400", codeOf(handler.handleHttpMessageNotReadable(request), HttpStatus.BAD_REQUEST));
+        assertEquals("HTTP-404", codeOf(handler.handleNoResourceFound(request), HttpStatus.NOT_FOUND));
+        assertEquals("REQ-415", codeOf(handler.handleUnsupportedMediaType(new HttpMediaTypeNotSupportedException("text/plain"), request),
+                HttpStatus.UNSUPPORTED_MEDIA_TYPE));
+        assertEquals("/api/v1/maintenance/orders/not-a-uuid", response.getBody().path());
+    }
+
+    @Test
+    void constraintViolationsAreListedSortedByPropertyPath() {
+        MockHttpServletRequest request = request("POST", "/api/v1/maintenance/teams");
+        var violations = Validation.buildDefaultValidatorFactory().getValidator()
+                .validate(new MaintenanceTeamRequest(" ", "x".repeat(121), null, null, null, null));
+
+        ResponseEntity<ApiErrorResponse> response = handler.handleConstraintViolation(new ConstraintViolationException(violations), request);
+
+        assertEquals("REQ-VALIDATION", codeOf(response, HttpStatus.BAD_REQUEST));
+        assertEquals(List.of("code", "name"), response.getBody().validationErrors().stream().map(ValidationError::field).toList());
+        assertTrue(Validation.buildDefaultValidatorFactory().getValidator().validate(new DefectCommentRequest("ok")).isEmpty());
     }
 }
