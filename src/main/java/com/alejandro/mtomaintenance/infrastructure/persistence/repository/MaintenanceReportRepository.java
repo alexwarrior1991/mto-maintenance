@@ -4,8 +4,10 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.TypedQuery;
@@ -28,46 +30,66 @@ public class MaintenanceReportRepository {
     @PersistenceContext
     private EntityManager entityManager;
 
-    /** Activos revisables (todo menos los tramos), habilitados, con los filtros opcionales. */
+    /**
+     * Activos revisables (todo menos los tramos), habilitados, con los filtros opcionales. El filtro
+     * por tipo se anade solo cuando viene: un parametro de enum a null no tiene tipo para PostgreSQL
+     * ({@code could not determine data type of parameter}), al contrario que los bigint.
+     */
     public List<CatenaryAsset> findReportableAssets(Long executionPackageId, Long trackId, CatenaryAssetType assetType) {
+        String typeFilter = assetType == null ? "" : "  and asset.type = :assetType\n";
         TypedQuery<CatenaryAsset> query = entityManager.createQuery("""
                 select asset from CatenaryAsset asset
                 where asset.enabled = true
                   and asset.type <> :section
                   and (:executionPackageId is null or asset.executionPackageId = :executionPackageId)
                   and (:trackId is null or asset.trackId = :trackId)
-                  and (:assetType is null or asset.type = :assetType)
+                """ + typeFilter + """
                 order by asset.executionPackageId, asset.trackId, asset.type, asset.startKp, asset.code
                 """, CatenaryAsset.class);
         query.setParameter("section", CatenaryAssetType.TRACK_SECTION);
         query.setParameter("executionPackageId", executionPackageId);
         query.setParameter("trackId", trackId);
-        query.setParameter("assetType", assetType);
+        if (assetType != null) {
+            query.setParameter("assetType", assetType);
+        }
         return query.getResultList();
     }
 
-    /** Activos con una inspeccion o una tarea completada dentro del rango. */
+    /**
+     * Activos con una inspeccion o una tarea completada dentro del rango. Los estados van como
+     * parametro y no como literal JPQL: Hibernate traduce el literal a {@code 'COMPLETED'::MaintenanceTaskStatus}
+     * y ese tipo no existe en PostgreSQL (el enum de la base es {@code maintenance_task_status}).
+     */
     public Set<UUID> findAssetIdsWorkedBetween(Instant from, Instant to) {
-        LocalDate fromDate = from == null ? null : LocalDate.ofInstant(from, java.time.ZoneOffset.UTC);
-        LocalDate toDate = to == null ? null : LocalDate.ofInstant(to, java.time.ZoneOffset.UTC);
-        Set<UUID> ids = new HashSet<>(entityManager.createQuery("""
+        // Las fechas opcionales se anaden solo cuando vienen: un parametro temporal a null tampoco
+        // tiene tipo para PostgreSQL, y el informe de avance se pide casi siempre sin ventana.
+        TypedQuery<UUID> inspections = entityManager.createQuery("""
                 select distinct inspection.asset.id from MaintenanceInspection inspection
-                where (:fromDate is null or inspection.inspectionDate >= :fromDate)
-                  and (:toDate is null or inspection.inspectionDate <= :toDate)
-                """, UUID.class)
-                .setParameter("fromDate", fromDate)
-                .setParameter("toDate", toDate)
-                .getResultList());
-        ids.addAll(entityManager.createQuery("""
+                where 1 = 1
+                """ + (from == null ? "" : "  and inspection.inspectionDate >= :fromDate\n")
+                    + (to == null ? "" : "  and inspection.inspectionDate <= :toDate\n"), UUID.class);
+        if (from != null) {
+            inspections.setParameter("fromDate", LocalDate.ofInstant(from, java.time.ZoneOffset.UTC));
+        }
+        if (to != null) {
+            inspections.setParameter("toDate", LocalDate.ofInstant(to, java.time.ZoneOffset.UTC));
+        }
+        Set<UUID> ids = new HashSet<>(inspections.getResultList());
+
+        TypedQuery<UUID> tasks = entityManager.createQuery("""
                 select distinct task.asset.id from MaintenanceTask task
                 where task.asset is not null
-                  and task.status = com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus.COMPLETED
-                  and (:from is null or task.completedAt >= :from)
-                  and (:to is null or task.completedAt <= :to)
-                """, UUID.class)
-                .setParameter("from", from)
-                .setParameter("to", to)
-                .getResultList());
+                  and task.status = :completed
+                """ + (from == null ? "" : "  and task.completedAt >= :from\n")
+                    + (to == null ? "" : "  and task.completedAt <= :to\n"), UUID.class)
+                .setParameter("completed", MaintenanceTaskStatus.COMPLETED);
+        if (from != null) {
+            tasks.setParameter("from", from);
+        }
+        if (to != null) {
+            tasks.setParameter("to", to);
+        }
+        ids.addAll(tasks.getResultList());
         return ids;
     }
 
@@ -87,10 +109,11 @@ public class MaintenanceReportRepository {
     public List<MaintenanceOrder> findOrdersCompletedBetween(Instant from, Instant to, Long executionPackageId) {
         return entityManager.createQuery("""
                 select o from MaintenanceOrder o
-                where o.status = com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderStatus.COMPLETED
+                where o.status = :completed
                   and o.actualEndDate >= :from and o.actualEndDate < :to
                   and (:executionPackageId is null or o.executionPackageId = :executionPackageId)
                 """, MaintenanceOrder.class)
+                .setParameter("completed", MaintenanceOrderStatus.COMPLETED)
                 .setParameter("from", from)
                 .setParameter("to", to)
                 .setParameter("executionPackageId", executionPackageId)
@@ -112,10 +135,11 @@ public class MaintenanceReportRepository {
     public List<MaintenanceTask> findTasksCompletedBetween(Instant from, Instant to, Long executionPackageId) {
         return entityManager.createQuery("""
                 select task from MaintenanceTask task
-                where task.status = com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus.COMPLETED
+                where task.status = :completed
                   and task.completedAt >= :from and task.completedAt < :to
                   and (:executionPackageId is null or task.order.executionPackageId = :executionPackageId)
                 """, MaintenanceTask.class)
+                .setParameter("completed", MaintenanceTaskStatus.COMPLETED)
                 .setParameter("from", from)
                 .setParameter("to", to)
                 .setParameter("executionPackageId", executionPackageId)
