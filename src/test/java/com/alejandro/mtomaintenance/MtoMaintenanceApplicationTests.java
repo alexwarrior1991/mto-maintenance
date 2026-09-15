@@ -222,7 +222,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         orderService.start(order.id(), "go");
 
         MaintenanceShiftResponse shift = shiftService.create(new MaintenanceShiftRequest(LocalDate.now(ZoneOffset.UTC), null, null, null, PossessionType.PARTIAL, null, null,
-                null, null, null, null, 6L, Set.of(trackId), null, null, null, null, null));
+                null, null, null, 6L, Set.of(trackId), null, null, null, null, null));
         assertTrue(shift.code().matches("SH-\\d{6}"), shift.code());
         MaintenanceTaskResponse first = taskService.findByOrder(order.id()).getFirst();
         assertThrows(ShiftException.class, () -> taskService.complete(order.id(), first.id(),

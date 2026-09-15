@@ -56,6 +56,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import java.util.stream.Collectors;
@@ -88,8 +89,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
                 .possessionType(request.possessionType())
                 .plannedStart(request.plannedStart())
                 .plannedEnd(request.plannedEnd())
-                .blockADisconnector(disconnector(request.blockADisconnectorId()))
-                .blockBDisconnector(disconnector(request.blockBDisconnectorId()))
+                .blockingDisconnectors(disconnectors(request.blockingDisconnectorIds()))
                 .earthingPoints(request.earthingPoints())
                 .parkingPlace(request.parkingPlace())
                 .executionPackageId(request.executionPackageId())
@@ -142,11 +142,10 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         if (request.plannedEnd() != null) {
             shift.setPlannedEnd(request.plannedEnd());
         }
-        if (request.blockADisconnectorId() != null) {
-            shift.setBlockADisconnector(disconnector(request.blockADisconnectorId()));
-        }
-        if (request.blockBDisconnectorId() != null) {
-            shift.setBlockBDisconnector(disconnector(request.blockBDisconnectorId()));
+        if (request.blockingDisconnectorIds() != null) {
+            // Se sustituye el conjunto entero: null = no tocar, vacio = ninguno abierto.
+            shift.getBlockingDisconnectors().clear();
+            shift.getBlockingDisconnectors().addAll(disconnectors(request.blockingDisconnectorIds()));
         }
         if (request.earthingPoints() != null) {
             shift.setEarthingPoints(request.earthingPoints());
@@ -355,15 +354,23 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         }
     }
 
-    private CatenaryAsset disconnector(UUID id) {
-        if (id == null) {
-            return null;
+    /** Resuelve los ids a activos y exige que todos sean seccionadores. */
+    private Set<CatenaryAsset> disconnectors(Set<UUID> ids) {
+        Set<CatenaryAsset> resolved = new LinkedHashSet<>();
+        if (ids == null) {
+            return resolved;
         }
-        CatenaryAsset asset = lookups.asset(id);
-        if (asset.getType() != CatenaryAssetType.DISCONNECTOR) {
-            throw new ValidationException("Asset " + asset.getCode() + " is not a disconnector");
+        for (UUID id : ids) {
+            if (id == null) {
+                continue;
+            }
+            CatenaryAsset asset = lookups.asset(id);
+            if (asset.getType() != CatenaryAssetType.DISCONNECTOR) {
+                throw new ValidationException("Asset " + asset.getCode() + " is not a disconnector");
+            }
+            resolved.add(asset);
         }
-        return asset;
+        return resolved;
     }
 
     private static void validate(MaintenanceShift shift) {

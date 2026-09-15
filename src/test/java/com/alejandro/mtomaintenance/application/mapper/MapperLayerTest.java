@@ -109,19 +109,22 @@ class MapperLayerTest {
     }
 
     @Test
-    void shiftMapperExposesTheDisconnectorsOpenedAtBothEnds() {
+    void shiftMapperExposesTheBlockingDisconnectorsSortedByCode() {
         contextRunner.run(context -> {
             MaintenanceShiftMapper mapper = context.getBean(MaintenanceShiftMapper.class);
-            CatenaryAsset blockA = CatenaryAsset.builder().code("DSC-1").name("HSA-NS5").type(CatenaryAssetType.DISCONNECTOR).build();
+            CatenaryAsset far = CatenaryAsset.builder().code("DSC-9").name("HSA-NS9").type(CatenaryAssetType.DISCONNECTOR).build();
+            CatenaryAsset near = CatenaryAsset.builder().code("DSC-1").name("HSA-NS5").type(CatenaryAssetType.DISCONNECTOR).build();
             MaintenanceShift shift = MaintenanceShift.builder().code("SH-000001").shiftDate(LocalDate.of(2026, 1, 27))
-                    .possessionType(PossessionType.PARTIAL).trackIds(new java.util.LinkedHashSet<>(java.util.List.of(2L, 1L))).blockADisconnector(blockA).build();
+                    .possessionType(PossessionType.PARTIAL).trackIds(new java.util.LinkedHashSet<>(java.util.List.of(2L, 1L)))
+                    .blockingDisconnectors(new java.util.LinkedHashSet<>(java.util.List.of(far, near))).build();
 
             MaintenanceShiftResponse response = mapper.toResponse(shift);
 
             assertEquals(java.util.List.of(1L, 2L), response.trackIds(), "Las vias salen ordenadas");
 
-            assertEquals("DSC-1", response.blockADisconnectorCode());
-            assertNull(response.blockBDisconnectorCode());
+            assertEquals(java.util.List.of("DSC-1", "DSC-9"), response.blockingDisconnectors().stream().map(d -> d.code()).toList(),
+                    "Los seccionadores salen ordenados por codigo");
+            assertEquals("HSA-NS5", response.blockingDisconnectors().getFirst().name());
             assertNotNull(response.status());
         });
     }

@@ -95,7 +95,7 @@ class DtoValidationTest {
     @Test
     void aShiftNeedsAtLeastOneTrack() {
         MaintenanceShiftRequest request = new MaintenanceShiftRequest(LocalDate.of(2026, 1, 27), null, null, null, PossessionType.PARTIAL,
-                null, null, null, null, null, null, null, Set.of(), null, null, null, null, null);
+                null, null, null, null, null, null, Set.of(), null, null, null, null, null);
 
         var violations = validator.validate(request);
 

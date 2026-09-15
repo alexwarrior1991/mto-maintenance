@@ -62,7 +62,8 @@ anchorage components, turnouts and section insulators, diagnostics, none),
 
 A shift is the unit of execution and the source of the daily report: date, team, base, vehicle,
 `possessionType` (`PARTIAL` on weekdays on main track, `FULL` on weekends), planned and actual
-window, `voltageCutoffAt`, `netWorkMinutes` (computed at close), blocking disconnectors A/B,
+window, `voltageCutoffAt`, `netWorkMinutes` (computed at close), the set of `blockingDisconnectors`
+opened to isolate the work zone (as many `DISCONNECTOR` assets as the cut needs, not a fixed pair),
 earthing points, parking place, the `trackIds` it covers (one or more tracks of the same night; a
 second execution package is a second shift), kp range, personnel, equipment, observations.
 States `PLANNED → IN_PROGRESS → CLOSED`, `CANCELLED` before closing. Closing requires the actual

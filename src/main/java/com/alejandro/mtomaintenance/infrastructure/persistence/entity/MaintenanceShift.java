@@ -10,6 +10,8 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.ForeignKey;
 import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
+import jakarta.persistence.JoinTable;
+import jakarta.persistence.ManyToMany;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
@@ -109,13 +111,20 @@ public class MaintenanceShift extends AuditableEntity {
     @Column(name = "net_work_minutes")
     private Integer netWorkMinutes;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "block_a_disconnector_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_block_a"))
-    private CatenaryAsset blockADisconnector;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "block_b_disconnector_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_block_b"))
-    private CatenaryAsset blockBDisconnector;
+    /**
+     * Seccionadores abiertos para bloquear la zona de trabajo. Son todos los que aislan la zona, no
+     * dos fijos: con varias vias por turno pueden ser bastantes. Siempre activos de tipo
+     * DISCONNECTOR; lo comprueba el servicio al resolver cada id.
+     */
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+            name = "maintenance_shift_disconnector",
+            joinColumns = @JoinColumn(name = "shift_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_disconnector_shift")),
+            inverseJoinColumns = @JoinColumn(name = "disconnector_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_disconnector_asset"))
+    )
+    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
+    @Builder.Default
+    private Set<CatenaryAsset> blockingDisconnectors = new LinkedHashSet<>();
 
     @Size(max = 500)
     @Column(name = "earthing_points", length = 500)

@@ -957,6 +957,38 @@ class BusinessLayerTest {
     // ------------------------------------------------------------- shifts (2)
 
     @Test
+    void aShiftOpensAsManyBlockingDisconnectorsAsTheCutNeedsAndRejectsAnythingElse() {
+        ShiftFixture fixture = new ShiftFixture();
+        CatenaryAsset first = disconnector("HSA-NS5");
+        CatenaryAsset second = disconnector("HSA-NS7");
+        CatenaryAsset third = disconnector("HSA-NS9");
+        CatenaryAsset profile = profile("12-2.27", "12847.990");
+        for (CatenaryAsset asset : List.of(first, second, third, profile)) {
+            when(fixture.lookups.asset(asset.getId())).thenReturn(asset);
+        }
+        when(fixture.codeGenerator.nextShiftCode()).thenReturn("SH-000002");
+        Instant start = Instant.parse("2026-01-27T21:00:00Z");
+        Instant end = Instant.parse("2026-01-28T05:00:00Z");
+
+        fixture.service.create(shiftRequestWith(null, Set.of(first.getId(), second.getId(), third.getId()), start, end, null, null));
+        MaintenanceShift saved = fixture.savedShift();
+        assertEquals(Set.of(first, second, third), saved.getBlockingDisconnectors());
+
+        assertThrows(ValidationException.class,
+                () -> fixture.service.create(shiftRequestWith(null, Set.of(first.getId(), profile.getId()), start, end, null, null)),
+                "Un perfil no es un seccionador");
+
+        // Un update con conjunto vacio los quita; con null no los toca.
+        when(fixture.lookups.shift(saved.getId())).thenReturn(saved);
+        fixture.service.update(saved.getId(), new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null));
+        assertEquals(3, saved.getBlockingDisconnectors().size());
+        fixture.service.update(saved.getId(), new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null, Set.of(), null, null, null, null,
+                null, null, null, null, null));
+        assertTrue(saved.getBlockingDisconnectors().isEmpty());
+    }
+
+    @Test
     void creatingAShiftInheritsTheTeamBaseAndVehicleAndValidatesWindowRangeAndDisconnectors() {
         ShiftFixture fixture = new ShiftFixture();
         MaintenanceTeam team = team("A");
@@ -975,7 +1007,7 @@ class BusinessLayerTest {
         assertEquals("SH-000001", saved.getCode());
         assertEquals("Rishpon", saved.getBaseName(), "Base and vehicle default to the team's");
         assertEquals("Vehicle A", saved.getVehicle());
-        assertEquals(disconnector, saved.getBlockADisconnector());
+        assertEquals(Set.of(disconnector), saved.getBlockingDisconnectors());
         assertEquals(ShiftStatus.PLANNED, saved.getStatus());
         assertEquals(Set.of(2L), saved.getTrackIds());
 
@@ -2049,14 +2081,18 @@ class BusinessLayerTest {
         return new CatenaryAssetRequest(code, "Ranana-Herzliya T3", null, 6L, 3L, null, new BigDecimal(startKp), new BigDecimal(endKp), TrackKind.MAIN, 365);
     }
 
-    private static MaintenanceShiftRequest shiftRequest(UUID teamId, UUID blockA, Instant plannedStart, Instant plannedEnd, String startKp, String endKp) {
-        return new MaintenanceShiftRequest(LocalDate.of(2026, 1, 27), teamId, null, null, PossessionType.PARTIAL, plannedStart, plannedEnd, blockA, null,
+    private static MaintenanceShiftRequest shiftRequest(UUID teamId, UUID disconnector, Instant plannedStart, Instant plannedEnd, String startKp, String endKp) {
+        return shiftRequestWith(teamId, disconnector == null ? null : Set.of(disconnector), plannedStart, plannedEnd, startKp, endKp);
+    }
+
+    private static MaintenanceShiftRequest shiftRequestWith(UUID teamId, Set<UUID> disconnectors, Instant plannedStart, Instant plannedEnd, String startKp, String endKp) {
+        return new MaintenanceShiftRequest(LocalDate.of(2026, 1, 27), teamId, null, null, PossessionType.PARTIAL, plannedStart, plannedEnd, disconnectors,
                 "HSA-NS5 / HSA-NS6", "Rishpon", 6L, Set.of(2L), startKp == null ? null : new BigDecimal(startKp), endKp == null ? null : new BigDecimal(endKp),
                 null, null, null);
     }
 
     private static MaintenanceShiftUpdateRequest shiftUpdate(Set<Long> trackIds, PossessionType possession) {
-        return new MaintenanceShiftUpdateRequest(null, null, null, null, possession, null, null, null, null, null, null, null, trackIds, null, null,
+        return new MaintenanceShiftUpdateRequest(null, null, null, null, possession, null, null, null, null, null, null, trackIds, null, null,
                 null, null, null);
     }
 }
