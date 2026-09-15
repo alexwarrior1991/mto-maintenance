@@ -110,7 +110,8 @@ Content-Type: application/json
   "plannedDate": "2026-01-27"
 }
 
-### Shifts - create the night shift of team A (partial possession, main track)
+### Shifts - create the night shift of team A (partial possession, main track).
+# blockingDisconnectorIds: every DISCONNECTOR asset opened to isolate the zone (ids from GET /assets?type=DISCONNECTOR)
 POST {{baseUrl}}/shifts
 Authorization: Bearer {{accessToken}}
 Content-Type: application/json
@@ -124,6 +125,7 @@ Content-Type: application/json
   "endKp": 14078.090,
   "plannedStart": "2026-01-27T21:00:00Z",
   "plannedEnd": "2026-01-28T05:00:00Z",
+  "blockingDisconnectorIds": [],
   "baseName": "Rishpon",
   "vehicle": "Maintenance vehicle A",
   "personnel": "Foreman + 4 linemen"

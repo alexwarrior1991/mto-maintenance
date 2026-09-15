@@ -27,7 +27,7 @@ yearly reset.
 | `maintenance_task_type` | `RG`/`RP` catalogue | `uq code`, minutes ≥ 0 |
 | `inspection_template`, `inspection_template_item` | Checklists per asset type | `uq (asset_type, version)`, `uq (template_id, code)`, `min ≤ max` |
 | `catenary_asset` | Assets | `uq code`, `uq (source_service, source_entity_id)`, source columns together, `start_kp ≤ end_kp`, `track_kind` only and always on `TRACK_SECTION`, interval > 0 |
-| `maintenance_shift` (+ `maintenance_shift_track`, `V5`) | Shifts and the tracks they cover | `uq code`, planned/actual windows ordered, `CLOSED` needs actual times, net minutes ≥ 0; `pk (shift_id, track_id)` |
+| `maintenance_shift` (+ `maintenance_shift_track`, `V5`; + `maintenance_shift_disconnector`, `V6`) | Shifts, the tracks they cover and the disconnectors opened to block the zone | `uq code`, planned/actual windows ordered, `CLOSED` needs actual times, net minutes ≥ 0; `pk (shift_id, track_id)`, `pk (shift_id, disconnector_id)` with `on delete restrict` on the asset |
 | `maintenance_order` | Orders | `uq code`, kp range, actual dates ordered, `COMPLETED` needs dates, `CANCELLED` needs reason; FKs to asset (restrict), team, shift-independent |
 | `maintenance_task` (+ `maintenance_task_task_type`) | Tasks and their types | `uq (order_id, sequence)`, times ordered, `COMPLETED` needs `completed_at` |
 | `maintenance_task_check_item` | Checklist of a diagnostic task | `uq (task_id, code)` |
@@ -39,7 +39,7 @@ yearly reset.
 Indexes follow the API filters: asset `(track_id, start_kp)`, `(type, enabled)`; order
 `(status, planned_date)`, `(asset_id, status)`, `(track_id, start_kp)`, `(type, priority)`; task
 `(shift_id)`, `(asset_id, status)`, `(order_id, status)`; shift `(shift_date, team_id)`,
-`maintenance_shift_track (track_id)`; inspection `(result, inspection_date)`; defect `(severity, status)`,
+`maintenance_shift_track (track_id)`, `maintenance_shift_disconnector (disconnector_id)`; inspection `(result, inspection_date)`; defect `(severity, status)`,
 `(detected_at)`; material `(stock_sync_status)`.
 
 `preventive_due_at(last_completed, interval_days)` is a SQL function used by the
@@ -67,8 +67,15 @@ as `json` (not `jsonb`, so the bytes keep matching `payload_hash`), statuses
 so one night can cover several tracks; existing rows were copied over. Envers twin
 `maintenance_shift_track_aud`.
 
+## Shift blocking disconnectors (`V6`)
+
+`maintenance_shift.block_a_disconnector_id` / `block_b_disconnector_id` moved to the join table
+`maintenance_shift_disconnector (shift_id, disconnector_id)`: a safe cut opens every disconnector
+that isolates the zone, not two. Existing rows were copied. Envers twin
+`maintenance_shift_disconnector_aud`.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`
 twins of the nine audited entities plus `maintenance_task_task_type_aud` (and, since `V5`,
-`maintenance_shift_track_aud`). See `07-auditing.md`.
+`maintenance_shift_track_aud`, and since `V6` `maintenance_shift_disconnector_aud`). See `07-auditing.md`.

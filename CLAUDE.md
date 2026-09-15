@@ -125,7 +125,7 @@ failing the order transition. `NoOpStockClient` replaces it with `app.stock.enab
 
 ### Auditing
 
-Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track collection),
+Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track and blocking-disconnector collections),
 `MaintenanceTaskCheckItem`, `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`,
 `MaintenanceMaterialUsage`. Not audited on purpose: `MaintenanceStatusHistory`
 (append-only), `InboxMessage` (native SQL only), `MaintenanceTeam`, `MaintenanceTaskType`,

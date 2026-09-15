@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.dto.shift;
 
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.common.AuditMetadataResponse;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamSummaryResponse;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
@@ -25,10 +26,7 @@ public record MaintenanceShiftResponse(
         Instant actualEnd,
         Instant voltageCutoffAt,
         Integer netWorkMinutes,
-        UUID blockADisconnectorId,
-        String blockADisconnectorCode,
-        UUID blockBDisconnectorId,
-        String blockBDisconnectorCode,
+        List<CatenaryAssetSummaryResponse> blockingDisconnectors,
         String earthingPoints,
         String parkingPlace,
         Long executionPackageId,

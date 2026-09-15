@@ -50,7 +50,8 @@ Transitions are `POST` with a body: `PlanOrderRequest{plannedDate, comment}`,
 `AssignOrderRequest{teamId, assignedUser, comment}`, `OrderCommentRequest{comment}`,
 `CompleteOrderRequest{closingNotes, force, comment}`, `CancelOrderRequest{reason}`;
 `CompleteTaskRequest{shiftId, taskTypeCodes, notes, defectsFound, workComplete, repairPlannedDate,
-inlineDefects[], materials[], photoRefs[]}`; `StartShiftRequest{actualStart, voltageCutoffAt}`, `CloseShiftRequest{actualEnd,
+inlineDefects[], materials[], photoRefs[]}`; `MaintenanceShiftRequest{shiftDate, teamId, possessionType, trackIds[], blockingDisconnectorIds[], …}`,
+`StartShiftRequest{actualStart, voltageCutoffAt}`, `CloseShiftRequest{actualEnd,
 voltageCutoffAt, netWorkMinutes, observations}`; `ResolveDefectRequest{resolutionNotes, correctionType,
 partsReplaced, resolvedInShiftId}`.
 
