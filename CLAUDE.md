@@ -63,7 +63,8 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
   MapStruct cannot call the protected constructors), `exception`.
 - `infrastructure` — `persistence.entity` (JPA), `persistence.repository` (Spring Data + native
   upserts), `persistence.specification`, `persistence.audit` (Envers), `web.controller`,
-  `web.exception`, `messaging.rabbitmq`, `stock` (the `RestClientStockClient`).
+  `web.exception`, `messaging.rabbitmq`, `stock` (the `RestClientStockClient`), `export` (the POI and
+  OpenPDF writers).
 - `configuration` — security (Keycloak resource server), `rabbitmq`, `messaging` (signature),
   `stock` (`StockProperties`, `StockClientConfiguration`), JPA auditing, OpenAPI.
 
@@ -123,6 +124,21 @@ circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`)
 `StockUnavailableException`; `MaterialStockSynchronizer` turns it into a `FAILED` line instead of
 failing the order transition. `NoOpStockClient` replaces it with `app.stock.enabled=false`.
 
+### Report export
+
+The three reports (`GET /shifts/{id}/report`, `/reports/progress`, `/reports/monthly`) take
+`?format=json|xlsx|pdf`, `json` by default: same routes, same `MAINTENANCE_READ` rule, unchanged JSON
+contract. Each report is turned into one format-neutral `ReportDocument`
+(`application/dto/export`: header pairs, an optional table, totals, typed `ReportValue`s) by its
+layout in `application/service/impl`, and `ReportExportServiceImpl` hands it to the `ReportExporter`
+of the requested format. The exporters are `@Component`s indexed by format at startup — the same
+registry-by-key as the master-data handlers, failing the startup on a duplicate or a missing one — so
+POI and OpenPDF live only in `infrastructure/export` and a new format is one class plus one
+`ReportFormat` constant, with no controller change. Headers are in English on purpose (the catalogue
+and the enum values printed in the cells already are); see `ReportLayouts` for that and for the
+report time zone. `docs/04-rest-api.md` documents the parameter, the file names and the columns the
+PDF leaves out.
+
 ### Auditing
 
 Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track and blocking-disconnector collections),
@@ -139,7 +155,10 @@ Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-typ
 - `MtoMaintenanceApplicationTests` boots the whole context against a real PostgreSQL and asserts
   every business service bean is present.
 - One class per layer: `BusinessLayerTest`, `RestControllerLayerTest` +
-  `MaintenanceOrderControllerMockMvcTest`, `PersistenceLayerTest` +
+  `MaintenanceOrderControllerMockMvcTest` + `ReportExportControllerMockMvcTest` (a `@WebMvcTest`
+  slice only loads the controllers it names, so the export endpoints cannot live in the order one),
+  `ReportExportLayerTest` (reopens the generated .xlsx with POI and the .pdf with OpenPDF),
+  `PersistenceLayerTest` +
   `InboxMessageRepositoryDataJpaTest` + `MasterDataAssetSyncDataJpaTest`, `EnversAuditDataJpaTest`
   (disables the test transaction on purpose), `MapperLayerTest`, `MessagingLayerTest`,
   `StockClientTest`, `DomainModelTest`, `JpaEntityModelTest`, `DtoValidationTest`,

@@ -3,6 +3,8 @@ package com.alejandro.mtomaintenance.infrastructure.web.controller;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
+import com.alejandro.mtomaintenance.application.dto.export.ReportFormat;
+import com.alejandro.mtomaintenance.application.dto.export.ReportMediaTypes;
 import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftRequest;
@@ -13,16 +15,22 @@ import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskService;
+import com.alejandro.mtomaintenance.application.service.ReportExportService;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -47,10 +55,13 @@ public class MaintenanceShiftController {
 
     private final MaintenanceShiftService shiftService;
     private final MaintenanceTaskService taskService;
+    private final ReportExportService reportExports;
 
-    public MaintenanceShiftController(MaintenanceShiftService shiftService, MaintenanceTaskService taskService) {
+    public MaintenanceShiftController(MaintenanceShiftService shiftService, MaintenanceTaskService taskService,
+                                      ReportExportService reportExports) {
         this.shiftService = shiftService;
         this.taskService = taskService;
+        this.reportExports = reportExports;
     }
 
     @Operation(summary = "Create shift", description = "A night shift on one track: team, possession type, disconnectors opened, earthing points, kp range.")
@@ -124,9 +135,20 @@ public class MaintenanceShiftController {
     }
 
     @Operation(summary = "Daily report of the shift", tags = "Reports", description = "Header of the shift plus one row per task (profile) worked: works performed, defects found, materials, times, completion and repair date.")
+    @ApiResponse(responseCode = "200", description = "The report as JSON, as a workbook or as a printable PDF", content = {
+            @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ShiftReportResponse.class)),
+            @Content(mediaType = ReportMediaTypes.XLSX, schema = @Schema(type = "string", format = "binary")),
+            @Content(mediaType = ReportMediaTypes.PDF, schema = @Schema(type = "string", format = "binary"))})
     @GetMapping("/{id}/report")
-    public ResponseEntity<ShiftReportResponse> report(@PathVariable UUID id) {
-        return ResponseEntity.ok(shiftService.report(id));
+    public ResponseEntity<?> report(@PathVariable UUID id,
+                                    @Parameter(description = ReportDownloads.FORMAT)
+                                    @RequestParam(required = false) String format) {
+        ShiftReportResponse report = shiftService.report(id);
+        ReportFormat requested = ReportFormat.of(format);
+        if (requested.isJson()) {
+            return ResponseEntity.ok(report);
+        }
+        return ReportDownloads.of(reportExports.exportShiftReport(report, requested));
     }
 
     @Operation(summary = "Shift change history (Envers revisions)")

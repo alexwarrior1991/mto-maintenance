@@ -18,6 +18,7 @@ import com.alejandro.mtomaintenance.application.service.MaintenanceTeamService;
 import com.alejandro.mtomaintenance.application.service.MasterDataEntityHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor;
+import com.alejandro.mtomaintenance.application.service.ReportExportService;
 import com.alejandro.mtomaintenance.application.service.StatusHistoryService;
 import com.alejandro.mtomaintenance.application.service.StockClient;
 import com.alejandro.mtomaintenance.application.service.WorkloadEstimator;
@@ -321,6 +322,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
                 MaintenanceTaskTypeService.class,
                 MaintenanceTeamService.class,
                 MasterDataEventProcessor.class,
+                ReportExportService.class,
                 StatusHistoryService.class,
                 StockClient.class,
                 WorkloadEstimator.class);

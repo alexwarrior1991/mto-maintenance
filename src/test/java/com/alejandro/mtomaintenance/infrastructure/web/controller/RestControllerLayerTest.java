@@ -32,7 +32,13 @@ import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.tasktype.MaintenanceTaskTypeResponse;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamRequest;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamResponse;
+import com.alejandro.mtomaintenance.application.dto.export.ExportedReport;
+import com.alejandro.mtomaintenance.application.dto.export.ReportFormat;
+import com.alejandro.mtomaintenance.application.dto.export.ReportMediaTypes;
+import com.alejandro.mtomaintenance.application.dto.report.ProgressReportResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
 import com.alejandro.mtomaintenance.application.service.CatenaryDefectService;
 import com.alejandro.mtomaintenance.application.service.InspectionTemplateService;
@@ -40,6 +46,7 @@ import com.alejandro.mtomaintenance.application.service.MaintenanceInspectionSer
 import com.alejandro.mtomaintenance.application.service.MaintenanceReportService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskTypeService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTeamService;
+import com.alejandro.mtomaintenance.application.service.ReportExportService;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import java.time.YearMonth;
@@ -116,7 +123,7 @@ class RestControllerLayerTest {
     void shiftControllerExposesTheProfilesReviewedAndFiltersItsTasksByStatus() {
         MaintenanceShiftService shiftService = mock(MaintenanceShiftService.class);
         MaintenanceTaskService taskService = mock(MaintenanceTaskService.class);
-        MaintenanceShiftController controller = new MaintenanceShiftController(shiftService, taskService);
+        MaintenanceShiftController controller = new MaintenanceShiftController(shiftService, taskService, mock(ReportExportService.class));
         UUID shiftId = UUID.randomUUID();
         List<CatenaryAssetSummaryResponse> profiles = List.of(new CatenaryAssetSummaryResponse(UUID.randomUUID(), "PRF-1", "12-2.27",
                 CatenaryAssetType.PROFILE, 2L, new BigDecimal("12847.990"), new BigDecimal("12847.990"), "A/S", true));
@@ -169,7 +176,8 @@ class RestControllerLayerTest {
     @Test
     void shiftAndInspectionControllersTurnAMissingBodyIntoAnEmptyRequest() {
         MaintenanceShiftService shiftService = mock(MaintenanceShiftService.class);
-        MaintenanceShiftController shifts = new MaintenanceShiftController(shiftService, mock(MaintenanceTaskService.class));
+        MaintenanceShiftController shifts = new MaintenanceShiftController(shiftService, mock(MaintenanceTaskService.class),
+                mock(ReportExportService.class));
         MaintenanceInspectionService inspectionService = mock(MaintenanceInspectionService.class);
         MaintenanceInspectionController inspections = new MaintenanceInspectionController(inspectionService);
         MaintenanceOrderService orderService = mock(MaintenanceOrderService.class);
@@ -198,7 +206,7 @@ class RestControllerLayerTest {
         MaintenanceTeamService teamService = mock(MaintenanceTeamService.class);
         MaintenanceTeamController teams = new MaintenanceTeamController(teamService);
         MaintenanceReportService reportService = mock(MaintenanceReportService.class);
-        MaintenanceReportController reports = new MaintenanceReportController(reportService);
+        MaintenanceReportController reports = new MaintenanceReportController(reportService, mock(ReportExportService.class));
         MaintenanceTaskTypeService taskTypeService = mock(MaintenanceTaskTypeService.class);
         MaintenanceTaskTypeController taskTypes = new MaintenanceTaskTypeController(taskTypeService);
         InspectionTemplateService templateService = mock(InspectionTemplateService.class);
@@ -233,13 +241,49 @@ class RestControllerLayerTest {
         assets.search(CatenaryAssetType.PROFILE, 2L, null, null, true, null, "12-2.27", null, null, null, pageable);
         verify(assetService).search(CatenaryAssetType.PROFILE, 2L, null, null, true, null, "12-2.27", null, null, null, pageable);
         assertEquals("/api/v1/maintenance/teams/" + teamId, createdTeam.getHeaders().getLocation().toString());
-        assertSame(monthly, reports.monthly(YearMonth.of(2026, 1), 6L).getBody());
-        reports.progress(6L, 2L, CatenaryAssetType.PROFILE, null, null);
+        assertSame(monthly, reports.monthly(YearMonth.of(2026, 1), 6L, null).getBody());
+        reports.progress(6L, 2L, CatenaryAssetType.PROFILE, null, null, null);
         verify(reportService).progress(6L, 2L, CatenaryAssetType.PROFILE, null, null);
         assertSame(taskType, taskTypes.findByCode("RG-01").getBody());
         taskTypes.findAll(null, true, null);
         verify(taskTypeService).findAll(null, true, null);
         templates.findAll();
         verify(templateService).findAll();
+    }
+
+    @Test
+    void theReportEndpointsAnswerTheirDtoOrAFileDependingOnTheFormatAsked() {
+        MaintenanceReportService reportService = mock(MaintenanceReportService.class);
+        ReportExportService exports = mock(ReportExportService.class);
+        MaintenanceReportController reports = new MaintenanceReportController(reportService, exports);
+        MaintenanceShiftService shiftService = mock(MaintenanceShiftService.class);
+        MaintenanceShiftController shifts = new MaintenanceShiftController(shiftService, mock(MaintenanceTaskService.class), exports);
+        UUID shiftId = UUID.randomUUID();
+        ProgressReportResponse progress = mock(ProgressReportResponse.class);
+        ShiftReportResponse shiftReport = mock(ShiftReportResponse.class);
+        when(reportService.progress(null, null, null, null, null)).thenReturn(progress);
+        when(shiftService.report(shiftId)).thenReturn(shiftReport);
+        when(exports.exportProgressReport(progress, ReportFormat.XLSX))
+                .thenReturn(new ExportedReport("progress-report-2026-01-31.xlsx", ReportMediaTypes.XLSX, new byte[] {1, 2, 3}));
+        when(exports.exportShiftReport(shiftReport, ReportFormat.PDF))
+                .thenReturn(new ExportedReport("shift-report-2026-01-27-SH-000001.pdf", ReportMediaTypes.PDF, new byte[] {4}));
+
+        assertSame(progress, reports.progress(null, null, null, null, null, null).getBody(), "no format is the JSON of always");
+        assertSame(shiftReport, shifts.report(shiftId, "json").getBody());
+
+        var workbook = reports.progress(null, null, null, null, null, "xlsx");
+        assertEquals(ReportMediaTypes.XLSX, workbook.getHeaders().getContentType().toString());
+        assertEquals("attachment; filename=\"progress-report-2026-01-31.xlsx\"",
+                workbook.getHeaders().getFirst("Content-Disposition"));
+        assertEquals(3, workbook.getHeaders().getContentLength());
+
+        var printable = shifts.report(shiftId, "pdf");
+        assertEquals(ReportMediaTypes.PDF, printable.getHeaders().getContentType().toString());
+        assertEquals("attachment; filename=\"shift-report-2026-01-27-SH-000001.pdf\"",
+                printable.getHeaders().getFirst("Content-Disposition"));
+
+        // El informe se calcula igual y lo que falla es la peticion, no el exportador.
+        assertThrows(ValidationException.class, () -> reports.progress(null, null, null, null, null, "csv"));
+        verify(exports, never()).exportProgressReport(progress, null);
     }
 }
