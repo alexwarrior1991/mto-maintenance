@@ -33,7 +33,11 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
                 profile.decimal("kp"),
                 profile.has("id") ? String.valueOf(profile.longValue("id")) : null,
                 null,
-                true
+                // mto-configuration NO publica hoy este campo para un seccionador: su entidad no lo
+                // tiene, y uno que deja de existir llega como DELETED, que ya lo desactiva. Se lee de
+                // todos modos, con true por defecto, para que los tres handlers traten el estado
+                // igual si algun dia el origen lo anade.
+                payload.bool("enabled", true)
         );
     }
 }

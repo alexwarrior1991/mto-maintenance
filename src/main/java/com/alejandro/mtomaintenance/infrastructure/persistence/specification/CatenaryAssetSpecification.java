@@ -37,6 +37,16 @@ public final class CatenaryAssetSpecification {
         return SpecificationUtils.containsIgnoreCase("code", code);
     }
 
+    /**
+     * Nombre natural del activo: el {@code profileId} de un perfil ({@code 12-2.27}), el nombre del
+     * seccionador ({@code HSA-NS5}). Es el identificador que usa el personal de campo, y no es unico:
+     * en mto-configuration el {@code profileId} lo es por via, no globalmente, asi que la busqueda
+     * unívoca es este filtro junto al de via.
+     */
+    public static Specification<CatenaryAsset> nameContains(String name) {
+        return SpecificationUtils.containsIgnoreCase("name", name);
+    }
+
     /** Activos cuyo kp inicial cae en [from, to]. */
     public static Specification<CatenaryAsset> kpBetween(BigDecimal from, BigDecimal to) {
         return SpecificationUtils.between("startKp", from, to);

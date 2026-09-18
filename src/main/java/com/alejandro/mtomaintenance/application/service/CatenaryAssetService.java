@@ -21,7 +21,7 @@ public interface CatenaryAssetService {
     CatenaryAssetResponse findById(UUID id);
 
     PageResponse<CatenaryAssetResponse> search(CatenaryAssetType type, Long trackId, Long stationId, Long executionPackageId,
-                                               Boolean enabled, String code, BigDecimal kpFrom, BigDecimal kpTo,
+                                               Boolean enabled, String code, String name, BigDecimal kpFrom, BigDecimal kpTo,
                                                Instant preventiveDueBefore, Pageable pageable);
 
     /** DELETE = desactivar. Un activo nunca se borra: ordenes, inspecciones y defectos lo referencian. */

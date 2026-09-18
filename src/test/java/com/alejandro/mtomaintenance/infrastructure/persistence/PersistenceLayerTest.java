@@ -262,8 +262,39 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         return applied;
     }
 
+    @Test
+    void aProfileIsFoundByItsNaturalNameAndTheTrackMakesItUnique() {
+        // Sufijo unico: la clase comparte base con los demas tests y un nombre generico como
+        // "12-2.27" tambien casa con los perfiles que crean ellos.
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String shared = "12-2.27-" + suffix;
+        long trackTwo = System.nanoTime();
+        long trackOne = trackTwo + 1;
+        // El profileId de mto-configuration es unico POR VIA, no globalmente: el mismo nombre existe
+        // en dos vias y son postes distintos.
+        assetRepository.save(profile(shared, trackTwo, "12847.990"));
+        assetRepository.save(profile(shared, trackOne, "12847.990"));
+        assetRepository.save(profile("13-2.01-" + suffix, trackTwo, "13007.290"));
+        entityManager.flush();
+
+        List<CatenaryAsset> byName = assetRepository.findAll(CatenaryAssetSpecification.nameContains(shared)
+                .and(CatenaryAssetSpecification.typeEquals(CatenaryAssetType.PROFILE)), Sort.by("trackId"));
+        List<CatenaryAsset> onTrackTwo = assetRepository.findAll(CatenaryAssetSpecification.nameContains(shared)
+                .and(CatenaryAssetSpecification.trackIdEquals(trackTwo)), Sort.by("code"));
+        List<CatenaryAsset> partial = assetRepository.findAll(
+                CatenaryAssetSpecification.nameContains("3-2.01-" + suffix.toUpperCase()), Sort.by("code"));
+
+        assertEquals(2, byName.size(), "El nombre solo no distingue entre vias");
+        assertEquals(1, onTrackTwo.size(), "Nombre mas via si es univoco");
+        assertEquals(trackTwo, onTrackTwo.getFirst().getTrackId());
+        assertEquals(List.of("13-2.01-" + suffix), partial.stream().map(CatenaryAsset::getName).toList(),
+                "El filtro es parcial y no distingue mayusculas");
+    }
+
     private static CatenaryAsset profile(String name, long trackId, String kp) {
-        return CatenaryAsset.builder().code("PRF-" + name).name(name).type(CatenaryAssetType.PROFILE).trackId(trackId).executionPackageId(6L)
+        // El codigo lleva la via porque es unico en la tabla y el nombre natural no lo es.
+        return CatenaryAsset.builder().code("PRF-" + trackId + "-" + name).name(name).type(CatenaryAssetType.PROFILE)
+                .trackId(trackId).executionPackageId(6L)
                 .startKp(new BigDecimal(kp)).endKp(new BigDecimal(kp)).build();
     }
 

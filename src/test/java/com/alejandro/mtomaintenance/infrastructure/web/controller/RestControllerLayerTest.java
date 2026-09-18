@@ -230,6 +230,8 @@ class RestControllerLayerTest {
         verify(assetService).disable(assetId);
         assets.orders(assetId, pageable);
         verify(orderService).findByAsset(assetId, pageable);
+        assets.search(CatenaryAssetType.PROFILE, 2L, null, null, true, null, "12-2.27", null, null, null, pageable);
+        verify(assetService).search(CatenaryAssetType.PROFILE, 2L, null, null, true, null, "12-2.27", null, null, null, pageable);
         assertEquals("/api/v1/maintenance/teams/" + teamId, createdTeam.getHeaders().getLocation().toString());
         assertSame(monthly, reports.monthly(YearMonth.of(2026, 1), 6L).getBody());
         reports.progress(6L, 2L, CatenaryAssetType.PROFILE, null, null);
