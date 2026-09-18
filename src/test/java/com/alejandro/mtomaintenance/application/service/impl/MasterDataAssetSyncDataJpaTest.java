@@ -137,6 +137,24 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
     }
 
     @Test
+    void aDisconnectorIsActiveUnlessThePayloadSaysOtherwise() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        String activeId = "d-on-" + System.nanoTime();
+        String disabledId = "d-off-" + System.nanoTime();
+
+        // mto-configuration no publica hoy 'enabled' para un seccionador: sin el campo, activo.
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, activeId, MasterDataOperation.CREATED,
+                Map.of("id", activeId, "name", "HSA-NS5", "station", Map.of("id", 9))), new MasterDataEventContext(1L));
+        // Y si algun dia lo anade, el handler lo respeta igual que el del aislador de seccion.
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, disabledId, MasterDataOperation.CREATED,
+                Map.of("id", disabledId, "name", "HSA-NS7", "enabled", false, "station", Map.of("id", 9))), new MasterDataEventContext(1L));
+        entityManager.clear();
+
+        assertTrue(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, activeId).orElseThrow().getEnabled());
+        assertFalse(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, disabledId).orElseThrow().getEnabled());
+    }
+
+    @Test
     void aCantileverChangeIsRecordedInTheInboxAndTouchesNoAsset() {
         InboxMessageService inbox = new InboxMessageServiceImpl(inboxMessageRepository);
         MasterDataEventHandler dispatcher = dispatcher();

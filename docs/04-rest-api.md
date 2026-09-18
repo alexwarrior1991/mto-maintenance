@@ -8,7 +8,9 @@ message, errorCode, path, validationErrors[]}`.
 ## Resources
 
 ```
-GET/POST        /assets                       type, trackId, stationId, executionPackageId, enabled, kpFrom, kpTo, code, preventiveDueBefore
+GET/POST        /assets                       type, trackId, stationId, executionPackageId, enabled, kpFrom, kpTo, code, name, preventiveDueBefore
+                                              name: natural name (profile 12-2.27, disconnector HSA-NS5), partial and case insensitive;
+                                              unique only together with trackId
 GET/PUT/DELETE  /assets/{id}                  DELETE disables
 GET             /assets/{id}/orders | /revisions
 
