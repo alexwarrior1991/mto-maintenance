@@ -13,11 +13,12 @@
 - Defects with their own lifecycle and history.
 - Materials reserved/consumed/released in `mto-stock` with circuit breaker and manual `sync`.
 - Progress and monthly reports.
+- Export of the three reports to Excel and PDF on the same endpoints (`?format=json|xlsx|pdf`), the
+  format the client receives.
 - Keycloak partials, Docker image, CI, gateway route, platform compose.
 
 ## Next
 
-- Export of the shift report and the progress report to Excel/PDF (the format the client receives).
 - Photo storage (`photoRefs` are references today; an object store and upload endpoint are missing).
 - Inspection template management through the API (today: Flyway seeds, new version per change).
 - Own events (order completed, defect opened) through an outbox, for a future notification service.

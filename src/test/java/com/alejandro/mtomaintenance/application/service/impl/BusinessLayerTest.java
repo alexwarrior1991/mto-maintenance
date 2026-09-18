@@ -23,6 +23,11 @@ import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderReques
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderResponse;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.order.PlanOrderRequest;
+import com.alejandro.mtomaintenance.application.dto.export.ExportedReport;
+import com.alejandro.mtomaintenance.application.dto.export.ReportDocument;
+import com.alejandro.mtomaintenance.application.dto.export.ReportFormat;
+import com.alejandro.mtomaintenance.application.dto.export.ReportValue;
+import com.alejandro.mtomaintenance.application.dto.report.MonthlyMaterialLineResponse;
 import com.alejandro.mtomaintenance.application.dto.report.MonthlyReportResponse;
 import com.alejandro.mtomaintenance.application.dto.report.ProgressReportResponse;
 import com.alejandro.mtomaintenance.application.dto.report.ProgressRowResponse;
@@ -30,6 +35,7 @@ import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftUpdateRequest;
+import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
@@ -46,6 +52,7 @@ import com.alejandro.mtomaintenance.application.dto.task.StartTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.TaskMaterialRequest;
 import com.alejandro.mtomaintenance.application.dto.tasktype.MaintenanceTaskTypeResponse;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamRequest;
+import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamSummaryResponse;
 import com.alejandro.mtomaintenance.application.exception.AssetDisabledException;
 import com.alejandro.mtomaintenance.application.exception.DuplicateCodeException;
 import com.alejandro.mtomaintenance.application.exception.InspectionException;
@@ -69,6 +76,7 @@ import com.alejandro.mtomaintenance.application.mapper.StatusHistoryMapper;
 import com.alejandro.mtomaintenance.application.service.EntityAuditService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
+import com.alejandro.mtomaintenance.application.service.ReportExporter;
 import com.alejandro.mtomaintenance.application.service.StatusHistoryService;
 import com.alejandro.mtomaintenance.application.service.StockClient;
 import com.alejandro.mtomaintenance.application.service.WorkloadEstimator;
@@ -1781,6 +1789,171 @@ class BusinessLayerTest {
 
         when(repository.findShiftsBetween(any(), any(), isNull())).thenReturn(List.of());
         assertEquals(0, BigDecimal.ZERO.compareTo(service.monthly(month, null).averageNetMinutesPerShift()), "No closed shifts: no division by zero");
+    }
+
+    // -------------------------------------------------------- report exports
+
+    @Test
+    void theExportServiceHandsEachReportToTheExporterOfTheRequestedFormat() {
+        RecordingExporter workbook = new RecordingExporter(ReportFormat.XLSX);
+        RecordingExporter printable = new RecordingExporter(ReportFormat.PDF);
+        ReportExportServiceImpl service = new ReportExportServiceImpl(List.of(workbook, printable));
+
+        service.exportShiftReport(shiftReport(ShiftStatus.CLOSED, List.of(shiftReportRow())), ReportFormat.XLSX);
+        service.exportProgressReport(progressReport(), ReportFormat.PDF);
+        service.exportMonthlyReport(monthlyReport(6L), ReportFormat.XLSX);
+
+        assertEquals(List.of("Shift report", "Monthly report"), workbook.sheetNames());
+        assertEquals(List.of("Progress"), printable.sheetNames());
+        // JSON no llega hasta aqui: el controlador responde el DTO. Si llegara seria un error de
+        // programacion, no una peticion mal hecha, y por eso no es una ValidationException.
+        assertThrows(IllegalArgumentException.class,
+                () -> service.exportProgressReport(progressReport(), ReportFormat.JSON));
+    }
+
+    @Test
+    void theExportServiceRefusesToStartWithADuplicatedFormatOrWithoutOneForEveryFormatOffered() {
+        RecordingExporter workbook = new RecordingExporter(ReportFormat.XLSX);
+
+        // Con dos para el mismo formato, cual gana dependeria del orden de escaneo del classpath.
+        assertThrows(IllegalStateException.class,
+                () -> new ReportExportServiceImpl(List.of(workbook, new RecordingExporter(ReportFormat.XLSX))));
+        // Un formato que ?format acepta y nadie escribe seria un 500 la primera vez que lo pidieran.
+        assertThrows(IllegalStateException.class, () -> new ReportExportServiceImpl(List.of(workbook)));
+        assertThrows(IllegalStateException.class, () -> new ReportExportServiceImpl(List.of(new RecordingExporter(ReportFormat.JSON))));
+        assertDoesNotThrow(() -> new ReportExportServiceImpl(List.of(workbook, new RecordingExporter(ReportFormat.PDF))));
+    }
+
+    @Test
+    void anAbsentFormatMeansJsonAndAnUnknownOneIsARejectedRequest() {
+        assertEquals(ReportFormat.JSON, ReportFormat.of(null));
+        assertEquals(ReportFormat.JSON, ReportFormat.of("  "));
+        assertEquals(ReportFormat.JSON, ReportFormat.of("json"));
+        assertEquals(ReportFormat.XLSX, ReportFormat.of("xlsx"));
+        assertEquals(ReportFormat.XLSX, ReportFormat.of(" XLSX "), "Case does not decide whether a link works");
+        assertEquals(ReportFormat.PDF, ReportFormat.of("Pdf"));
+
+        ValidationException rejected = assertThrows(ValidationException.class, () -> ReportFormat.of("csv"));
+        assertTrue(rejected.getMessage().contains("csv"), rejected.getMessage());
+        assertTrue(rejected.getMessage().contains("xlsx"), "The message has to say what is accepted");
+    }
+
+    @Test
+    void theShiftLayoutExportsAShiftThatHasNotStartedWithItsTimesEmptyAndItsFileNameStable() {
+        ReportDocument document = ShiftReportLayout.of(shiftReport(ShiftStatus.PLANNED, List.of()), GENERATED_AT);
+
+        assertEquals("shift-report-2026-01-27-SH-000001", document.fileBaseName());
+        assertEquals(ReportDocument.Layout.LANDSCAPE, document.layout());
+        assertEquals(ReportValue.EMPTY, headerField(document, "Actual start"));
+        assertEquals(ReportValue.EMPTY, headerField(document, "Net work invalid"), "an unknown label is absent, not a crash");
+        assertEquals(ReportValue.EMPTY, headerField(document, "Net work minutes"));
+        assertEquals(new ReportValue.Text("PLANNED"), headerField(document, "Status"));
+        assertTrue(document.table().rows().isEmpty(), "a shift with no tasks still has a table to head");
+        assertEquals(18, document.table().columns().size());
+    }
+
+    @Test
+    void theProgressAndMonthlyFileNamesCarryTheScopeTheyActuallyCover() {
+        // El DTO del avance no lleva los filtros que lo produjeron: el ambito sale de las filas, y
+        // solo cuando todas coinciden, para que el nombre no afirme algo que el contenido desmiente.
+        assertEquals("progress-report-2026-01-31-ep6-track2",
+                ProgressReportLayout.of(progressReport(), GENERATED_AT).fileBaseName());
+        assertEquals("progress-report-2026-01-31-ep6",
+                ProgressReportLayout.of(progressReportAcrossTwoTracks(), GENERATED_AT).fileBaseName(),
+                "the package every row shares stays; the track they do not share drops");
+
+        assertEquals("monthly-report-2026-01-ep6", MonthlyReportLayout.of(monthlyReport(6L), GENERATED_AT).fileBaseName());
+        assertEquals("monthly-report-2026-01", MonthlyReportLayout.of(monthlyReport(null), GENERATED_AT).fileBaseName());
+        assertEquals(ReportDocument.Layout.PORTRAIT, MonthlyReportLayout.of(monthlyReport(6L), GENERATED_AT).layout());
+    }
+
+    @Test
+    void aRowThatDoesNotMatchItsColumnsIsRejectedWhereTheLayoutIsToBlame() {
+        List<ReportDocument.Column> columns = List.of(new ReportDocument.Column("Kp", 5), new ReportDocument.Column("Status", 5));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new ReportDocument.Table(columns, List.of(List.of(ReportValue.EMPTY))));
+        assertDoesNotThrow(() -> new ReportDocument.Table(columns, List.of(List.of(ReportValue.EMPTY, ReportValue.EMPTY))));
+    }
+
+    private static final Instant GENERATED_AT = Instant.parse("2026-01-28T05:30:00Z");
+
+    /** Se queda con el documento en vez de escribirlo: aqui se prueba el reparto, no el fichero. */
+    private static final class RecordingExporter implements ReportExporter {
+
+        private final ReportFormat format;
+        private final List<ReportDocument> exported = new ArrayList<>();
+
+        RecordingExporter(ReportFormat format) {
+            this.format = format;
+        }
+
+        @Override
+        public ReportFormat format() {
+            return format;
+        }
+
+        @Override
+        public ExportedReport export(ReportDocument document) {
+            exported.add(document);
+            return new ExportedReport(document.fileBaseName(), "application/octet-stream", new byte[0]);
+        }
+
+        List<String> sheetNames() {
+            return exported.stream().map(ReportDocument::sheetName).toList();
+        }
+    }
+
+    private static ReportValue headerField(ReportDocument document, String label) {
+        return document.header().stream()
+                .filter(field -> field.label().equals(label))
+                .map(ReportDocument.Field::value)
+                .findFirst().orElse(ReportValue.EMPTY);
+    }
+
+    private static ShiftReportResponse shiftReport(ShiftStatus status, List<ShiftReportRowResponse> rows) {
+        boolean closed = status == ShiftStatus.CLOSED;
+        MaintenanceShiftResponse shift = new MaintenanceShiftResponse(UUID.randomUUID(), "SH-000001", LocalDate.of(2026, 1, 27),
+                new MaintenanceTeamSummaryResponse(UUID.randomUUID(), "A", "Team A - Rishpon", "Rishpon"),
+                "Rishpon", "Maintenance vehicle A", PossessionType.PARTIAL,
+                Instant.parse("2026-01-27T21:00:00Z"), Instant.parse("2026-01-28T05:00:00Z"),
+                closed ? Instant.parse("2026-01-27T21:10:00Z") : null,
+                closed ? Instant.parse("2026-01-28T04:30:00Z") : null,
+                closed ? Instant.parse("2026-01-27T21:25:00Z") : null,
+                closed ? 290 : null,
+                List.of(), "PT-14", "Rishpon depot", 6L, List.of(2L),
+                new BigDecimal("12847.990"), new BigDecimal("14078.090"),
+                "3 linemen", "Laser", status, null, null);
+        return new ShiftReportResponse(shift, rows.size(), 0, rows.size(), 0, 0, rows);
+    }
+
+    private static ShiftReportRowResponse shiftReportRow() {
+        return new ShiftReportRowResponse(1, UUID.randomUUID(), "MO-000001", 6L, 2L, "PRF-12-2.27", "12-2.27",
+                new BigDecimal("12847.990"), "A/S", List.of("RG-01"), "Insulators checked", null,
+                List.of("2 ud GA70"), Instant.parse("2026-01-27T21:40:00Z"), Instant.parse("2026-01-27T22:00:00Z"),
+                MaintenanceTaskStatus.COMPLETED, true, null, List.of());
+    }
+
+    private static ProgressReportResponse progressReport() {
+        return new ProgressReportResponse(Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2026-01-31T23:59:59Z"),
+                412, 318, new BigDecimal("0.7718"), new BigDecimal("17.240"), new BigDecimal("22.340"),
+                List.of(new ProgressRowResponse(6L, 2L, CatenaryAssetType.PROFILE, 412, 318,
+                        new BigDecimal("0.7718"), new BigDecimal("17.240"), new BigDecimal("22.340"))));
+    }
+
+    private static ProgressReportResponse progressReportAcrossTwoTracks() {
+        ProgressReportResponse single = progressReport();
+        List<ProgressRowResponse> rows = new ArrayList<>(single.rows());
+        rows.add(new ProgressRowResponse(6L, 3L, CatenaryAssetType.PROFILE, 10, 1,
+                new BigDecimal("0.1000"), BigDecimal.ZERO, BigDecimal.ZERO));
+        return new ProgressReportResponse(single.from(), single.to(), single.totalAssets(), single.checkedAssets(),
+                single.completionRatio(), single.coveredKm(), single.totalKm(), rows);
+    }
+
+    private static MonthlyReportResponse monthlyReport(Long executionPackageId) {
+        return new MonthlyReportResponse(YearMonth.of(2026, 1), executionPackageId, 18, 16, 2, 4640,
+                new BigDecimal("290.0"), 12, 287, 264, new BigDecimal("17.240"), 31, 22, 5,
+                List.of(new MonthlyMaterialLineResponse(UUID.randomUUID(), "GA70", "ud", new BigDecimal("48.000"))));
     }
 
     // -------------------------------------------------------------- fixtures

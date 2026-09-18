@@ -2,7 +2,7 @@
 # Walks through a preventive shift the way the daily report of 27.01.2026 recorded it:
 # track section Raanana-Herzliya track 2 -> preventive order -> tasks per profile -> plan
 # (stock reservation) -> shift of team A -> start -> complete tasks with an inline defect ->
-# close the shift -> shift report -> complete the order -> progress report.
+# close the shift -> shift report (JSON, xlsx and pdf) -> complete the order -> progress report.
 @host = localhost
 @port = 8083
 @baseUrl = http://{{host}}:{{port}}/api/v1/maintenance
@@ -193,6 +193,19 @@ Content-Type: application/json
 GET {{baseUrl}}/shifts/{{shiftId}}/report
 Authorization: Bearer {{accessToken}}
 
+### Shifts - the same report as the workbook handed to the client
+# format=json|xlsx|pdf on the same URL, json by default. '>>' saves the body next to this file.
+GET {{baseUrl}}/shifts/{{shiftId}}/report?format=xlsx
+Authorization: Bearer {{accessToken}}
+
+>> shift-report.xlsx
+
+### Shifts - and as the printable A4 (landscape, header repeated on every page)
+GET {{baseUrl}}/shifts/{{shiftId}}/report?format=pdf
+Authorization: Bearer {{accessToken}}
+
+>> shift-report.pdf
+
 ### Shifts - profiles reviewed (COMPLETED tasks, by kp) and what is left
 GET {{baseUrl}}/shifts/{{shiftId}}/profiles
 Authorization: Bearer {{accessToken}}
@@ -218,8 +231,36 @@ Authorization: Bearer {{accessToken}}
 GET {{baseUrl}}/reports/progress?executionPackageId={{executionPackageId}}&trackId={{trackId}}
 Authorization: Bearer {{accessToken}}
 
+### Reports - progress as the advance workbook
+GET {{baseUrl}}/reports/progress?executionPackageId={{executionPackageId}}&trackId={{trackId}}&format=xlsx
+Authorization: Bearer {{accessToken}}
+
+>> progress-report.xlsx
+
+### Reports - progress as a PDF
+GET {{baseUrl}}/reports/progress?executionPackageId={{executionPackageId}}&trackId={{trackId}}&format=pdf
+Authorization: Bearer {{accessToken}}
+
+>> progress-report.pdf
+
 ### Reports - monthly figures
 GET {{baseUrl}}/reports/monthly?executionPackageId={{executionPackageId}}&month=2026-01
+Authorization: Bearer {{accessToken}}
+
+### Reports - monthly as a workbook and as a PDF (this one is portrait)
+GET {{baseUrl}}/reports/monthly?executionPackageId={{executionPackageId}}&month=2026-01&format=xlsx
+Authorization: Bearer {{accessToken}}
+
+>> monthly-report.xlsx
+
+###
+GET {{baseUrl}}/reports/monthly?executionPackageId={{executionPackageId}}&month=2026-01&format=pdf
+Authorization: Bearer {{accessToken}}
+
+>> monthly-report.pdf
+
+### Reports - an unknown format is a 400 VAL-001, not a 500
+GET {{baseUrl}}/reports/monthly?month=2026-01&format=csv
 Authorization: Bearer {{accessToken}}
 
 ### Inspections - technical inspection of a disconnector (template copied automatically)

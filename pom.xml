@@ -33,6 +33,8 @@
         <lombok-mapstruct-binding.version>0.2.0</lombok-mapstruct-binding.version>
         <springdoc-openapi.version>3.1.0</springdoc-openapi.version>
         <testcontainers.version>1.21.4</testcontainers.version>
+        <poi.version>5.4.1</poi.version>
+        <openpdf.version>2.4.0</openpdf.version>
     </properties>
     <dependencies>
         <dependency>
@@ -101,6 +103,37 @@
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+        </dependency>
+
+        <!--
+            Exportacion de los informes al fichero que se entrega al cliente. Misma version que fija
+            mto-configuration para leer sus workbooks, para que los dos repos no acaben discutiendo
+            sobre POI. Queda confinada a infrastructure/export: ninguna otra capa importa
+            org.apache.poi. Arrastra log4j-api, que Spring Boot ya gestiona y puentea a logback con
+            log4j-to-slf4j, asi que no aparece un segundo backend de logs ni hay nada que configurar.
+        -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+
+        <!--
+            El mismo informe en PDF. LGPL 2.1 / MPL 2.0, sin navegador ni motor de plantillas detras:
+            lo que se imprime son tablas. Se fija la 2.4.0 y no la 3.x porque la 3 renombra los
+            paquetes a org.openpdf y, sobre todo, convierte brotli4j en dependencia obligatoria, que
+            mete librerias nativas por plataforma en la imagen del servicio; en la 2.4.0 todas las
+            transitivas (icu4j, bouncycastle, fop) son optional y no cae nada mas en el classpath.
+        -->
+        <dependency>
+            <groupId>com.github.librepdf</groupId>
+            <artifactId>openpdf</artifactId>
+            <version>${openpdf.version}</version>
         </dependency>
 
         <dependency>

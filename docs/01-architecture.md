@@ -14,8 +14,9 @@ com.alejandro.mtomaintenance
 ├── domain.model            state machines, kp ranges, quantities, workload estimate (no Spring, no JPA)
 ├── application
 │   ├── dto.<resource>      request/response records with Bean Validation
+│   ├── dto.export          format-neutral report document + ReportFormat (not API types, like dto.messaging)
 │   ├── service             public interfaces (one per resource + StockClient, StatusHistoryService,
-│   │                       MaintenanceCodeGenerator, WorkloadEstimator, InboxMessageService, ...)
+│   │                       MaintenanceCodeGenerator, WorkloadEstimator, ReportExportService, ...)
 │   ├── service.impl        package-private implementations and shared helpers
 │   ├── mapper              MapStruct, entity -> response only
 │   └── exception           business exceptions mapped by GlobalExceptionHandler
@@ -23,6 +24,7 @@ com.alejandro.mtomaintenance
 │   ├── persistence.entity | .repository | .specification | .audit
 │   ├── web.controller | web.exception
 │   ├── messaging.rabbitmq  consumer of the master-data channel
+│   ├── export              XlsxReportExporter (POI) and PdfReportExporter (OpenPDF)
 │   └── stock               RestClientStockClient
 └── configuration           security, rabbitmq, messaging signature, stock client, JPA auditing, OpenAPI
 ```
@@ -37,6 +39,10 @@ Rules that keep the layers honest:
   checked, and always inside the writing statement.
 - Every state change of an order or a defect goes through `StatusHistoryService`, which records
   who changed what and why.
+- The three reports are exported by turning them into one `ReportDocument` and handing it to the
+  `ReportExporter` of the requested format. The exporters are `@Component`s indexed by format at
+  startup, the same registry-by-key the master-data handlers use, so a new format is one class and
+  one enum constant: the controllers only choose between the DTO and a file.
 
 ## Integrations
 
