@@ -38,6 +38,11 @@ final class ShiftReportLayout {
             new ReportDocument.Column("Profile name", 0),
             new ReportDocument.Column("Kp", 6),
             new ReportDocument.Column("Sectioning", 5),
+            // Las agujas del aislador de seccion, con su tangente ('W31 1:9'). Peso 0: en una hoja
+            // de calculo cabe, pero en un A4 quitaria ancho a los trabajos realizados y a los
+            // defectos, que son las columnas que hay que leer de noche y sobre el terreno. Solo la
+            // lleva un SECTION_INSULATOR; en el resto de filas sale vacia.
+            new ReportDocument.Column("Switches", 0),
             new ReportDocument.Column("Task types", 8),
             new ReportDocument.Column("Works performed", 18),
             new ReportDocument.Column("Defects found", 14),
@@ -128,6 +133,7 @@ final class ShiftReportLayout {
                 ReportValue.text(row.profileName()),
                 ReportValue.decimal(row.kp(), 3),
                 ReportValue.text(row.sectioning()),
+                ReportValue.textList(row.switches()),
                 ReportValue.textList(row.taskTypeCodes()),
                 ReportValue.text(row.worksPerformed()),
                 ReportValue.text(row.defectsFound()),

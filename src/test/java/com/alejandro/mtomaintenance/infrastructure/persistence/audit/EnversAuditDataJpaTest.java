@@ -130,13 +130,13 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
     void masterDataUpsertsLeaveNoRevisionWhileAnApiEditOfTheSameAssetDoes() {
         String sourceId = "prf-" + UUID.randomUUID();
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27", "PROFILE",
-                6L, 2L, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", true, 10L));
+                6L, 2L, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 10L));
         UUID assetId = inTransaction(em -> assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getId());
 
         assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId)).isEmpty(), "Native SQL bypasses Envers on purpose");
 
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27 renamed", "PROFILE",
-                6L, 2L, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", true, 11L));
+                6L, 2L, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 11L));
         assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId)).isEmpty());
 
         inTransaction(em -> {

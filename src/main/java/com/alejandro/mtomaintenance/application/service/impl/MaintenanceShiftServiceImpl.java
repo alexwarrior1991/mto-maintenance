@@ -298,6 +298,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
                     asset == null ? null : asset.getName(),
                     asset == null ? null : asset.getStartKp(),
                     asset == null ? null : asset.getSectioning(),
+                    switchesOf(asset),
                     task.getTaskTypes().stream().sorted(Comparator.comparing(MaintenanceTaskType::getOrderIndex)).map(MaintenanceTaskType::getCode).toList(),
                     task.getNotes(),
                     task.getDefectsFound(),
@@ -326,6 +327,25 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         lookups.shift(id);
         return profileAssets(taskRepository.findByShiftIdOrderBySequenceAsc(id), status == null ? MaintenanceTaskStatus.COMPLETED : status)
                 .map(assetMapper::toSummary)
+                .toList();
+    }
+
+    /**
+     * Las agujas del activo, ya formateadas como las escribe el plano: {@code W31 1:9}.
+     *
+     * <p>Solo las lleva un aislador de seccion; en el resto de filas del parte sale vacia. Es lo que
+     * el equipo necesita para plantarse en el sitio de noche: sobre que aguja esta el aislador y con
+     * que tangente.
+     */
+    private static List<String> switchesOf(CatenaryAsset asset) {
+        if (asset == null || asset.getSwitches() == null) {
+            return List.of();
+        }
+
+        return asset.getSwitches().stream()
+                .map(each -> each.turnoutRate() == null
+                        ? each.getCode()
+                        : each.getCode() + " " + each.turnoutRate())
                 .toList();
     }
 

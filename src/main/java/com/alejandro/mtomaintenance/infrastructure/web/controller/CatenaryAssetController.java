@@ -83,9 +83,13 @@ public class CatenaryAssetController {
             @RequestParam(required = false) BigDecimal kpFrom,
             @RequestParam(required = false) BigDecimal kpTo,
             @Parameter(description = "ISO-8601 instant") @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant preventiveDueBefore,
+            @Parameter(description = "Section insulators connecting with this track, matched on their secondary track.")
+            @RequestParam(required = false) Long connectedTrackId,
+            @Parameter(description = "Section insulators sitting on a turnout with this code (W31). Partial and case insensitive.")
+            @RequestParam(required = false) String switchCode,
             @PageableDefault(size = 20, sort = {"trackId", "startKp"}, direction = Sort.Direction.ASC) Pageable pageable) {
         return ResponseEntity.ok(assetService.search(type, trackId, stationId, executionPackageId, enabled, code, name, kpFrom, kpTo,
-                preventiveDueBefore, pageable));
+                preventiveDueBefore, connectedTrackId, switchCode, pageable));
     }
 
     @Operation(summary = "Disable asset", description = "Assets are never deleted: orders, inspections and defects reference them. DELETE disables the asset.")

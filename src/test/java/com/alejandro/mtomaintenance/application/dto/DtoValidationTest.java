@@ -11,6 +11,7 @@ import com.alejandro.mtomaintenance.application.dto.task.CompleteTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.InlineDefectRequest;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.SectionInsulatorInstallation;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -142,9 +143,14 @@ class DtoValidationTest {
         assertFalse(new MaintenanceOrderUpdateRequest(null, "d", MaintenancePriority.HIGH, null, null, null, "n", null, null, null, null, null, null).touchesRestrictedFields());
         assertTrue(new MaintenanceOrderUpdateRequest("t", null, null, null, null, null, null, null, null, null, null, null, null).touchesRestrictedFields());
         assertTrue(new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null, UUID.randomUUID()).touchesRestrictedFields());
-        assertFalse(new CatenaryAssetUpdateRequest(null, "d", true, 30, null, null, null, null, null, null).touchesIdentity());
-        assertTrue(new CatenaryAssetUpdateRequest("n", null, null, null, null, null, null, null, null, null).touchesIdentity());
-        assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN).touchesIdentity());
+        assertFalse(new CatenaryAssetUpdateRequest(null, "d", true, 30, null, null, null, null, null, null, null, null).touchesIdentity());
+        assertTrue(new CatenaryAssetUpdateRequest("n", null, null, null, null, null, null, null, null, null, null, null).touchesIdentity());
+        assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN, null, null).touchesIdentity());
+        // Los dos campos del aislador de seccion son suyos, no del cliente: un PUT que los toque en
+        // un activo de datos maestros se rechaza igual que el nombre o el kp.
+        assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, null, 4L, null).touchesIdentity());
+        assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, null, null,
+                SectionInsulatorInstallation.TRACK_CONNECTION).touchesIdentity());
     }
 
     private static Set<String> fields(Set<? extends ConstraintViolation<?>> violations) {

@@ -26,8 +26,12 @@ class JpaEntityModelTest {
         List<Class<?>> audited = List.of(CatenaryAsset.class, MaintenanceShift.class, MaintenanceOrder.class, MaintenanceTask.class,
                 MaintenanceTaskCheckItem.class, MaintenanceInspection.class, MaintenanceInspectionItem.class,
                 CatenaryDefect.class, MaintenanceMaterialUsage.class);
+        // CatenaryAssetSwitch se queda fuera por lo mismo que InboxMessage: sus filas las escribe
+        // UNICAMENTE el manejador de datos maestros, asi que una gemela _aud se quedaria vacia y se
+        // leeria como "nunca cambio". El historial del aislador vive en mto-configuration.
         List<Class<?>> notAudited = List.of(MaintenanceStatusHistory.class, InboxMessage.class, MaintenanceTeam.class,
-                MaintenanceTaskType.class, InspectionTemplate.class, InspectionTemplateItem.class, AuditableEntity.class);
+                MaintenanceTaskType.class, InspectionTemplate.class, InspectionTemplateItem.class,
+                CatenaryAssetSwitch.class, AuditableEntity.class);
 
         audited.forEach(type -> assertTrue(type.isAnnotationPresent(Audited.class), type.getSimpleName() + " must be @Audited"));
         notAudited.forEach(type -> assertFalse(type.isAnnotationPresent(Audited.class), type.getSimpleName() + " must not be @Audited"));
