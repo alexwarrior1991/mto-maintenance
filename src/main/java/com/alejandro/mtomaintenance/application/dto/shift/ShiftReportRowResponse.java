@@ -18,6 +18,8 @@ public record ShiftReportRowResponse(
         String profileName,
         BigDecimal kp,
         String sectioning,
+        /** Agujas del aislador de seccion, con su tangente: {@code W31 1:9}. Vacia en el resto. */
+        List<String> switches,
         List<String> taskTypeCodes,
         String worksPerformed,
         String defectsFound,

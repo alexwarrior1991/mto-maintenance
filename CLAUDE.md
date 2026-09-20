@@ -73,7 +73,10 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
 A `CatenaryAsset` is what maintenance is done on: a `TRACK_SECTION` (created through the API, a kp
 range on a track, `MAIN` or `DIVERTED`), or a `PROFILE`, `DISCONNECTOR` or `SECTION_INSULATOR`
 synchronized from `mto-configuration` (`source_service` + `source_entity_id`, never created through
-the API, only `description`/`enabled`/`preventiveIntervalDays` editable). A `MaintenanceOrder`
+the API, only `description`/`enabled`/`preventiveIntervalDays` editable). A `SECTION_INSULATOR`
+carries besides its two tracks, its `installationType` (`TRACK_CONNECTION` / `IN_TRACK`) and its
+turnouts (`catenary_asset_switch`: `W31` at its kp with its `1:9` rate) — a turnout is part of the
+insulator, not an asset of its own, so there is no new `CatenaryAssetType`. A `MaintenanceOrder`
 (`PREVENTIVE`, `CORRECTIVE`, `INSPECTION`, `URGENT`) targets one asset and moves
 `DRAFT → PLANNED → ASSIGNED → IN_PROGRESS → COMPLETED` (or `CANCELLED`); `URGENT` is the only type
 that jumps `DRAFT → IN_PROGRESS` and is born `CRITICAL`. A preventive order on a `TRACK_SECTION`
@@ -144,7 +147,7 @@ PDF leaves out.
 Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track and blocking-disconnector collections),
 `MaintenanceTaskCheckItem`, `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`,
 `MaintenanceMaterialUsage`. Not audited on purpose: `MaintenanceStatusHistory`
-(append-only), `InboxMessage` (native SQL only), `MaintenanceTeam`, `MaintenanceTaskType`,
+(append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `MaintenanceTeam`, `MaintenanceTaskType`,
 `InspectionTemplate`/`Item` (catalogues). `JpaEntityModelTest` guards the split. History at
 `GET /<resource>/{id}/revisions`.
 

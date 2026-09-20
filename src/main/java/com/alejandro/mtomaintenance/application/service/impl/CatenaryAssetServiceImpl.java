@@ -134,7 +134,8 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     @Transactional(readOnly = true)
     public PageResponse<CatenaryAssetResponse> search(CatenaryAssetType type, Long trackId, Long stationId, Long executionPackageId,
                                                       Boolean enabled, String code, String name, BigDecimal kpFrom, BigDecimal kpTo,
-                                                      Instant preventiveDueBefore, Pageable pageable) {
+                                                      Instant preventiveDueBefore, Long connectedTrackId, String switchCode,
+                                                      Pageable pageable) {
         Specification<CatenaryAsset> specification = CatenaryAssetSpecification.typeEquals(type)
                 .and(CatenaryAssetSpecification.trackIdEquals(trackId))
                 .and(CatenaryAssetSpecification.stationIdEquals(stationId))
@@ -143,7 +144,9 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
                 .and(CatenaryAssetSpecification.codeContains(code))
                 .and(CatenaryAssetSpecification.nameContains(name))
                 .and(CatenaryAssetSpecification.kpBetween(kpFrom, kpTo))
-                .and(CatenaryAssetSpecification.preventiveDueBefore(preventiveDueBefore));
+                .and(CatenaryAssetSpecification.preventiveDueBefore(preventiveDueBefore))
+                .and(CatenaryAssetSpecification.connectedTrackIdEquals(connectedTrackId))
+                .and(CatenaryAssetSpecification.hasSwitchCode(switchCode));
         return PageMapper.toPageResponse(repository.findAll(specification, pageable), mapper::toResponse);
     }
 

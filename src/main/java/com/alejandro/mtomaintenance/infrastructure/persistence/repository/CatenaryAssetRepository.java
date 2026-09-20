@@ -48,23 +48,27 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     @Modifying
     @Query(value = """
             insert into catenary_asset (
-                id, code, name, type, execution_package_id, track_id, station_id, start_kp, end_kp,
-                profile_source_id, sectioning, source_service, source_entity_id, source_sequence_number, enabled,
+                id, code, name, type, execution_package_id, track_id, connected_track_id, station_id,
+                start_kp, end_kp, profile_source_id, sectioning, installation_type,
+                source_service, source_entity_id, source_sequence_number, enabled,
                 created_at, updated_at, created_by, updated_by
             ) values (
                 gen_random_uuid(), :code, :name, cast(:type as catenary_asset_type), :executionPackageId, :trackId,
-                :stationId, :startKp, :endKp, :profileSourceId, :sectioning, :sourceService, :sourceEntityId,
-                :sourceSequenceNumber, :enabled, now(), now(), 'system', 'system'
+                :connectedTrackId, :stationId, :startKp, :endKp, :profileSourceId, :sectioning,
+                cast(:installationType as section_insulator_installation),
+                :sourceService, :sourceEntityId, :sourceSequenceNumber, :enabled, now(), now(), 'system', 'system'
             ) on conflict (source_service, source_entity_id) do update
                set code = excluded.code,
                    name = excluded.name,
                    execution_package_id = excluded.execution_package_id,
                    track_id = excluded.track_id,
+                   connected_track_id = excluded.connected_track_id,
                    station_id = excluded.station_id,
                    start_kp = excluded.start_kp,
                    end_kp = excluded.end_kp,
                    profile_source_id = excluded.profile_source_id,
                    sectioning = excluded.sectioning,
+                   installation_type = excluded.installation_type,
                    enabled = excluded.enabled,
                    source_sequence_number = coalesce(
                        excluded.source_sequence_number, catenary_asset.source_sequence_number),
@@ -81,11 +85,13 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             @Param("type") String type,
             @Param("executionPackageId") Long executionPackageId,
             @Param("trackId") Long trackId,
+            @Param("connectedTrackId") Long connectedTrackId,
             @Param("stationId") Long stationId,
             @Param("startKp") BigDecimal startKp,
             @Param("endKp") BigDecimal endKp,
             @Param("profileSourceId") String profileSourceId,
             @Param("sectioning") String sectioning,
+            @Param("installationType") String installationType,
             @Param("enabled") boolean enabled,
             @Param("sourceSequenceNumber") Long sourceSequenceNumber
     );

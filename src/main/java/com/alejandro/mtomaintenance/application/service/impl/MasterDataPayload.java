@@ -94,10 +94,41 @@ final class MasterDataPayload {
         return Boolean.parseBoolean(value.toString());
     }
 
+    /** Un entero ausente o de tipo raro se lee como {@code null}, igual que el resto. */
+    Integer integerValue(String key) {
+        Long value = longValue(key);
+        return value == null ? null : value.intValue();
+    }
+
     @SuppressWarnings("unchecked")
     MasterDataPayload nested(String key) {
         Object value = values.get(key);
         return value instanceof Map<?, ?> map ? new MasterDataPayload((Map<String, Object>) map) : new MasterDataPayload(Map.of());
+    }
+
+    /**
+     * Una lista de objetos anidados, cada uno como su propio lector.
+     *
+     * <p>{@code joinedCodes} ya leía listas, pero sólo para sacar una clave de cada elemento y
+     * unirla; esto hace falta cuando el elemento tiene varios campos que se guardan por separado,
+     * como las agujas del aislador de sección.
+     *
+     * <p>Misma tolerancia que el resto de la clase: si la clave falta, o no es una lista, o algún
+     * elemento no es un objeto, sale lo que se pueda leer y nunca una excepción. Un evento legítimo
+     * no debe acabar en la DLQ por la forma de un campo.
+     */
+    @SuppressWarnings("unchecked")
+    List<MasterDataPayload> nestedList(String key) {
+        Object value = values.get(key);
+
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+
+        return list.stream()
+                .filter(Map.class::isInstance)
+                .map(item -> new MasterDataPayload((Map<String, Object>) item))
+                .toList();
     }
 
     boolean has(String key) {

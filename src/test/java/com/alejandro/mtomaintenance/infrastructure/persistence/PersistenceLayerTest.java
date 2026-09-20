@@ -257,7 +257,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
 
     private int upsert(String sourceId, String name, Long sequence) {
         int applied = assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, name, "PROFILE",
-                6L, 2L, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", true, sequence);
+                6L, 2L, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, sequence);
         entityManager.clear();
         return applied;
     }

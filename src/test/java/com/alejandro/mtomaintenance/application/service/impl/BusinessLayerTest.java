@@ -805,8 +805,8 @@ class BusinessLayerTest {
         when(fixture.lookups.asset(synced.getId())).thenReturn(synced);
 
         assertThrows(AssetDisabledException.class, () -> fixture.service.update(synced.getId(),
-                new CatenaryAssetUpdateRequest("renamed", null, null, null, null, null, null, null, null, null)));
-        fixture.service.update(synced.getId(), new CatenaryAssetUpdateRequest(null, "Next to the bridge", false, 180, null, null, null, null, null, null));
+                new CatenaryAssetUpdateRequest("renamed", null, null, null, null, null, null, null, null, null, null, null)));
+        fixture.service.update(synced.getId(), new CatenaryAssetUpdateRequest(null, "Next to the bridge", false, 180, null, null, null, null, null, null, null, null));
 
         assertEquals("12-2.27", synced.getName());
         assertEquals("Next to the bridge", synced.getDescription());
@@ -817,13 +817,13 @@ class BusinessLayerTest {
         CatenaryAsset local = profile("13-2.01", "13007.290");
         when(fixture.lookups.asset(local.getId())).thenReturn(local);
         assertThrows(ValidationException.class, () -> fixture.service.update(local.getId(),
-                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN)));
+                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN, null, null)));
         assertThrows(ValidationException.class, () -> fixture.service.update(local.getId(),
-                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, new BigDecimal("13000.000"), null)));
+                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, new BigDecimal("13000.000"), null, null, null)));
 
         CatenaryAsset section = trackSection();
         when(fixture.lookups.asset(section.getId())).thenReturn(section);
-        fixture.service.update(section.getId(), new CatenaryAssetUpdateRequest(" T2 renamed ", null, null, null, 7L, 3L, 9L, null, null, TrackKind.DIVERTED));
+        fixture.service.update(section.getId(), new CatenaryAssetUpdateRequest(" T2 renamed ", null, null, null, 7L, 3L, 9L, null, null, TrackKind.DIVERTED, null, null));
         assertEquals("T2 renamed", section.getName());
         assertEquals(7L, section.getExecutionPackageId());
         assertEquals(3L, section.getTrackId());
@@ -1849,7 +1849,7 @@ class BusinessLayerTest {
         assertEquals(ReportValue.EMPTY, headerField(document, "Net work minutes"));
         assertEquals(new ReportValue.Text("PLANNED"), headerField(document, "Status"));
         assertTrue(document.table().rows().isEmpty(), "a shift with no tasks still has a table to head");
-        assertEquals(18, document.table().columns().size());
+        assertEquals(19, document.table().columns().size());
     }
 
     @Test
@@ -1929,7 +1929,7 @@ class BusinessLayerTest {
 
     private static ShiftReportRowResponse shiftReportRow() {
         return new ShiftReportRowResponse(1, UUID.randomUUID(), "MO-000001", 6L, 2L, "PRF-12-2.27", "12-2.27",
-                new BigDecimal("12847.990"), "A/S", List.of("RG-01"), "Insulators checked", null,
+                new BigDecimal("12847.990"), "A/S", List.of("W31 1:9"), List.of("RG-01"), "Insulators checked", null,
                 List.of("2 ud GA70"), Instant.parse("2026-01-27T21:40:00Z"), Instant.parse("2026-01-27T22:00:00Z"),
                 MaintenanceTaskStatus.COMPLETED, true, null, List.of());
     }

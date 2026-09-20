@@ -1,5 +1,9 @@
 package com.alejandro.mtomaintenance.application.mapper;
 
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetResponse;
+import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSwitchResponse;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetSwitch;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.SectionInsulatorInstallation;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftResponse;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
@@ -43,6 +47,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -126,6 +131,38 @@ class MapperLayerTest {
                     "Los seccionadores salen ordenados por codigo");
             assertEquals("HSA-NS5", response.blockingDisconnectors().getFirst().name());
             assertNotNull(response.status());
+        });
+    }
+
+    @Test
+    void theAssetMapperCarriesTheSectionInsulatorSwitchesAndComposesTheirRate() {
+        contextRunner.run(context -> {
+            CatenaryAssetMapper mapper = context.getBean(CatenaryAssetMapper.class);
+            CatenaryAsset insulator = CatenaryAsset.builder().code("SIN-7").name("B7")
+                    .type(CatenaryAssetType.SECTION_INSULATOR)
+                    .installationType(SectionInsulatorInstallation.TRACK_CONNECTION)
+                    .trackId(3L).connectedTrackId(4L)
+                    .startKp(new BigDecimal("110176.000")).endKp(new BigDecimal("110249.000"))
+                    .build();
+            insulator.getSwitches().add(CatenaryAssetSwitch.builder().asset(insulator).code("W31")
+                    .kp(new BigDecimal("110176.000")).turnoutDenominator(9).trackId(3L).build());
+            insulator.getSwitches().add(CatenaryAssetSwitch.builder().asset(insulator).code("W41")
+                    .kp(new BigDecimal("110249.000")).trackId(4L).enabled(false).build());
+
+            CatenaryAssetResponse response = mapper.toResponse(insulator);
+
+            assertEquals(SectionInsulatorInstallation.TRACK_CONNECTION, response.installationType());
+            assertEquals(4L, response.connectedTrackId());
+            assertEquals(List.of("W31", "W41"),
+                    response.switches().stream().map(CatenaryAssetSwitchResponse::code).toList());
+            // Sin tangente no hay texto que componer: null, no "1:null".
+            assertEquals(Arrays.asList("1:9", null),
+                    response.switches().stream().map(CatenaryAssetSwitchResponse::turnoutRate).toList());
+            // Una aguja fuera de servicio viaja marcada, no desaparece de la respuesta.
+            assertEquals(List.of(true, false),
+                    response.switches().stream().map(CatenaryAssetSwitchResponse::enabled).toList());
+            // El resumen se queda pequeno a proposito: va embebido en orden, turno y defecto.
+            assertEquals("SIN-7", mapper.toSummary(insulator).code());
         });
     }
 

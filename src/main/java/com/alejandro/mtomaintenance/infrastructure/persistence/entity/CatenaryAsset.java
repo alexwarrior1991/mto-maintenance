@@ -4,7 +4,10 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.Index;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.Digits;
@@ -21,10 +24,13 @@ import lombok.Setter;
 import lombok.ToString;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.envers.Audited;
+import org.hibernate.envers.NotAudited;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Activo mantenible: referencia ligera a la infraestructura, nunca una copia de ella.
@@ -107,6 +113,38 @@ public class CatenaryAsset extends AuditableEntity {
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Column(name = "track_kind", columnDefinition = "track_kind")
     private TrackKind trackKind;
+
+    /**
+     * Vía con la que conecta un aislador de sección. Sólo la llevan los {@code SECTION_INSULATOR},
+     * y ni siquiera todos: uno en medio de una vía no conecta con ninguna otra.
+     */
+    @Column(name = "connected_track_id")
+    private Long connectedTrackId;
+
+    /** Dos vías que conectan por una aguja, o en medio de una sola. Sólo en un aislador. */
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "installation_type", columnDefinition = "section_insulator_installation")
+    private SectionInsulatorInstallation installationType;
+
+    /**
+     * Agujas por las que el aislador conecta con la vía, en orden físico a lo largo de ella.
+     *
+     * <p><b>Sin cascade ni orphanRemoval, a propósito.</b> Esta colección es sólo de lectura: las
+     * filas las escribe el manejador de datos maestros a través de
+     * {@code CatenaryAssetSwitchRepository}, reemplazando el bloque entero, y el borrado en cadena
+     * lo garantiza la clave ajena. Con cascade, un {@code save(asset)} de la API —que es lo que
+     * hacen {@code update} y {@code disable}— podría tocar filas que no le pertenecen; sin él, no
+     * hay forma de que eso ocurra.
+     *
+     * <p>{@code @NotAudited} porque {@code CatenaryAssetSwitch} no se audita —ver su javadoc— y
+     * Envers no puede auditar una colección hacia una entidad que no lo está.
+     */
+    @NotAudited
+    @OneToMany(mappedBy = "asset", fetch = FetchType.LAZY)
+    @OrderBy("kp asc, code asc")
+    @Builder.Default
+    private List<CatenaryAssetSwitch> switches = new ArrayList<>();
 
     @Size(max = 100)
     @Column(name = "source_service", length = 100)

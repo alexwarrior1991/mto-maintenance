@@ -2,10 +2,12 @@ package com.alejandro.mtomaintenance.application.dto.asset;
 
 import com.alejandro.mtomaintenance.application.dto.common.AuditMetadataResponse;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.SectionInsulatorInstallation;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record CatenaryAssetResponse(
@@ -22,6 +24,9 @@ public record CatenaryAssetResponse(
         String profileSourceId,
         String sectioning,
         TrackKind trackKind,
+        Long connectedTrackId,
+        SectionInsulatorInstallation installationType,
+        List<CatenaryAssetSwitchResponse> switches,
         String sourceService,
         String sourceEntityId,
         Long sourceSequenceNumber,

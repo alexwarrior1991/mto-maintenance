@@ -10,8 +10,9 @@ with millimetre precision), quantities `numeric(19,6)`.
 `catenary_asset_type`, `track_kind`, `maintenance_order_type`, `maintenance_order_status`,
 `maintenance_priority`, `maintenance_task_status`, `shift_status`, `possession_type`,
 `functional_group`, `task_unit`, `inspection_kind`, `inspection_result`, `check_item_result`,
-`defect_severity`, `defect_status`, `stock_sync_status`, `inbox_message_status`. Values match the
-Java enums one to one; adding a value is a migration (`ALTER TYPE … ADD VALUE`).
+`defect_severity`, `defect_status`, `stock_sync_status`, `inbox_message_status`,
+`section_insulator_installation` (`V7`). Values match the Java enums one to one; adding a value is a
+migration (`ALTER TYPE … ADD VALUE`).
 
 ## Sequences
 
@@ -73,6 +74,30 @@ so one night can cover several tracks; existing rows were copied over. Envers tw
 `maintenance_shift_disconnector (shift_id, disconnector_id)`: a safe cut opens every disconnector
 that isolates the zone, not two. Existing rows were copied. Envers twin
 `maintenance_shift_disconnector_aud`.
+
+## Section insulator switches (`V7`)
+
+`catenary_asset` gains `connected_track_id` and `installation_type`
+(`section_insulator_installation`: `TRACK_CONNECTION` / `IN_TRACK`), both nullable and both
+meaningful only on a `SECTION_INSULATOR`; the `_aud` twin gains the same two columns. `track_kind`
+is **not** reused for this: `chk_catenary_asset_track_kind` forbids it outside a `TRACK_SECTION`.
+
+`catenary_asset_switch (id, asset_id, code, kp numeric(12,3), turnout_denominator, track_id,
+enabled)` holds one row per turnout the insulator connects through — `W31` at its kp with its `1:9`
+rate. Unique `(asset_id, code)`, `CHECK turnout_denominator > 0`, FK `on delete cascade` (nothing
+else references a switch, and a master-data asset is never deleted, only disabled). `track_id` is a
+`bigint` because it is an id of `mto-configuration`, like the asset's own.
+
+`enabled` mirrors the flag the source publishes per switch. A turnout taken out of service still
+arrives in the event — the source collection filters soft-deleted rows, not disabled ones — so it is
+stored marked rather than dropped: "that turnout does not exist" and "that turnout is out of
+service" are different answers for a crew on the ground, and the shift report prints the second as
+`W31 1:9 (out of service)`. A payload with no `enabled` key means enabled, as everywhere else.
+
+**No `_aud` twin, on purpose**, and no new `catenary_asset_type` value. The rows are written *only*
+by the master-data handler, the same reason `inbox_message` has no twin: it would sit empty and read
+as "never changed". The history of the insulator lives in `mto-configuration`, which owns the data.
+The collection on `CatenaryAsset` is therefore `@NotAudited`.
 
 ## Auditing (`V4`)
 

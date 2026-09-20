@@ -8,9 +8,12 @@ message, errorCode, path, validationErrors[]}`.
 ## Resources
 
 ```
-GET/POST        /assets                       type, trackId, stationId, executionPackageId, enabled, kpFrom, kpTo, code, name, preventiveDueBefore
+GET/POST        /assets                       type, trackId, stationId, executionPackageId, enabled, kpFrom, kpTo, code, name, preventiveDueBefore,
+                                              connectedTrackId, switchCode
                                               name: natural name (profile 12-2.27, disconnector HSA-NS5), partial and case insensitive;
                                               unique only together with trackId
+                                              connectedTrackId / switchCode: section insulators only — the track it connects with, and
+                                              the turnout it sits on (W31, partial and case insensitive)
 GET/PUT/DELETE  /assets/{id}                  DELETE disables
 GET             /assets/{id}/orders | /revisions
 
@@ -67,9 +70,11 @@ reports saved in one folder sorts itself.
 
 Two deliberate differences from the JSON:
 
-- The PDF prints a subset of the shift report's columns. Eighteen columns on an A4 would leave about
+- The PDF prints a subset of the shift report's columns. Nineteen columns on an A4 would leave about
   six characters each and squeeze `worksPerformed` and `defectsFound`, which are the ones being read.
-  The workbook carries all of them.
+  The workbook carries all of them, `switches` included — the turnouts of a section insulator with
+  their rate (`W31 1:9`, and `W31 1:9 (out of service)` for one that is disabled in
+  `mto-configuration`), empty on every other row.
 - `photoRefs` are printed as text in both formats. They are references that resolve to nothing until
   the photo storage in `05-development-roadmap.md` exists, but they are the only record that the
   photo was taken, so dropping them would lose what the paper report used to carry.
