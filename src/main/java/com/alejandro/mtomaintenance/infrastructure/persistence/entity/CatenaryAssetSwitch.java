@@ -10,6 +10,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.AccessLevel;
@@ -61,8 +62,8 @@ public class CatenaryAssetSwitch extends AuditableEntity {
 
     /** Identificador de la aguja en el plano: {@code W31}. */
     @NotBlank
-    @Size(max = 20)
-    @Column(name = "code", nullable = false, length = 20)
+    @Size(max = 40)
+    @Column(name = "code", nullable = false, length = 40)
     @ToString.Include
     private String code;
 
@@ -84,6 +85,19 @@ public class CatenaryAssetSwitch extends AuditableEntity {
     /** Vía a la que llega esta conexión. Id de {@code mto-configuration}, luego {@code bigint}. */
     @Column(name = "track_id")
     private Long trackId;
+
+    /**
+     * Si la aguja está en servicio, tal y como lo dice {@code mto-configuration}.
+     *
+     * <p>Una aguja dada de baja llega igual en el evento —la colección del origen sólo filtra los
+     * borrados lógicos, no las deshabilitadas—, así que se guarda en lugar de descartarla: para el
+     * equipo no es lo mismo «esa aguja no existe» que «esa aguja está fuera de servicio», y el
+     * parte de turno la marca. Es el mismo criterio que {@code CatenaryAsset.enabled}.
+     */
+    @NotNull
+    @Builder.Default
+    @Column(name = "enabled", nullable = false)
+    private Boolean enabled = true;
 
     /** La tangente tal y como está escrita en el plano, para no componerla en cada consumidor. */
     public String turnoutRate() {

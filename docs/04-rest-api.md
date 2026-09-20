@@ -73,7 +73,8 @@ Two deliberate differences from the JSON:
 - The PDF prints a subset of the shift report's columns. Nineteen columns on an A4 would leave about
   six characters each and squeeze `worksPerformed` and `defectsFound`, which are the ones being read.
   The workbook carries all of them, `switches` included — the turnouts of a section insulator with
-  their rate (`W31 1:9`), empty on every other row.
+  their rate (`W31 1:9`, and `W31 1:9 (out of service)` for one that is disabled in
+  `mto-configuration`), empty on every other row.
 - `photoRefs` are printed as text in both formats. They are references that resolve to nothing until
   the photo storage in `05-development-roadmap.md` exists, but they are the only record that the
   photo was taken, so dropping them would lose what the paper report used to carry.

@@ -70,7 +70,8 @@ class SectionInsulatorMasterDataHandler extends AbstractAssetMasterDataHandler {
                         each.string("code"),
                         each.decimal("kp"),
                         each.integerValue("turnoutDenominator"),
-                        each.longValue("trackId")))
+                        each.longValue("trackId"),
+                        each.bool("enabled", true)))
                 .filter(each -> each.code() != null && !each.code().isBlank())
                 .toList();
     }

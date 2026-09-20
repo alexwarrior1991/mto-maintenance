@@ -28,7 +28,7 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
     static final String SOURCE_SERVICE = "mto-configuration";
 
     private static final int MAX_NAME_LENGTH = 255;
-    private static final int MAX_SWITCH_CODE_LENGTH = 20;
+    private static final int MAX_SWITCH_CODE_LENGTH = 40;
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final CatenaryAssetRepository repository;
@@ -65,12 +65,19 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
     ) {
     }
 
-    /** Una aguja del aislador: lo que hace falta para situar al equipo sobre ella. */
+    /**
+     * Una aguja del aislador: lo que hace falta para situar al equipo sobre ella.
+     *
+     * @param enabled si esta en servicio. Una aguja dada de baja llega igual en el evento, y se
+     *                guarda marcada en lugar de descartarse: «no existe» y «esta fuera de
+     *                servicio» no son lo mismo para quien va de noche
+     */
     protected record SwitchSnapshot(
             String code,
             BigDecimal kp,
             Integer turnoutDenominator,
-            Long trackId
+            Long trackId,
+            boolean enabled
     ) {
     }
 
@@ -192,6 +199,7 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
                         .kp(each.kp())
                         .turnoutDenominator(positiveOrNull(each.turnoutDenominator()))
                         .trackId(each.trackId())
+                        .enabled(each.enabled())
                         .build())
                 .toList();
 

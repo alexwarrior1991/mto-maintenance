@@ -82,11 +82,17 @@ that isolates the zone, not two. Existing rows were copied. Envers twin
 meaningful only on a `SECTION_INSULATOR`; the `_aud` twin gains the same two columns. `track_kind`
 is **not** reused for this: `chk_catenary_asset_track_kind` forbids it outside a `TRACK_SECTION`.
 
-`catenary_asset_switch (id, asset_id, code, kp numeric(12,3), turnout_denominator, track_id)` holds
-one row per turnout the insulator connects through — `W31` at its kp with its `1:9` rate. Unique
-`(asset_id, code)`, `CHECK turnout_denominator > 0`, FK `on delete cascade` (nothing else references
-a switch, and a master-data asset is never deleted, only disabled). `track_id` is a `bigint` because
-it is an id of `mto-configuration`, like the asset's own.
+`catenary_asset_switch (id, asset_id, code, kp numeric(12,3), turnout_denominator, track_id,
+enabled)` holds one row per turnout the insulator connects through — `W31` at its kp with its `1:9`
+rate. Unique `(asset_id, code)`, `CHECK turnout_denominator > 0`, FK `on delete cascade` (nothing
+else references a switch, and a master-data asset is never deleted, only disabled). `track_id` is a
+`bigint` because it is an id of `mto-configuration`, like the asset's own.
+
+`enabled` mirrors the flag the source publishes per switch. A turnout taken out of service still
+arrives in the event — the source collection filters soft-deleted rows, not disabled ones — so it is
+stored marked rather than dropped: "that turnout does not exist" and "that turnout is out of
+service" are different answers for a crew on the ground, and the shift report prints the second as
+`W31 1:9 (out of service)`. A payload with no `enabled` key means enabled, as everywhere else.
 
 **No `_aud` twin, on purpose**, and no new `catenary_asset_type` value. The rows are written *only*
 by the master-data handler, the same reason `inbox_message` has no twin: it would sit empty and read

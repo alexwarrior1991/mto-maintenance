@@ -50,14 +50,20 @@ CREATE INDEX idx_catenary_asset_connected_track ON catenary_asset (connected_tra
 CREATE TABLE catenary_asset_switch (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     asset_id uuid NOT NULL,
-    -- El identificador del plano: 'W' y un numero.
-    code varchar(20) NOT NULL,
+    -- El identificador del plano: 'W' y un numero. Cuarenta, el mismo ancho que la columna de
+    -- mto-configuration: mas estrecha obligaria a truncar, y dos codigos distintos podrian
+    -- acabar chocando contra uq_catenary_asset_switch sin que se vea de donde sale el choque.
+    code varchar(40) NOT NULL,
     -- En METROS y con tres decimales, como start_kp/end_kp: el plano escribe '110+176'.
     kp numeric(12, 3),
     -- El 9 de '1:9'. Solo el denominador: el numerador siempre es 1, y el entero se puede ordenar.
     turnout_denominator integer,
     -- Id de mto-configuration, como track_id del activo: bigint, no uuid.
     track_id bigint,
+    -- Una aguja fuera de servicio sigue estando en el plano y en el evento, asi que se guarda en
+    -- lugar de descartarla: el parte de turno la marca y el equipo sabe que no puede contar con
+    -- ella. Igual que catenary_asset.enabled, y por lo mismo.
+    enabled boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     created_by varchar(100) NOT NULL DEFAULT 'system',

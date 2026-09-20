@@ -264,8 +264,40 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
     }
 
     private static Map<String, Object> switchPayload(String code, double kp, int denominator, long trackId) {
+        return switchPayload(code, kp, denominator, trackId, true);
+    }
+
+    private static Map<String, Object> switchPayload(String code, double kp, int denominator, long trackId,
+                                                     boolean enabled) {
         return Map.of("code", code, "kp", kp, "turnoutDenominator", denominator,
-                "turnoutRate", "1:" + denominator, "trackId", trackId, "enabled", true);
+                "turnoutRate", "1:" + denominator, "trackId", trackId, "enabled", enabled);
+    }
+
+    /**
+     * Una aguja dada de baja en el origen llega igual en el evento —la coleccion de
+     * mto-configuration solo filtra los borrados logicos, no las deshabilitadas— y se guarda
+     * marcada, no se descarta: para el equipo no es lo mismo que la aguja no exista a que este
+     * fuera de servicio. Sin campo, activa, como el resto del payload.
+     */
+    @Test
+    void aSwitchOutOfServiceIsStoredAsSuchInsteadOfBeingDropped() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        String insulatorId = "s" + System.nanoTime();
+
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.SECTION_INSULATOR, insulatorId, MasterDataOperation.CREATED,
+                insulatorPayload(insulatorId, List.of(
+                        switchPayload("W31", 110176.0, 9, 3, false),
+                        switchPayload("W41", 110249.0, 12, 4),
+                        // Sin la clave 'enabled': un emisor mas antiguo que no la publicaba.
+                        Map.of("code", "W51", "kp", 110300.0, "turnoutDenominator", 8, "trackId", 5)))),
+                new MasterDataEventContext(1L));
+        entityManager.clear();
+
+        UUID assetId = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, insulatorId).orElseThrow().getId();
+        List<CatenaryAssetSwitch> switches = switchRepository.findByAssetIdOrderByKpAscCodeAsc(assetId);
+
+        assertEquals(List.of("W31", "W41", "W51"), switches.stream().map(CatenaryAssetSwitch::getCode).toList());
+        assertEquals(List.of(false, true, true), switches.stream().map(CatenaryAssetSwitch::getEnabled).toList());
     }
 
     @Test

@@ -10,6 +10,9 @@ import java.util.UUID;
  *                           guarda sólo el denominador, que además se puede ordenar y comparar
  * @param turnoutRate        el mismo dato como está escrito en el plano ({@code "1:9"}), para no
  *                           obligar a cada consumidor a componer la cadena
+ * @param enabled            si la aguja está en servicio, según {@code mto-configuration}. Una
+ *                           aguja dada de baja sigue apareciendo, marcada: para el equipo no es lo
+ *                           mismo que no exista a que no se pueda contar con ella
  */
 public record CatenaryAssetSwitchResponse(
         UUID id,
@@ -17,6 +20,7 @@ public record CatenaryAssetSwitchResponse(
         BigDecimal kp,
         Integer turnoutDenominator,
         String turnoutRate,
-        Long trackId
+        Long trackId,
+        Boolean enabled
 ) {
 }

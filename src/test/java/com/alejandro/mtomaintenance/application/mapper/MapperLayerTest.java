@@ -147,7 +147,7 @@ class MapperLayerTest {
             insulator.getSwitches().add(CatenaryAssetSwitch.builder().asset(insulator).code("W31")
                     .kp(new BigDecimal("110176.000")).turnoutDenominator(9).trackId(3L).build());
             insulator.getSwitches().add(CatenaryAssetSwitch.builder().asset(insulator).code("W41")
-                    .kp(new BigDecimal("110249.000")).trackId(4L).build());
+                    .kp(new BigDecimal("110249.000")).trackId(4L).enabled(false).build());
 
             CatenaryAssetResponse response = mapper.toResponse(insulator);
 
@@ -158,6 +158,9 @@ class MapperLayerTest {
             // Sin tangente no hay texto que componer: null, no "1:null".
             assertEquals(Arrays.asList("1:9", null),
                     response.switches().stream().map(CatenaryAssetSwitchResponse::turnoutRate).toList());
+            // Una aguja fuera de servicio viaja marcada, no desaparece de la respuesta.
+            assertEquals(List.of(true, false),
+                    response.switches().stream().map(CatenaryAssetSwitchResponse::enabled).toList());
             // El resumen se queda pequeno a proposito: va embebido en orden, turno y defecto.
             assertEquals("SIN-7", mapper.toSummary(insulator).code());
         });

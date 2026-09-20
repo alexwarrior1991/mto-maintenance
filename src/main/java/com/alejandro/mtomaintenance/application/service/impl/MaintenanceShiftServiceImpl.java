@@ -23,6 +23,7 @@ import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
 import com.alejandro.mtomaintenance.domain.model.KilometricRange;
 import com.alejandro.mtomaintenance.domain.model.ShiftStateMachine;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetSwitch;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectStatus;
@@ -336,6 +337,10 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
      * <p>Solo las lleva un aislador de seccion; en el resto de filas del parte sale vacia. Es lo que
      * el equipo necesita para plantarse en el sitio de noche: sobre que aguja esta el aislador y con
      * que tangente.
+     *
+     * <p>Una aguja fuera de servicio sale igual, con la marca detras: quitarla del parte dejaria al
+     * equipo delante de una aguja que el plano tiene y la hoja no, que es peor que verla marcada.
+     * En ingles como el resto de la cabecera del parte (ver {@code ReportLayouts}).
      */
     private static List<String> switchesOf(CatenaryAsset asset) {
         if (asset == null || asset.getSwitches() == null) {
@@ -343,10 +348,17 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         }
 
         return asset.getSwitches().stream()
-                .map(each -> each.turnoutRate() == null
-                        ? each.getCode()
-                        : each.getCode() + " " + each.turnoutRate())
+                .map(MaintenanceShiftServiceImpl::format)
                 .toList();
+    }
+
+    private static String format(CatenaryAssetSwitch sectionInsulatorSwitch) {
+        String rate = sectionInsulatorSwitch.turnoutRate();
+        String text = rate == null
+                ? sectionInsulatorSwitch.getCode()
+                : sectionInsulatorSwitch.getCode() + " " + rate;
+
+        return Boolean.FALSE.equals(sectionInsulatorSwitch.getEnabled()) ? text + " (out of service)" : text;
     }
 
     /** Perfiles de las tareas en un estado, por kp y sin repetir (dos tareas sobre el mismo perfil cuentan una vez). */

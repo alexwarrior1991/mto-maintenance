@@ -64,6 +64,12 @@ The rate travels as `turnoutDenominator` (the `9` of `1:9`) and not as text: the
 1, and the integer can be ordered and compared. `turnoutRate` also arrives in the payload and is
 recomputed here rather than stored.
 
+`enabled` arrives per turnout and **is stored**. A turnout taken out of service still travels in the
+event (the source collection filters soft-deleted rows, not disabled ones), and dropping it here
+would tell a crew the turnout does not exist instead of that it cannot be used; the shift report
+prints it as `W31 1:9 (out of service)`. With no `enabled` key the turnout counts as enabled, like
+the asset's own flag.
+
 `start_kp`/`end_kp` are the **minimum and maximum** of the insulator's own kp and its turnouts',
 sorted, so `chk_catenary_asset_kp_range` can never fire and the insulator shows up in `?kpFrom/kpTo`
 and in the preventive task generation of a track section.
