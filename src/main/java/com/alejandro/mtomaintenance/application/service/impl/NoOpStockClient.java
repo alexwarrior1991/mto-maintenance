@@ -53,7 +53,7 @@ class NoOpStockClient implements StockClient {
     }
 
     @Override
-    public StockReservation reserve(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity) {
+    public StockReservation reserve(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String idempotencyKey) {
         throw new UnsupportedOperationException("stock client is disabled");
     }
 
@@ -68,7 +68,8 @@ class NoOpStockClient implements StockClient {
     }
 
     @Override
-    public void output(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String externalReference, String notes) {
+    public void output(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String externalReference, String notes,
+                       String idempotencyKey) {
         throw new UnsupportedOperationException("stock client is disabled");
     }
 }

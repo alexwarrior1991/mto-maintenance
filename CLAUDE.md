@@ -148,7 +148,11 @@ timeout, 5xx, open circuit, the service account refused) is `StockUnavailableExc
 `MaterialStockSynchronizer` turns them into a `REJECTED` or `FAILED` line instead of failing the
 order transition, and before consuming or releasing a line that has a reservation it asks stock how
 that reservation is (`findReservation`), so a retry never consumes or releases twice (the table is in
-`docs/02-domain-model.md`). Completing an order rejected for such lines (`UnsyncedMaterialsException`)
+`docs/02-domain-model.md`). A reservation or an output whose answer was lost cannot be asked about, so
+`reserve` and `output` carry an `Idempotency-Key` (`MaterialStockSynchronizer.idempotencyKey`: the line,
+the step and a digest of what travels, plus the previous reservation for `reserve`), and stock returns
+what it already did instead of doing it twice. The retry must send the same body: no timestamp in it,
+and the same notes whichever path reaches the direct output. Completing an order rejected for such lines (`UnsyncedMaterialsException`)
 and an explicit `sync` keep what stock already did (`noRollbackFor`). `NoOpStockClient` replaces it
 with `app.stock.enabled=false`.
 

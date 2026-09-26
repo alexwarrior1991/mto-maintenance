@@ -14,6 +14,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,9 +38,12 @@ import java.util.UUID;
  * avisa de nada y la reserva puede haber cambiado desde Almacen, o en un intento anterior que fallo a
  * medias: si sigue activa, lo de arriba; si ya se consumio, solo queda la salida del exceso; si ya no
  * retiene nada (liberada, cancelada o desconocida para stock), lo usado sale como salida directa.
- * Asi repetir un paso no consume ni libera dos veces lo mismo. Lo que no se puede reconciliar es una
- * reserva o una salida que llegaron a stock pero cuya respuesta se perdio: el reintento las repite, y
- * evitarlo pide una clave de idempotencia en mto-stock.</p>
+ * Asi repetir un paso no consume ni libera dos veces lo mismo.</p>
+ *
+ * <p>Una reserva o una salida que llegaron a stock pero cuya respuesta se perdio no se pueden
+ * preguntar asi: la linea no llego a saber que se creo. Esas dos peticiones llevan una clave de
+ * idempotencia ({@link #idempotencyKey}), la misma para el mismo paso con el mismo cuerpo, y stock
+ * devuelve lo que ya hizo en vez de hacerlo otra vez.</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -175,7 +183,12 @@ class MaterialStockSynchronizer {
             usage.markNotRequested();
             return;
         }
-        StockReservation reservation = stockClient.reserve(usage.getMaterialId(), usage.getWarehouseId(), project.get(), usage.getPlannedQuantity());
+        // La reserva anterior va en la clave: si la linea tuvo una y ya no retiene nada, esta es otra
+        // reserva y no un reintento de aquella.
+        String key = idempotencyKey(usage, "reserve", usage.getStockReservationId(), usage.getMaterialId(),
+                usage.getWarehouseId(), project.get(), usage.getPlannedQuantity());
+        StockReservation reservation = stockClient.reserve(usage.getMaterialId(), usage.getWarehouseId(), project.get(),
+                usage.getPlannedQuantity(), key);
         usage.markReserved(reservation.id());
         LOGGER.info("Material reserved in stock: order={}, material={}, reservation={}",
                 usage.getOrder().getCode(), usage.getMaterialCode(), reservation.id());
@@ -189,7 +202,7 @@ class MaterialStockSynchronizer {
             settleConsumed(usage, reservation.get());
         } else if (usage.getConsumedQuantity().signum() > 0) {
             // Sin reserva que retenga nada: lo usado sale como salida directa.
-            output(usage, usage.getConsumedQuantity(), "Maintenance order " + usage.getOrder().getCode());
+            output(usage, usage.getConsumedQuantity(), directOutputNotes(usage));
             usage.markConsumed();
         } else if (usage.getStockReservationId() != null) {
             usage.markReleased();
@@ -210,7 +223,7 @@ class MaterialStockSynchronizer {
         if (comparison < 0) {
             // mto-stock no consume parte de una reserva: se libera entera y sale lo usado.
             stockClient.release(reservation.id());
-            output(usage, used, "Partial consumption of reservation " + reservation.id());
+            output(usage, used, directOutputNotes(usage));
         } else {
             stockClient.consume(reservation.id());
             if (comparison > 0) {
@@ -280,7 +293,53 @@ class MaterialStockSynchronizer {
 
     private void output(MaintenanceMaterialUsage usage, BigDecimal quantity, String notes) {
         MaintenanceOrder order = usage.getOrder();
-        stockClient.output(usage.getMaterialId(), usage.getWarehouseId(), order.getStockProjectId(), quantity, order.getCode(), notes);
+        String key = idempotencyKey(usage, "output", usage.getMaterialId(), usage.getWarehouseId(), order.getStockProjectId(),
+                quantity, order.getCode(), notes);
+        stockClient.output(usage.getMaterialId(), usage.getWarehouseId(), order.getStockProjectId(), quantity, order.getCode(), notes, key);
+    }
+
+    /**
+     * Las notas de la salida de lo usado cuando ninguna reserva lo cubre. Son las mismas por los dos
+     * caminos que llegan a ella -la reserva se libera en este paso porque se uso menos, o ya no
+     * retenia nada- porque la clave de idempotencia sale del cuerpo: si la salida se queda sin
+     * respuesta despues de liberar, el reintento llega por el segundo camino y tiene que mandar lo mismo.
+     */
+    private static String directOutputNotes(MaintenanceMaterialUsage usage) {
+        String order = "Maintenance order " + usage.getOrder().getCode();
+        return usage.getStockReservationId() == null ? order : order + ", reservation " + usage.getStockReservationId() + " not consumed";
+    }
+
+    /**
+     * La clave de idempotencia de una peticion de la linea a mto-stock: {@code mto-maintenance:}, la
+     * linea, el paso y un resumen de lo que viaja. Es la misma para el mismo paso con el mismo cuerpo,
+     * asi que un reintento tras perder la respuesta la repite y stock devuelve lo que ya hizo. Cambia
+     * en cuanto cambia lo que viaja (lo previsto de una linea cuya reserva fallo, el proyecto): stock
+     * rechaza con 409 una clave repetida con otro cuerpo, y la linea quedaria atascada. El precio es
+     * que, si lo primero habia llegado a stock, ahi se queda, como sin clave.
+     *
+     * <p>La linea tiene que estar guardada: sin id, dos lineas con el mismo cuerpo compartirian clave y
+     * la segunda recibiria la reserva de la primera.</p>
+     */
+    static String idempotencyKey(MaintenanceMaterialUsage usage, String step, Object... request) {
+        if (usage.getId() == null) {
+            throw new IllegalStateException("Material line " + usage.getMaterialCode() + " has no id yet: save it before asking stock for anything");
+        }
+        MessageDigest digest = sha256();
+        for (Object part : request) {
+            byte[] bytes = (part instanceof BigDecimal decimal ? decimal.stripTrailingZeros().toPlainString() : String.valueOf(part))
+                    .getBytes(StandardCharsets.UTF_8);
+            digest.update(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
+            digest.update(bytes);
+        }
+        return "mto-maintenance:" + usage.getId() + ":" + step + ":" + HexFormat.of().formatHex(digest.digest(), 0, 16);
+    }
+
+    private static MessageDigest sha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is not available", exception);
+        }
     }
 
     /** Lo que stock tiene reservado, que desde Almacen se puede haber cambiado; lo previsto si no lo dice. */
