@@ -18,9 +18,16 @@ import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Validation;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
+import org.springframework.data.core.PropertyReferenceException;
+import org.springframework.data.core.TypeInformation;
+import org.springframework.http.HttpMethod;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -69,6 +76,25 @@ class GlobalExceptionHandlerTest {
         assertEquals("INS-001", codeOf(handler.handleInspection(new InspectionException("no"), request), HttpStatus.UNPROCESSABLE_CONTENT));
         assertEquals("STK-503", codeOf(handler.handleStockUnavailable(new StockUnavailableException("down"), request), HttpStatus.SERVICE_UNAVAILABLE));
         assertEquals("VAL-001", codeOf(handler.handleValidation(new ValidationException("bad"), request), HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void requestShapeErrorsAnswer400Or405InsteadOf500() {
+        ResponseEntity<ApiErrorResponse> missing = handler.handleMissingParameter(
+                new MissingServletRequestParameterException("month", "YearMonth"), request("GET", "/api/v1/maintenance/reports/monthly"));
+        assertEquals("REQ-400", codeOf(missing, HttpStatus.BAD_REQUEST));
+        assertEquals(List.of(new ValidationError("month", "is required")), missing.getBody().validationErrors());
+
+        ResponseEntity<ApiErrorResponse> sort = handler.handleUnknownSortProperty(
+                new PropertyReferenceException("nope", TypeInformation.of(MaintenanceOrder.class), List.of()),
+                request("GET", "/api/v1/maintenance/orders"));
+        assertEquals("REQ-400", codeOf(sort, HttpStatus.BAD_REQUEST));
+        assertEquals(List.of(new ValidationError("sort", "unknown property 'nope'")), sort.getBody().validationErrors());
+
+        ResponseEntity<ApiErrorResponse> method = handler.handleMethodNotSupported(
+                new HttpRequestMethodNotSupportedException("PATCH", List.of("GET", "PUT")), request("PATCH", "/api/v1/maintenance/orders/1"));
+        assertEquals("REQ-405", codeOf(method, HttpStatus.METHOD_NOT_ALLOWED));
+        assertEquals(Set.of(HttpMethod.GET, HttpMethod.PUT), method.getHeaders().getAllow());
     }
 
     @Test

@@ -91,7 +91,9 @@ was finished, `OPEN` with `repairPlannedDate` if not). A `MaintenanceInspection`
 `InspectionTemplate` of the asset type into its items, and can create a defect and a corrective
 order (both idempotent). Every material line (`MaintenanceMaterialUsage`) is reserved in
 `mto-stock` when the order is planned, consumed when it is completed and released when it is
-cancelled; a failure leaves the line `FAILED` and `POST .../materials/{id}/sync` retries.
+cancelled; a failure leaves the line `FAILED` and `POST .../materials/{id}/sync` retries. A line
+registered by mistake is removed with `DELETE .../materials/{id}` (a physical delete that Envers keeps
+as a DELETED revision), releasing its reservation first; it is never cancelled.
 
 ### Persistence rules
 
@@ -125,7 +127,9 @@ The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before 
 (`client_credentials`, audience `mto-stock-api`) and runs every call inside the Spring Cloud
 circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`). Any failure is a
 `StockUnavailableException`; `MaterialStockSynchronizer` turns it into a `FAILED` line instead of
-failing the order transition. `NoOpStockClient` replaces it with `app.stock.enabled=false`.
+failing the order transition. A release that stock answers with 404 or 422 is its subclass
+`StockReservationNotActiveException`: the reservation no longer holds anything, so removing a line
+goes ahead. `NoOpStockClient` replaces it with `app.stock.enabled=false`.
 
 ### Report export
 

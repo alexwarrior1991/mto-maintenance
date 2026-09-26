@@ -13,6 +13,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTaskRepository;
 import lombok.RequiredArgsConstructor;
@@ -78,7 +79,7 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
         }
         if (request.plannedQuantity() != null) {
             if (usage.getStockReservationId() != null) {
-                throw new MaterialUsageException("The planned quantity of a reserved line cannot change; cancel and register it again");
+                throw new MaterialUsageException("The planned quantity of a reserved line cannot change; remove it and register it again");
             }
             usage.setPlannedQuantity(domain(() -> new Quantity(request.plannedQuantity(), usage.getUnit())).amount());
         }
@@ -99,6 +100,24 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
         MaintenanceMaterialUsage usage = line(orderId, usageId);
         stock.syncNow(usage);
         return mapper.toResponse(repository.save(usage));
+    }
+
+    @Override
+    @Transactional
+    public void remove(UUID orderId, UUID usageId) {
+        MaintenanceMaterialUsage usage = line(orderId, usageId);
+        MaintenanceOrder order = usage.getOrder();
+        if (order.isTerminal()) {
+            throw new MaterialUsageException("Order " + order.getCode() + " is " + order.getStatus() + " and its materials are frozen");
+        }
+        if (usage.getStockSyncStatus() == StockSyncStatus.CONSUMED) {
+            throw new MaterialUsageException("Material " + usage.getMaterialCode() + " was already consumed in stock; the line cannot be removed");
+        }
+        // Stock primero: si no responde, la excepcion deshace la transaccion y la linea sigue, porque
+        // su reserva seguiria reteniendo material alli.
+        stock.releaseNow(usage);
+        order.getMaterials().remove(usage);
+        repository.delete(usage);
     }
 
     private MaintenanceMaterialUsage line(UUID orderId, UUID usageId) {

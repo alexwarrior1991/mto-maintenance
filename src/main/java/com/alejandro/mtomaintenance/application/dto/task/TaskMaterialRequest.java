@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.dto.task;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
@@ -16,4 +17,9 @@ public record TaskMaterialRequest(
         @NotNull @PositiveOrZero @Digits(integer = 13, fraction = 6) BigDecimal quantity,
         @Size(max = 32) String unit
 ) {
+    /** La misma regla que {@code MaterialUsageRequest}: sin ninguno de los dos no hay material que registrar. */
+    @AssertTrue(message = "materialId or materialCode is required")
+    public boolean hasMaterialReference() {
+        return materialId != null || (materialCode != null && !materialCode.isBlank());
+    }
 }

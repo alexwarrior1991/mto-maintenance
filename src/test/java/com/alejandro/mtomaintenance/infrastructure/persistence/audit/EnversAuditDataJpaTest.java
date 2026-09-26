@@ -3,6 +3,7 @@ package com.alejandro.mtomaintenance.infrastructure.persistence.audit;
 import com.alejandro.mtomaintenance.configuration.JpaAuditingConfiguration;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
@@ -39,6 +40,7 @@ import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -124,6 +126,48 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
 
     private <T> T reading(Function<AuditReader, T> work) {
         return inTransaction(em -> work.apply(AuditReaderFactory.get(em)));
+    }
+
+    @Test
+    void removingAMaterialLineLeavesADeletedRevisionWithItsLastState() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UUID[] ids = inTransaction(em -> {
+            CatenaryAsset asset = CatenaryAsset.builder().code("SEC-MAT-" + suffix).name("Section").type(CatenaryAssetType.TRACK_SECTION)
+                    .trackId(2L).startKp(new BigDecimal("100.000")).endKp(new BigDecimal("200.000")).trackKind(TrackKind.MAIN).build();
+            em.persist(asset);
+            MaintenanceOrder order = MaintenanceOrder.builder().code("MO-MAT-" + suffix).title("Materials").type(MaintenanceOrderType.CORRECTIVE)
+                    .priority(MaintenancePriority.LOW).asset(asset).build();
+            em.persist(order);
+            MaintenanceMaterialUsage line = MaintenanceMaterialUsage.builder().order(order).materialId(UUID.randomUUID()).materialCode("GA70")
+                    .warehouseId(UUID.randomUUID()).plannedQuantity(new BigDecimal("2")).unit("ud").build();
+            order.getMaterials().add(line);
+            em.persist(line);
+            return new UUID[] {order.getId(), line.getId()};
+        });
+
+        // Lo mismo que hace el servicio al quitar la linea.
+        inTransaction(em -> {
+            MaintenanceOrder order = em.find(MaintenanceOrder.class, ids[0]);
+            MaintenanceMaterialUsage line = em.find(MaintenanceMaterialUsage.class, ids[1]);
+            order.getMaterials().remove(line);
+            em.remove(line);
+            return null;
+        });
+
+        assertNull(inTransaction(em -> em.find(MaintenanceMaterialUsage.class, ids[1])));
+        List<Object[]> rows = reading(reader -> {
+            @SuppressWarnings("unchecked")
+            List<Object[]> result = reader.createQuery().forRevisionsOfEntity(MaintenanceMaterialUsage.class, false, true)
+                    .add(org.hibernate.envers.query.AuditEntity.id().eq(ids[1]))
+                    .addOrder(org.hibernate.envers.query.AuditEntity.revisionNumber().asc()).getResultList();
+            return result;
+        });
+        assertEquals(2, rows.size());
+        assertEquals(RevisionType.ADD, rows.get(0)[2]);
+        assertEquals(RevisionType.DEL, rows.get(1)[2]);
+        MaintenanceMaterialUsage lastState = (MaintenanceMaterialUsage) rows.get(1)[0];
+        assertEquals("GA70", lastState.getMaterialCode(), "store_data_at_delete keeps what the line was when it was removed");
+        assertEquals(0, new BigDecimal("2").compareTo(lastState.getPlannedQuantity()));
     }
 
     @Test

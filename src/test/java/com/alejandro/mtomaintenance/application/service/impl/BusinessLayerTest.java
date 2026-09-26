@@ -60,6 +60,7 @@ import com.alejandro.mtomaintenance.application.exception.InvalidTransitionExcep
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.application.exception.StockReservationNotActiveException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapper;
@@ -126,6 +127,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.repository.Mainte
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTeamRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -152,6 +154,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -1686,6 +1690,87 @@ class BusinessLayerTest {
         assertThrows(NotFoundException.class, () -> fixture.service.register(planned.getId(),
                 new MaterialUsageRequest(UUID.randomUUID(), "GA70", UUID.randomUUID(), BigDecimal.ONE, "ud", UUID.randomUUID(), null)),
                 "A task id that is not one of the order's tasks");
+    }
+
+    @Test
+    void aMaterialLineWithNeitherIdNorCodeIsRejectedInsteadOfFailing() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaterialLineFactory factory = new MaterialLineFactory(mock(MaintenanceMaterialUsageRepository.class), stockClient);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+
+        assertThrows(ValidationException.class, () -> factory.buildLine(order, null, null, " ", UUID.randomUUID(), BigDecimal.ONE, "ud", false),
+                "It used to call trim() on the missing code and answer 500");
+        verify(stockClient, never()).findMaterialByCode(any());
+    }
+
+    @Test
+    void removingALineReleasesItsReservationFirstAndKeepsWhatCannotGo() {
+        MaterialFixture fixture = new MaterialFixture();
+        MaintenanceOrder planned = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        when(fixture.lookups.order(planned.getId())).thenReturn(planned);
+        MaintenanceMaterialUsage reserved = storedLine(fixture, planned, reservedLine(planned, "0"));
+        assertTrue(planned.getMaterials().contains(reserved));
+
+        fixture.service.remove(planned.getId(), reserved.getId());
+
+        InOrder sequence = inOrder(fixture.stock, fixture.repository);
+        sequence.verify(fixture.stock).releaseNow(reserved);
+        sequence.verify(fixture.repository).delete(reserved);
+        assertFalse(planned.getMaterials().contains(reserved));
+
+        // Stock no responde: la excepcion sale y la linea no se borra, porque su reserva seguiria viva.
+        MaintenanceMaterialUsage held = storedLine(fixture, planned, reservedLine(planned, "0"));
+        doThrow(new StockUnavailableException("stock down")).when(fixture.stock).releaseNow(held);
+        assertThrows(StockUnavailableException.class, () -> fixture.service.remove(planned.getId(), held.getId()));
+        verify(fixture.repository, never()).delete(held);
+
+        // Consumida, o de una orden terminal: 409 MAT-001 sin hablar con stock.
+        MaintenanceMaterialUsage consumed = reservedLine(planned, "1");
+        consumed.markConsumed();
+        storedLine(fixture, planned, consumed);
+        assertThrows(MaterialUsageException.class, () -> fixture.service.remove(planned.getId(), consumed.getId()));
+        MaintenanceOrder completed = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.COMPLETED);
+        when(fixture.lookups.order(completed.getId())).thenReturn(completed);
+        MaintenanceMaterialUsage frozen = storedLine(fixture, completed, line(completed));
+        assertThrows(MaterialUsageException.class, () -> fixture.service.remove(completed.getId(), frozen.getId()));
+        verify(fixture.stock, never()).releaseNow(consumed);
+        verify(fixture.stock, never()).releaseNow(frozen);
+
+        assertThrows(NotFoundException.class, () -> fixture.service.remove(planned.getId(), UUID.randomUUID()),
+                "A line that is not one of the order's lines");
+    }
+
+    @Test
+    void aReservationNoLongerActiveInStockDoesNotBlockTheRemoval() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
+
+        // Liberada ya desde Almacen: no retiene nada y no impide quitar la linea.
+        MaintenanceMaterialUsage gone = reservedLine(order, "0");
+        doThrow(new StockReservationNotActiveException("already released", null)).when(stockClient).release(gone.getStockReservationId());
+        assertDoesNotThrow(() -> synchronizer.releaseNow(gone));
+
+        // Stock caido: la reserva seguiria viva, asi que la excepcion sale.
+        MaintenanceMaterialUsage held = reservedLine(order, "0");
+        doThrow(new StockUnavailableException("stock down")).when(stockClient).release(held.getStockReservationId());
+        assertThrows(StockUnavailableException.class, () -> synchronizer.releaseNow(held));
+
+        // Sin reserva no hay nada que liberar, ni siquiera con stock deshabilitado.
+        synchronizer.releaseNow(line(order));
+        verify(stockClient, times(2)).release(any());
+        when(stockClient.isEnabled()).thenReturn(false);
+        assertDoesNotThrow(() -> synchronizer.releaseNow(line(order)));
+        assertThrows(StockUnavailableException.class, () -> synchronizer.releaseNow(reservedLine(order, "0")),
+                "A reservation cannot be released with the stock client disabled");
+    }
+
+    private static MaintenanceMaterialUsage storedLine(MaterialFixture fixture, MaintenanceOrder order, MaintenanceMaterialUsage line) {
+        ReflectionTestUtils.setField(line, "id", UUID.randomUUID());
+        when(fixture.repository.findByIdAndOrderId(line.getId(), order.getId())).thenReturn(Optional.of(line));
+        return line;
     }
 
     // ---------------------------------------------------------------- reports

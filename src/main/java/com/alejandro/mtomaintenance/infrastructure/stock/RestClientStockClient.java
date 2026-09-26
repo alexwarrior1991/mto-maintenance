@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.infrastructure.stock;
 
 import com.alejandro.mtomaintenance.application.dto.stock.StockMaterial;
 import com.alejandro.mtomaintenance.application.dto.stock.StockReservation;
+import com.alejandro.mtomaintenance.application.exception.StockReservationNotActiveException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.service.StockClient;
 import org.slf4j.Logger;
@@ -121,10 +122,24 @@ public class RestClientStockClient implements StockClient {
 
     @Override
     public void release(UUID reservationId) {
-        call("release reservation " + reservationId, () -> {
-            restClient.post().uri(RESERVATIONS + "/{id}/release", reservationId).retrieve().toBodilessEntity();
-            return null;
-        });
+        try {
+            call("release reservation " + reservationId, () -> {
+                restClient.post().uri(RESERVATIONS + "/{id}/release", reservationId).retrieve().toBodilessEntity();
+                return null;
+            });
+        } catch (StockUnavailableException exception) {
+            if (isNoLongerActive(exception)) {
+                throw new StockReservationNotActiveException("Reservation " + reservationId + " is no longer active in mto-stock: "
+                        + exception.getMessage(), exception);
+            }
+            throw exception;
+        }
+    }
+
+    /** 404: la reserva no existe; 422: existe, pero ya no esta activa (RES-001 de mto-stock). */
+    private static boolean isNoLongerActive(StockUnavailableException exception) {
+        return exception.getCause() instanceof RestClientResponseException response
+                && (response.getStatusCode().value() == 404 || response.getStatusCode().value() == 422);
     }
 
     @Override

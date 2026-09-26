@@ -5,6 +5,7 @@ import com.alejandro.mtomaintenance.application.dto.order.CompleteOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderResponse;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
+import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
@@ -32,6 +33,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
+import org.springframework.data.core.PropertyReferenceException;
+import org.springframework.data.core.TypeInformation;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -44,7 +48,10 @@ import java.util.UUID;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -165,6 +172,43 @@ class MaintenanceOrderControllerMockMvcTest {
         return new MaintenanceOrderResponse(id, "MO-000001", "Preventive T2", null, MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT,
                 MaintenancePriority.MEDIUM, null, 6L, 2L, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 0, 0, BigDecimal.ZERO, 0, null);
+    }
+
+    @Test
+    void anUnknownSortAndAnUnsupportedMethodAreClientErrors() throws Exception {
+        when(orderService.search(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new PropertyReferenceException("nope", TypeInformation.of(MaintenanceOrder.class), List.of()));
+
+        mockMvc.perform(get(ORDERS).param("sort", "nope,asc").with(role(SecurityRoles.MAINTENANCE_READ)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("REQ-400"))
+                .andExpect(jsonPath("$.validationErrors[0].field").value("sort"));
+
+        mockMvc.perform(patch(ORDERS + "/{id}", UUID.randomUUID()).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.errorCode").value("REQ-405"))
+                .andExpect(header().exists("Allow"));
+    }
+
+    @Test
+    void removingAMaterialLineNeedsTheDeleteRole() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID usageId = UUID.randomUUID();
+
+        mockMvc.perform(delete(ORDERS + "/{id}/materials/{usageId}", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_WRITE)))
+                .andExpect(status().isForbidden());
+        verify(materialService, never()).remove(any(), any());
+
+        mockMvc.perform(delete(ORDERS + "/{id}/materials/{usageId}", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_DELETE)))
+                .andExpect(status().isNoContent());
+        verify(materialService).remove(orderId, usageId);
+
+        doThrow(new MaterialUsageException("Material GA70 was already consumed in stock; the line cannot be removed"))
+                .when(materialService).remove(orderId, usageId);
+        mockMvc.perform(delete(ORDERS + "/{id}/materials/{usageId}", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_DELETE)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("MAT-001"));
     }
 
     @Test

@@ -3,7 +3,8 @@
 Base path `/api/v1/maintenance` (through the gateway: `/api/maintenance`). JSON, UUID ids, pageable
 collections (`page`, `size`, `sort`) returning `PageResponse{content, page{number, size,
 totalElements, totalPages, first, last}}`. Errors are `ApiErrorResponse{timestamp, status, error,
-message, errorCode, path, validationErrors[]}`.
+message, path, method, errorCode, correlationId, validationErrors[{field, message}]}`; `correlationId`
+echoes the `X-Correlation-Id` request header.
 
 ## Resources
 
@@ -34,7 +35,7 @@ GET             /orders/{id}/history | /revisions
 GET/POST        /orders/{id}/tasks            POST /orders/{id}/tasks/generate
 GET/PUT         /orders/{id}/tasks/{taskId}   POST .../start | /complete | /cancel
 PUT             /orders/{id}/tasks/{taskId}/check-items/{itemId}
-GET/POST        /orders/{id}/materials        PUT .../{usageId}   POST .../{usageId}/sync
+GET/POST        /orders/{id}/materials        PUT .../{usageId}   POST .../{usageId}/sync   DELETE .../{usageId}
 
 GET/POST        /inspections                  result, assetId, assetType, trackId, stationId, executionPackageId, inspectionFrom, inspectionTo, inspector, originOrderId
 GET/PUT         /inspections/{id}             PUT /inspections/{id}/items/{itemId}
@@ -94,16 +95,21 @@ partsReplaced, resolvedInShiftId}`.
 |---|---|
 | 201 + `Location` | Creation |
 | 200 | Reads, updates, transitions, idempotent `create-defect`/`create-corrective-order` |
+| 204 | `DELETE /assets/{id}` (disables the asset), `DELETE /orders/{id}/materials/{usageId}` (removes the line) |
 | 400 `REQ-VALIDATION` / `VAL-001` | Bean Validation / domain invariant (kp range, quantity, unknown task type, unknown export `format`) |
+| 400 `REQ-400` | Malformed body, a parameter of the wrong type, a missing required parameter (`month` of the monthly report) or a `sort` on a property the entity does not have |
 | 401 `AUTH-401` / 403 `AUTH-403` | No token / missing role |
-| 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `TTY`, `INS`, `TPL`, `DEF`, `MAT`) |
+| 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `INS`, `TPL`, `DEF`, `MAT`); a task type, a check item and an inspection item answer `APP-404` |
+| 404 `HTTP-404` | Unknown route |
+| 405 `REQ-405` | The route exists but not for that method; the `Allow` header lists the ones it takes |
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset |
 | 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track) |
-| 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` line without `force` |
+| 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` line without `force`, removing a consumed line or a line of a completed or cancelled order |
 | 409 `<AGG>-409` | Duplicated code |
+| 415 `REQ-415` | Unsupported media type |
 | 422 `INS-001` | Inconsistent inspection result / checklist |
-| 503 `STK-503` | `mto-stock` unreachable on an explicit `sync` |
+| 503 `STK-503` | `mto-stock` unreachable on an explicit `sync`, or when removing a reserved line (the line stays) |
 
 ## Security
 
@@ -112,4 +118,4 @@ partsReplaced, resolvedInShiftId}`.
 | `GET` | `MAINTENANCE_READ` |
 | `POST`, `PUT` | `MAINTENANCE_WRITE` |
 | `DELETE` | `MAINTENANCE_DELETE` |
-| `cancel`, `complete` with `force=true`, `resolve`, `close`, `discard` | `MAINTENANCE_SUPERVISE` (method security) |
+| `cancel` **of an order**, `complete` of an order with `force=true`, `resolve`, `close`, `discard` of a defect | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security); cancelling a shift or a task only needs `MAINTENANCE_WRITE` |

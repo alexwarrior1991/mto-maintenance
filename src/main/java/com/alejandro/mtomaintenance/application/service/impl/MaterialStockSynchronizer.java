@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
 import com.alejandro.mtomaintenance.application.dto.stock.StockReservation;
+import com.alejandro.mtomaintenance.application.exception.StockReservationNotActiveException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.service.StockClient;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
@@ -128,6 +129,31 @@ class MaterialStockSynchronizer {
             usage.markFailed("release: " + exception.getMessage());
             LOGGER.warn("Material release failed, line left as FAILED: order={}, material={}, cause={}",
                     usage.getOrder().getCode(), usage.getMaterialCode(), exception.getMessage());
+        }
+    }
+
+    /**
+     * Liberacion antes de quitar una linea. Como {@link #syncNow}, deja pasar la excepcion: si stock
+     * no responde, la linea no se quita, porque su reserva seguiria reteniendo material alli. Una
+     * reserva que stock ya no tiene activa (liberada, cancelada o consumida desde Almacen) no retiene
+     * nada y no impide quitarla.
+     */
+    void releaseNow(MaintenanceMaterialUsage usage) {
+        StockSyncStatus status = usage.getStockSyncStatus();
+        if (usage.getStockReservationId() == null || (status != StockSyncStatus.RESERVED && status != StockSyncStatus.FAILED)) {
+            return;
+        }
+        if (!stockClient.isEnabled()) {
+            throw new StockUnavailableException("The stock client is disabled (app.stock.enabled=false); the reservation of "
+                    + usage.getMaterialCode() + " cannot be released");
+        }
+        try {
+            stockClient.release(usage.getStockReservationId());
+            LOGGER.info("Reservation released before removing the line: order={}, material={}, reservation={}",
+                    usage.getOrder().getCode(), usage.getMaterialCode(), usage.getStockReservationId());
+        } catch (StockReservationNotActiveException notActive) {
+            LOGGER.warn("Reservation {} was no longer active in stock; the line is removed anyway: order={}, material={}, cause={}",
+                    usage.getStockReservationId(), usage.getOrder().getCode(), usage.getMaterialCode(), notActive.getMessage());
         }
     }
 
