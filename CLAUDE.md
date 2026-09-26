@@ -150,9 +150,17 @@ order transition, and before consuming or releasing a line that has a reservatio
 that reservation is (`findReservation`), so a retry never consumes or releases twice (the table is in
 `docs/02-domain-model.md`). A reservation or an output whose answer was lost cannot be asked about, so
 `reserve` and `output` carry an `Idempotency-Key` (`MaterialStockSynchronizer.idempotencyKey`: the line,
-the step and a digest of what travels, plus the previous reservation for `reserve`), and stock returns
-what it already did instead of doing it twice. The retry must send the same body: no timestamp in it,
-and the same notes whichever path reaches the direct output. Completing an order rejected for such lines (`UnsyncedMaterialsException`)
+the request and, for `reserve`, the previous reservation — never the body), and stock returns what it
+already did instead of doing it twice. The line marks the request in doubt before sending it
+(`stockRequestInDoubt`, `V12`), and anything done next with it against stock — `sync`, `start`,
+`complete`, `cancel`, removing it — first repeats that request with the same key and body
+(`confirmReservation`, or `settle` for an output). Meanwhile what travels in it cannot change: the
+line's planned and consumed quantities and the order's stock project answer 409 `MAT-001`. The body
+must also come out the same: no timestamp, and the same notes whichever path reaches the direct
+output. `StockSyncRetryService` retries every `FAILED` line every 5 minutes (`StockSyncRetryConfiguration`,
+`app.stock.sync-retry.*`, off with stock off and in tests), stopping at the first one stock does not
+answer and resuming after it: that settles a request in doubt while `mto-stock` still remembers its
+key (30 days). Completing an order rejected for such lines (`UnsyncedMaterialsException`)
 and an explicit `sync` keep what stock already did (`noRollbackFor`). `NoOpStockClient` replaces it
 with `app.stock.enabled=false`.
 

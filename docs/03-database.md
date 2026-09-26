@@ -11,7 +11,7 @@ with millimetre precision), quantities `numeric(19,6)`.
 `maintenance_priority`, `maintenance_task_status`, `shift_status`, `possession_type`,
 `functional_group`, `task_unit`, `inspection_kind`, `inspection_result`, `check_item_result`,
 `defect_severity`, `defect_status`, `stock_sync_status`, `inbox_message_status`,
-`section_insulator_installation` (`V7`). Values match the Java enums one to one; adding a value is a
+`section_insulator_installation` (`V7`), `stock_request_type` (`V12`). Values match the Java enums one to one; adding a value is a
 migration (`ALTER TYPE … ADD VALUE`).
 
 ## Sequences
@@ -134,6 +134,16 @@ synchronized ones got `enabled_at_source = enabled`, own ones `disabled_locally 
 `@Version` in `VersionedEntity`. Hibernate bumps it on every write; the native master-data SQL of
 `CatenaryAssetRepository` bumps it by hand. Not in the `_aud` twins: a row's version is not history,
 and Envers does not audit it.
+
+## Stock request in doubt (`V12`)
+
+`maintenance_material_usage` gains `stock_request_in_doubt` (`stock_request_type`: `RESERVATION` or
+`OUTPUT`, nullable), also in `maintenance_material_usage_aud`: the keyed request to `mto-stock` the
+line sent and got no answer to. Anything done next with the line against stock repeats it first, with
+the same idempotency key and body, and it is cleared as soon as stock answers, yes or no
+(`docs/02-domain-model.md`). Existing `FAILED` lines are left `NULL`: nobody knows which request
+failed. No index: the automatic retry looks for `FAILED` lines, which
+`idx_maintenance_material_usage_sync_status` already covers.
 
 ## Auditing (`V4`)
 

@@ -15,6 +15,7 @@ import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplat
 import com.alejandro.mtomaintenance.application.dto.inspection.MaintenanceInspectionRequest;
 import com.alejandro.mtomaintenance.application.dto.inspection.MaintenanceInspectionUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageRequest;
+import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageResponse;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.order.AssignOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.CancelOrderRequest;
@@ -79,10 +80,12 @@ import com.alejandro.mtomaintenance.application.mapper.MaterialUsageMapper;
 import com.alejandro.mtomaintenance.application.mapper.StatusHistoryMapper;
 import com.alejandro.mtomaintenance.application.service.EntityAuditService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator;
+import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
 import com.alejandro.mtomaintenance.application.service.ReportExporter;
 import com.alejandro.mtomaintenance.application.service.StatusHistoryService;
 import com.alejandro.mtomaintenance.application.service.StockClient;
+import com.alejandro.mtomaintenance.application.service.StockSyncRetryService;
 import com.alejandro.mtomaintenance.application.service.WorkloadEstimator;
 import com.alejandro.mtomaintenance.domain.model.Quantity;
 import com.alejandro.mtomaintenance.domain.model.WorkloadEstimate;
@@ -113,6 +116,8 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
+import com.alejandro.mtomaintenance.configuration.stock.StockSyncRetryConfiguration;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockRequestType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TaskUnit;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
@@ -121,6 +126,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.repository.Catena
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.InspectionTemplateRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository.LineRef;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceOrderRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceReportRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceShiftRepository;
@@ -131,11 +137,15 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.repository.Mainte
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.scheduling.config.FixedDelayTask;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -145,6 +155,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -1982,15 +1993,17 @@ class BusinessLayerTest {
 
         synchronizer.reserve(line);
         assertEquals(StockSyncStatus.FAILED, line.getStockSyncStatus());
+        assertEquals(StockRequestType.RESERVATION, line.getStockRequestInDoubt());
         synchronizer.syncNow(line);
 
         ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
         verify(stockClient, times(2)).reserve(eq(line.getMaterialId()), eq(line.getWarehouseId()), eq(order.getStockProjectId()),
                 eq(new BigDecimal("2")), keys.capture());
         assertEquals(keys.getAllValues().get(0), keys.getAllValues().get(1));
-        assertTrue(keys.getValue().startsWith("mto-maintenance:" + line.getId() + ":reserve:"), keys.getValue());
+        assertEquals("mto-maintenance:" + line.getId() + ":reserve:first", keys.getValue());
         assertEquals(StockSyncStatus.RESERVED, line.getStockSyncStatus());
         assertEquals(reservationId, line.getStockReservationId());
+        assertNull(line.getStockRequestInDoubt());
     }
 
     /**
@@ -2013,6 +2026,7 @@ class BusinessLayerTest {
 
         synchronizer.consume(partial);
         assertEquals(StockSyncStatus.FAILED, partial.getStockSyncStatus());
+        assertEquals(StockRequestType.OUTPUT, partial.getStockRequestInDoubt());
         stockSays(stockClient, partial, "RELEASED");
         synchronizer.syncNow(partial);
 
@@ -2024,36 +2038,279 @@ class BusinessLayerTest {
         assertEquals(keys.getAllValues().get(0), keys.getAllValues().get(1));
         verify(stockClient, times(1)).release(partial.getStockReservationId());
         assertEquals(StockSyncStatus.CONSUMED, partial.getStockSyncStatus());
+        assertNull(partial.getStockRequestInDoubt());
     }
 
     /**
-     * La clave es de la linea, del paso y de lo que viaja. Si cambia lo que viaja (lo previsto de una
-     * linea cuya reserva fallo), ya no es un reintento: stock rechazaria la clave vieja con otro
-     * cuerpo. Y una linea sin guardar no tiene clave, porque la compartiria con otra igual.
+     * La clave es de la linea, de la peticion y, en una reserva, de la anterior: no del cuerpo. Un
+     * reintento lleva la misma aunque algo hubiera cambiado, y stock lo rechazaria con IDEM-001 en vez
+     * de reservar otra vez; por eso lo que viaja no cambia mientras hay una peticion en duda. Una linea
+     * sin guardar no tiene clave, porque la compartiria con otra igual.
      */
     @Test
-    void theIdempotencyKeyBelongsToTheLineTheStepAndWhatTravels() {
+    void theIdempotencyKeyIsTheLineTheRequestAndThePreviousReservationNotTheBody() {
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         MaintenanceMaterialUsage line = line(order);
         MaintenanceMaterialUsage twin = line(order);
-        UUID project = UUID.randomUUID();
-        String key = MaterialStockSynchronizer.idempotencyKey(line, "reserve", null, line.getMaterialId(), line.getWarehouseId(),
-                project, new BigDecimal("2"));
+        UUID previous = UUID.randomUUID();
+        String first = MaterialStockSynchronizer.idempotencyKey(line, StockRequestType.RESERVATION, null);
 
-        assertEquals(key, MaterialStockSynchronizer.idempotencyKey(line, "reserve", null, line.getMaterialId(), line.getWarehouseId(),
-                project, new BigDecimal("2.000000")));
-        assertNotEquals(key, MaterialStockSynchronizer.idempotencyKey(line, "reserve", null, line.getMaterialId(), line.getWarehouseId(),
-                project, new BigDecimal("3")));
-        assertNotEquals(key, MaterialStockSynchronizer.idempotencyKey(line, "output", null, line.getMaterialId(), line.getWarehouseId(),
-                project, new BigDecimal("2")));
-        assertNotEquals(key, MaterialStockSynchronizer.idempotencyKey(twin, "reserve", null, line.getMaterialId(), line.getWarehouseId(),
-                project, new BigDecimal("2")));
+        assertEquals("mto-maintenance:" + line.getId() + ":reserve:first", first);
+        assertEquals("mto-maintenance:" + line.getId() + ":reserve:" + previous,
+                MaterialStockSynchronizer.idempotencyKey(line, StockRequestType.RESERVATION, previous));
+        assertEquals("mto-maintenance:" + line.getId() + ":output", MaterialStockSynchronizer.idempotencyKey(line, StockRequestType.OUTPUT, null));
+        assertNotEquals(first, MaterialStockSynchronizer.idempotencyKey(twin, StockRequestType.RESERVATION, null));
+        line.setPlannedQuantity(new BigDecimal("7"));
+        assertEquals(first, MaterialStockSynchronizer.idempotencyKey(line, StockRequestType.RESERVATION, null));
         // Lo que acepta mto-stock en la cabecera: de 1 a 255 caracteres ASCII visibles.
-        assertTrue(key.matches("[\\x21-\\x7E]{1,255}"), key);
+        assertTrue(MaterialStockSynchronizer.idempotencyKey(line, StockRequestType.RESERVATION, previous).matches("[\\x21-\\x7E]{1,255}"));
 
         MaintenanceMaterialUsage unsaved = MaintenanceMaterialUsage.builder().order(order).materialId(UUID.randomUUID())
                 .warehouseId(UUID.randomUUID()).plannedQuantity(BigDecimal.ONE).unit("ud").build();
-        assertThrows(IllegalStateException.class, () -> MaterialStockSynchronizer.idempotencyKey(unsaved, "reserve"));
+        assertThrows(IllegalStateException.class, () -> MaterialStockSynchronizer.idempotencyKey(unsaved, StockRequestType.RESERVATION, null));
+    }
+
+    /**
+     * Completar con una reserva en duda: antes de nada se repite, con su clave, y lo que stock devuelve
+     * se consume. Antes, lo usado salia como salida directa y la reserva que quiza se habia creado se
+     * quedaba en stock reteniendo el material.
+     */
+    @Test
+    void completingAnOrderConfirmsAReservationInDoubtBeforeConsumingIt() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        order.setStockProjectId(UUID.randomUUID());
+        MaintenanceMaterialUsage line = line(order);
+        line.setConsumedQuantity(new BigDecimal("2"));
+        UUID reservationId = UUID.randomUUID();
+        when(stockClient.reserve(any(), any(), any(), any(), any()))
+                .thenThrow(new StockUnavailableException("Read timed out"))
+                .thenReturn(new StockReservation(reservationId, line.getMaterialId(), line.getWarehouseId(), order.getStockProjectId(),
+                        new BigDecimal("2"), "ACTIVE"));
+        when(stockClient.findReservation(reservationId)).thenReturn(Optional.of(new StockReservation(reservationId, line.getMaterialId(),
+                line.getWarehouseId(), order.getStockProjectId(), new BigDecimal("2"), "ACTIVE")));
+
+        synchronizer.reserve(line);
+        synchronizer.consume(line);
+
+        verify(stockClient, times(2)).reserve(any(), any(), any(), any(),
+                eq(MaterialStockSynchronizer.idempotencyKey(line, StockRequestType.RESERVATION, null)));
+        verify(stockClient).consume(reservationId);
+        verify(stockClient, never()).output(any(), any(), any(), any(), any(), any(), any());
+        assertEquals(StockSyncStatus.CONSUMED, line.getStockSyncStatus());
+        assertNull(line.getStockRequestInDoubt());
+    }
+
+    /**
+     * Cancelar con una reserva en duda: se repite y se libera lo que stock devuelva, que es lo que la
+     * linea retenia. Si stock la rechaza ahora, es que nunca llego, y no hay nada que liberar.
+     */
+    @Test
+    void cancellingAnOrderReleasesWhatAReservationInDoubtLeftInStock() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.CANCELLED);
+        order.setStockProjectId(UUID.randomUUID());
+        MaintenanceMaterialUsage landed = inDoubt(line(order), StockRequestType.RESERVATION);
+        MaintenanceMaterialUsage lost = inDoubt(line(order), StockRequestType.RESERVATION);
+        UUID reservationId = UUID.randomUUID();
+        StockReservation reservation = new StockReservation(reservationId, landed.getMaterialId(), landed.getWarehouseId(),
+                order.getStockProjectId(), new BigDecimal("2"), "ACTIVE");
+        when(stockClient.reserve(eq(landed.getMaterialId()), any(), any(), any(), any())).thenReturn(reservation);
+        when(stockClient.findReservation(reservationId)).thenReturn(Optional.of(reservation));
+        when(stockClient.reserve(eq(lost.getMaterialId()), any(), any(), any(), any()))
+                .thenThrow(new StockRejectedException("No stock", 409, StockRejectedException.INSUFFICIENT_STOCK, null));
+
+        synchronizer.release(landed);
+        synchronizer.release(lost);
+
+        verify(stockClient).release(reservationId);
+        assertEquals(StockSyncStatus.RELEASED, landed.getStockSyncStatus());
+        assertEquals(reservationId, landed.getStockReservationId());
+        assertEquals(StockSyncStatus.NOT_REQUESTED, lost.getStockSyncStatus());
+        assertNull(lost.getStockRequestInDoubt());
+        verify(stockClient, times(1)).release(any());
+    }
+
+    /**
+     * Quitar una linea con una reserva en duda la confirma para liberarla; con una salida en duda no se
+     * quita, porque el material quiza ya salio: primero hay que sincronizarla.
+     */
+    @Test
+    void removingALineReleasesItsReservationInDoubtButNotWhileAnOutputIsInDoubt() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        order.setStockProjectId(UUID.randomUUID());
+        MaintenanceMaterialUsage reserving = inDoubt(line(order), StockRequestType.RESERVATION);
+        UUID reservationId = UUID.randomUUID();
+        StockReservation reservation = new StockReservation(reservationId, reserving.getMaterialId(), reserving.getWarehouseId(),
+                order.getStockProjectId(), new BigDecimal("2"), "ACTIVE");
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenReturn(reservation);
+        when(stockClient.findReservation(reservationId)).thenReturn(Optional.of(reservation));
+
+        synchronizer.releaseNow(reserving);
+        verify(stockClient).release(reservationId);
+
+        MaintenanceMaterialUsage outputting = inDoubt(reservedLine(order, "1"), StockRequestType.OUTPUT);
+        MaterialUsageException refused = assertThrows(MaterialUsageException.class, () -> synchronizer.releaseNow(outputting));
+        assertTrue(refused.getMessage().contains("sync the line"), refused.getMessage());
+        verify(stockClient, never()).findReservation(outputting.getStockReservationId());
+        verify(stockClient, times(1)).release(any());
+    }
+
+    /**
+     * Una salida en duda en una orden todavia abierta (su cierre fallo): sincronizar la termina, con su
+     * clave, en vez de pedir otra reserva para un material que quiza ya salio del almacen.
+     */
+    @Test
+    void syncingAnOpenOrderFinishesAnOutputInDoubtInsteadOfReservingAgain() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        order.setStockProjectId(UUID.randomUUID());
+        MaintenanceMaterialUsage partial = reservedLine(order, "0.5");
+        stockSays(stockClient, partial, "ACTIVE");
+        doThrow(new StockUnavailableException("Read timed out")).doNothing()
+                .when(stockClient).output(any(), any(), any(), any(), any(), any(), any());
+
+        synchronizer.consume(partial);
+        assertEquals(StockRequestType.OUTPUT, partial.getStockRequestInDoubt());
+        stockSays(stockClient, partial, "RELEASED");
+        synchronizer.syncNow(partial);
+
+        verify(stockClient, never()).reserve(any(), any(), any(), any(), any());
+        verify(stockClient, times(2)).output(any(), any(), any(), eq(new BigDecimal("0.5")), any(), any(),
+                eq(MaterialStockSynchronizer.idempotencyKey(partial, StockRequestType.OUTPUT, null)));
+        assertEquals(StockSyncStatus.CONSUMED, partial.getStockSyncStatus());
+        assertNull(partial.getStockRequestInDoubt());
+    }
+
+    /**
+     * Lo que viaja en una peticion en duda no cambia hasta que stock conteste: ni lo previsto ni lo
+     * consumido de la linea, ni el proyecto de stock de la orden. Lo demas, y lo mismo con el mismo
+     * valor, si; y en cuanto la peticion se resuelve, todo vuelve a poder cambiarse.
+     */
+    @Test
+    void whileARequestIsInDoubtWhatTravelsInItCannotChange() {
+        MaterialFixture materials = new MaterialFixture();
+        MaintenanceOrder planned = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        planned.setStockProjectId(UUID.randomUUID());
+        when(materials.lookups.order(planned.getId())).thenReturn(planned);
+        MaintenanceMaterialUsage reserving = storedLine(materials, planned, inDoubt(line(planned), StockRequestType.RESERVATION));
+
+        MaterialUsageException planning = assertThrows(MaterialUsageException.class, () -> materials.service.patch(planned.getId(),
+                reserving.getId(), MergePatch.of(new MaterialUsageUpdateRequest(new BigDecimal("3"), null, null, null))));
+        assertTrue(planning.getMessage().contains("reservation sent to stock without an answer yet"), planning.getMessage());
+        materials.service.patch(planned.getId(), reserving.getId(),
+                MergePatch.of(new MaterialUsageUpdateRequest(new BigDecimal("2.000"), null, true, null)));
+        assertTrue(reserving.getAllowOverConsumption());
+        assertEquals(0, new BigDecimal("2").compareTo(reserving.getPlannedQuantity()));
+
+        MaintenanceOrder running = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        when(materials.lookups.order(running.getId())).thenReturn(running);
+        MaintenanceMaterialUsage outputting = storedLine(materials, running, inDoubt(line(running), StockRequestType.OUTPUT));
+        assertThrows(MaterialUsageException.class, () -> materials.service.patch(running.getId(), outputting.getId(),
+                MergePatch.of(new MaterialUsageUpdateRequest(null, new BigDecimal("1"), null, null))));
+
+        OrderFixture orders = new OrderFixture();
+        when(orders.lookups.order(planned.getId())).thenReturn(planned);
+        UUID project = planned.getStockProjectId();
+        MaintenanceOrderUpdateRequest otherProject = new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null,
+                null, null, null, UUID.randomUUID(), null);
+        assertThrows(MaterialUsageException.class, () -> orders.service.patch(planned.getId(), MergePatch.of(otherProject)));
+        assertThrows(MaterialUsageException.class,
+                () -> orders.service.patch(planned.getId(), new MergePatch<>(orderUpdate(null), Set.of("stockProjectId"))));
+        assertEquals(project, planned.getStockProjectId());
+        orders.service.patch(planned.getId(), new MergePatch<>(orderUpdate(null), Set.of("description")));
+
+        reserving.markReserved(UUID.randomUUID());
+        orders.service.patch(planned.getId(), MergePatch.of(otherProject));
+        assertEquals(otherProject.stockProjectId(), planned.getStockProjectId());
+    }
+
+    // ---------------------------------------------------------- stock sync retry
+
+    /**
+     * Una vuelta sincroniza las lineas FAILED y se para en la primera a la que stock sigue sin
+     * contestar: las demas fallarian igual. Un rechazo o una linea que ya no esta no la paran.
+     */
+    @Test
+    void theRetrySynchronizesFailedLinesAndStopsAtTheFirstOneStockDoesNotAnswer() {
+        MaintenanceMaterialUsageRepository repository = mock(MaintenanceMaterialUsageRepository.class);
+        MaintenanceMaterialUsageService materials = mock(MaintenanceMaterialUsageService.class);
+        StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials);
+        UUID orderId = UUID.randomUUID();
+        List<UUID> ids = Stream.generate(UUID::randomUUID).limit(5).sorted().toList();
+        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+                .thenReturn(ids.stream().map(id -> lineRef(orderId, id)).toList());
+        when(materials.sync(orderId, ids.get(0))).thenReturn(usageResponse(StockSyncStatus.RESERVED));
+        when(materials.sync(orderId, ids.get(1)))
+                .thenThrow(new StockRejectedException("No stock", 409, StockRejectedException.INSUFFICIENT_STOCK, null));
+        when(materials.sync(orderId, ids.get(2))).thenThrow(new NotFoundException("Material usage", ids.get(2)));
+        when(materials.sync(orderId, ids.get(3))).thenThrow(new StockUnavailableException("Read timed out"));
+
+        assertEquals(1, retry.retryFailedLines());
+
+        verify(materials, times(4)).sync(any(), any());
+        verify(materials, never()).sync(orderId, ids.get(4));
+    }
+
+    /**
+     * La vuelta siguiente empieza despues de la ultima intentada: una linea que falla siempre no deja
+     * a las de detras sin intentar.
+     */
+    @Test
+    void theNextRetryStartsAfterTheLastLineTriedSoNoneIsLeftBehind() {
+        MaintenanceMaterialUsageRepository repository = mock(MaintenanceMaterialUsageRepository.class);
+        MaintenanceMaterialUsageService materials = mock(MaintenanceMaterialUsageService.class);
+        StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials);
+        UUID orderId = UUID.randomUUID();
+        List<UUID> ids = Stream.generate(UUID::randomUUID).limit(3).sorted().toList();
+        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+                .thenReturn(ids.stream().map(id -> lineRef(orderId, id)).toList());
+        when(materials.sync(orderId, ids.get(0))).thenThrow(new StockUnavailableException("mto-stock answered 500"));
+        when(materials.sync(orderId, ids.get(1))).thenReturn(usageResponse(StockSyncStatus.CONSUMED));
+        when(materials.sync(orderId, ids.get(2))).thenReturn(usageResponse(StockSyncStatus.FAILED));
+
+        assertEquals(0, retry.retryFailedLines());
+        assertEquals(1, retry.retryFailedLines());
+
+        InOrder order = inOrder(materials);
+        order.verify(materials).sync(orderId, ids.get(0));
+        order.verify(materials).sync(orderId, ids.get(1));
+        order.verify(materials).sync(orderId, ids.get(2));
+        order.verify(materials).sync(orderId, ids.get(0));
+        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED)).thenReturn(List.of());
+        assertEquals(0, retry.retryFailedLines());
+    }
+
+    /**
+     * Cada 5 minutos con stock encendido; ni con {@code app.stock.enabled=false}, que es como corren
+     * los tests, ni con {@code app.stock.sync-retry.enabled=false}.
+     */
+    @Test
+    void theRetryIsScheduledEveryFiveMinutesOnlyWithStockEnabled() {
+        ApplicationContextRunner runner = new ApplicationContextRunner()
+                .withUserConfiguration(StockSyncRetryConfiguration.class)
+                .withBean(StockSyncRetryService.class, () -> mock(StockSyncRetryService.class));
+
+        runner.run(context -> {
+            assertNull(context.getStartupFailure());
+            List<Duration> intervals = context.getBean(ScheduledTaskHolder.class).getScheduledTasks().stream()
+                    .map(task -> ((FixedDelayTask) task.getTask()).getIntervalDuration())
+                    .toList();
+            assertEquals(List.of(Duration.ofMinutes(5)), intervals);
+        });
+        runner.withPropertyValues("app.stock.enabled=false")
+                .run(context -> assertTrue(context.getBeansOfType(StockSyncRetryConfiguration.class).isEmpty()));
+        runner.withPropertyValues("app.stock.sync-retry.enabled=false")
+                .run(context -> assertTrue(context.getBeansOfType(StockSyncRetryConfiguration.class).isEmpty()));
     }
 
     @Test
@@ -2083,8 +2340,7 @@ class BusinessLayerTest {
         // Otra reserva y no un reintento de la liberada, asi que otra clave: la anterior va en ella.
         // Con la de aquella, stock devolveria la liberada.
         verify(stockClient).reserve(eq(released.getMaterialId()), eq(released.getWarehouseId()), eq(project), eq(new BigDecimal("2")),
-                eq(MaterialStockSynchronizer.idempotencyKey(released, "reserve", releasedId, released.getMaterialId(),
-                        released.getWarehouseId(), project, new BigDecimal("2"))));
+                eq(MaterialStockSynchronizer.idempotencyKey(released, StockRequestType.RESERVATION, releasedId)));
 
         // Un cierre rechazado que llego a consumir la reserva: sigue siendo la de la linea, y se liquida al completar.
         MaintenanceMaterialUsage consumed = reservedLine(order, "3");
@@ -2807,6 +3063,32 @@ class BusinessLayerTest {
         line.markReserved(UUID.randomUUID());
         line.setConsumedQuantity(new BigDecimal(consumed));
         return line;
+    }
+
+    /** Una linea FAILED con esa peticion en duda: la mando y stock no contesto. */
+    private static MaintenanceMaterialUsage inDoubt(MaintenanceMaterialUsage line, StockRequestType request) {
+        line.markInDoubt(request);
+        line.markFailed(request + ": Read timed out");
+        return line;
+    }
+
+    private static LineRef lineRef(UUID orderId, UUID lineId) {
+        return new LineRef() {
+            @Override
+            public UUID getId() {
+                return lineId;
+            }
+
+            @Override
+            public UUID getOrderId() {
+                return orderId;
+            }
+        };
+    }
+
+    private static MaterialUsageResponse usageResponse(StockSyncStatus status) {
+        return new MaterialUsageResponse(UUID.randomUUID(), UUID.randomUUID(), null, UUID.randomUUID(), "GA70", null, UUID.randomUUID(),
+                BigDecimal.ONE, BigDecimal.ZERO, "ud", false, null, status, null, null, 0L, null);
     }
 
     /** Lo que stock dice de la reserva de la linea: ese estado, con la cantidad prevista. */

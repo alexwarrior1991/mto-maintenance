@@ -117,40 +117,75 @@ public class MaintenanceMaterialUsage extends VersionedEntity {
     @Column(name = "stock_sync_error", columnDefinition = "text")
     private String stockSyncError;
 
+    /**
+     * La reserva o la salida que la linea mando a stock y se quedo sin respuesta: stock puede haberla
+     * aplicado o no. Null si no hay ninguna. Lo siguiente que se haga con la linea contra stock empieza
+     * por repetirla, y mientras tanto no cambia lo que viaja en ella.
+     */
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "stock_request_in_doubt", columnDefinition = "stock_request_type")
+    private StockRequestType stockRequestInDoubt;
+
     /** A medias con stock, por una caida (FAILED) o por un rechazo (REJECTED): bloquea completar la orden salvo force. */
     public boolean isSyncFailed() {
         return StockSyncStatus.FAILED == stockSyncStatus || StockSyncStatus.REJECTED == stockSyncStatus;
+    }
+
+    /** Hay una peticion a stock sin respuesta: ver {@link #stockRequestInDoubt}. */
+    public boolean isInDoubt() {
+        return stockRequestInDoubt != null;
+    }
+
+    /**
+     * Justo antes de mandar la peticion: si la respuesta se pierde, la linea se queda con ella en duda.
+     * Lo que stock conteste la resuelve (cualquiera de los mark* salvo {@link #markFailed}).
+     */
+    public void markInDoubt(StockRequestType request) {
+        this.stockRequestInDoubt = request;
+    }
+
+    /** Stock ha dicho que no a la peticion en duda repetida: no se habia aplicado, y ya no hay nada en duda. */
+    public void clearInDoubt() {
+        this.stockRequestInDoubt = null;
     }
 
     /** Nada pedido a stock, o nada que pedirle ya: sin proyecto contra el que reservar, o sin nada usado ni retenido. */
     public void markNotRequested() {
         this.stockSyncStatus = StockSyncStatus.NOT_REQUESTED;
         this.stockSyncError = null;
+        this.stockRequestInDoubt = null;
     }
 
     public void markReserved(UUID reservationId) {
         this.stockReservationId = reservationId;
         this.stockSyncStatus = StockSyncStatus.RESERVED;
         this.stockSyncError = null;
+        this.stockRequestInDoubt = null;
     }
 
     public void markConsumed() {
         this.stockSyncStatus = StockSyncStatus.CONSUMED;
         this.stockSyncError = null;
+        this.stockRequestInDoubt = null;
     }
 
     public void markReleased() {
         this.stockSyncStatus = StockSyncStatus.RELEASED;
         this.stockSyncError = null;
+        this.stockRequestInDoubt = null;
     }
 
+    /** Stock no respondio: si habia una peticion en duda, sigue en duda. */
     public void markFailed(String error) {
         this.stockSyncStatus = StockSyncStatus.FAILED;
         this.stockSyncError = error;
     }
 
+    /** Stock respondio que no: lo que se le pidio no se aplico, asi que ya no hay nada en duda. */
     public void markRejected(String error) {
         this.stockSyncStatus = StockSyncStatus.REJECTED;
         this.stockSyncError = error;
+        this.stockRequestInDoubt = null;
     }
 }

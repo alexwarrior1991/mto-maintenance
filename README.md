@@ -35,7 +35,9 @@ The ones without a default:
 
 Switches worth knowing: `APP_RABBITMQ_ENABLED=false` starts without a broker,
 `APP_STOCK_ENABLED=false` starts without `mto-stock` (material lines stay `NOT_REQUESTED`),
-`APP_SECURITY_EXPOSE_API_DOCS=true` publishes Swagger without a token.
+`APP_STOCK_SYNC_RETRY_ENABLED=false` stops retrying the material lines stock did not answer (`FAILED`)
+every `APP_STOCK_SYNC_RETRY_INTERVAL` (`PT5M`), `APP_SECURITY_EXPOSE_API_DOCS=true` publishes Swagger
+without a token.
 
 ## Spring profiles
 

@@ -16,6 +16,9 @@ public class StockRejectedException extends BusinessException {
     /** El codigo con el que mto-stock dice que no hay existencias disponibles. */
     public static final String INSUFFICIENT_STOCK = "STK-001";
 
+    /** El codigo con el que mto-stock dice que la clave de idempotencia ya se uso con otro cuerpo. */
+    public static final String IDEMPOTENCY_CONFLICT = "IDEM-001";
+
     private final int status;
     private final String stockErrorCode;
 
@@ -37,5 +40,13 @@ public class StockRejectedException extends BusinessException {
 
     public boolean isInsufficientStock() {
         return INSUFFICIENT_STOCK.equals(stockErrorCode);
+    }
+
+    /**
+     * La clave ya se habia usado con otro cuerpo: lo que se pidio con ella si llego a stock, aunque no
+     * fuera esto. No deberia pasar, porque lo que viaja no cambia mientras la peticion esta en duda.
+     */
+    public boolean isIdempotencyConflict() {
+        return IDEMPOTENCY_CONFLICT.equals(stockErrorCode);
     }
 }

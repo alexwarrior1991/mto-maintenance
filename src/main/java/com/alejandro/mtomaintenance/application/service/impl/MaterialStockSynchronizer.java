@@ -7,6 +7,7 @@ import com.alejandro.mtomaintenance.application.exception.StockUnavailableExcept
 import com.alejandro.mtomaintenance.application.service.StockClient;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockRequestType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -14,11 +15,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,8 +38,12 @@ import java.util.UUID;
  *
  * <p>Una reserva o una salida que llegaron a stock pero cuya respuesta se perdio no se pueden
  * preguntar asi: la linea no llego a saber que se creo. Esas dos peticiones llevan una clave de
- * idempotencia ({@link #idempotencyKey}), la misma para el mismo paso con el mismo cuerpo, y stock
- * devuelve lo que ya hizo en vez de hacerlo otra vez.</p>
+ * idempotencia ({@link #idempotencyKey}), y la linea las apunta en duda ({@code stockRequestInDoubt})
+ * antes de mandarlas. Lo siguiente que se haga con ella contra stock -reintentar, completar, cancelar,
+ * quitarla- empieza por repetir la que siga en duda, con la misma clave y el mismo cuerpo: stock
+ * devuelve lo que ya hizo, o lo hace ahora, y solo entonces se sigue. Hasta que stock contesta no
+ * cambia lo que viaja en ella: ni lo previsto ni lo consumido de la linea, ni el proyecto de stock de
+ * la orden (lo rechazan los servicios que los modifican).</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -92,14 +92,28 @@ class MaterialStockSynchronizer {
      * no responde, la linea no se quita, porque su reserva seguiria reteniendo material alli. Una
      * reserva que ya no retiene nada (liberada o cancelada desde Almacen) no impide quitarla; una ya
      * consumida si, porque el material salio del almacen con esta linea.
+     *
+     * <p>Una reserva en duda se confirma primero, para liberar la que stock tenga. Una salida en duda
+     * impide quitarla: el material quiza ya salio, y lo que toca es sincronizar.</p>
      */
     void releaseNow(MaintenanceMaterialUsage usage) {
-        if (usage.getStockReservationId() == null || !isPending(usage)) {
+        if (usage.getStockRequestInDoubt() == StockRequestType.OUTPUT) {
+            throw new MaterialUsageException("Material " + usage.getMaterialCode() + " has an output to stock without an answer yet, "
+                    + "so it may have left the warehouse already; sync the line before removing it");
+        }
+        if (!usage.isInDoubt() && (usage.getStockReservationId() == null || !isPending(usage))) {
             return;
         }
         if (!stockClient.isEnabled()) {
             throw new StockUnavailableException("The stock client is disabled (app.stock.enabled=false); the reservation of "
                     + usage.getMaterialCode() + " cannot be released");
+        }
+        if (usage.isInDoubt()) {
+            // La reserva que se quedo sin respuesta puede estar reteniendo material: se confirma para liberarla.
+            confirmReservation(usage);
+            if (usage.getStockReservationId() == null) {
+                return;
+            }
         }
         Optional<StockReservation> reservation = currentReservation(usage);
         if (reservation.filter(StockReservation::isConsumed).isPresent()) {
@@ -122,7 +136,8 @@ class MaterialStockSynchronizer {
      * sincronizar quiere saber si stock sigue caido (503) o por que dice que no (409 o 422).
      *
      * <p>En una orden en curso tambien comprueba una linea RESERVED: si la reserva se libero desde
-     * Almacen, pide otra.</p>
+     * Almacen, pide otra. Y termina una salida que se quedo sin respuesta al intentar completarla, en
+     * vez de reservar de nuevo lo que quiza ya salio del almacen.</p>
      */
     void syncNow(MaintenanceMaterialUsage usage) {
         if (!stockClient.isEnabled()) {
@@ -134,8 +149,9 @@ class MaterialStockSynchronizer {
             case DRAFT -> null;
             case COMPLETED -> status == StockSyncStatus.CONSUMED ? null : attempt(usage, "consume", () -> settle(usage));
             case CANCELLED -> isPending(usage) ? attempt(usage, "release", () -> free(usage)) : null;
-            default -> usage.getPlannedQuantity().signum() == 0 || status == StockSyncStatus.CONSUMED
-                    ? null : reserve(order, List.of(usage));
+            default -> usage.getStockRequestInDoubt() == StockRequestType.OUTPUT
+                    ? attempt(usage, "consume", () -> settle(usage))
+                    : usage.getPlannedQuantity().signum() == 0 || status == StockSyncStatus.CONSUMED ? null : reserve(order, List.of(usage));
         };
         if (failure != null) {
             throw failure;
@@ -170,7 +186,8 @@ class MaterialStockSynchronizer {
     /**
      * Deja la linea con su reserva. Si ya tuvo una (un intento anterior a medias, o una comprobacion
      * pedida con /sync), antes pregunta a stock: otra reserva la duplicaria. Una reserva consumida
-     * sigue siendo la de la linea, y se liquida al completar la orden.
+     * sigue siendo la de la linea, y se liquida al completar la orden. Una reserva en duda se repite
+     * aqui mismo: es la misma peticion, con la misma clave.
      */
     private void hold(MaintenanceMaterialUsage usage, Optional<UUID> project) {
         Optional<StockReservation> current = currentReservation(usage);
@@ -183,18 +200,53 @@ class MaterialStockSynchronizer {
             usage.markNotRequested();
             return;
         }
-        // La reserva anterior va en la clave: si la linea tuvo una y ya no retiene nada, esta es otra
-        // reserva y no un reintento de aquella.
-        String key = idempotencyKey(usage, "reserve", usage.getStockReservationId(), usage.getMaterialId(),
-                usage.getWarehouseId(), project.get(), usage.getPlannedQuantity());
-        StockReservation reservation = stockClient.reserve(usage.getMaterialId(), usage.getWarehouseId(), project.get(),
+        requestReservation(usage, project.get());
+    }
+
+    /** Pide la reserva de la linea contra {@code project}, apuntada en duda hasta que stock conteste. */
+    private void requestReservation(MaintenanceMaterialUsage usage, UUID project) {
+        String key = idempotencyKey(usage, StockRequestType.RESERVATION, usage.getStockReservationId());
+        usage.markInDoubt(StockRequestType.RESERVATION);
+        StockReservation reservation = stockClient.reserve(usage.getMaterialId(), usage.getWarehouseId(), project,
                 usage.getPlannedQuantity(), key);
         usage.markReserved(reservation.id());
         LOGGER.info("Material reserved in stock: order={}, material={}, reservation={}",
                 usage.getOrder().getCode(), usage.getMaterialCode(), reservation.id());
     }
 
+    /**
+     * Repite la reserva que la linea tiene en duda, con su clave y su cuerpo: si llego a stock, stock
+     * devuelve la que creo; si no, la crea ahora. Si stock dice que no, es que no llego -la habria
+     * devuelto sin validar nada-, y la linea sigue como si no se hubiera pedido. Un 409 IDEM-001 dice
+     * lo contrario, que la clave ya creo algo con otro cuerpo: se deja pasar, y la linea lo cuenta.
+     */
+    private void confirmReservation(MaintenanceMaterialUsage usage) {
+        UUID project = usage.getOrder().getStockProjectId();
+        if (project == null) {
+            throw new IllegalStateException("Material line " + usage.getMaterialCode() + " has a reservation in doubt but order "
+                    + usage.getOrder().getCode() + " has no stock project to repeat it against");
+        }
+        try {
+            requestReservation(usage, project);
+        } catch (StockRejectedException rejected) {
+            if (rejected.isIdempotencyConflict()) {
+                LOGGER.error("The idempotency key of the reservation in doubt was used with another body: order={}, material={}, cause={}",
+                        usage.getOrder().getCode(), usage.getMaterialCode(), rejected.getMessage());
+                throw rejected;
+            }
+            usage.clearInDoubt();
+            LOGGER.info("The reservation in doubt never reached stock, which now rejects it: order={}, material={}, cause={}",
+                    usage.getOrder().getCode(), usage.getMaterialCode(), rejected.getMessage());
+        }
+    }
+
     private void settle(MaintenanceMaterialUsage usage) {
+        if (usage.getStockRequestInDoubt() == StockRequestType.RESERVATION) {
+            // La reserva sin respuesta puede estar reteniendo material: primero se confirma, y luego se
+            // consume o se libera como cualquier otra. Sin esto, lo usado salia como salida directa y
+            // la reserva se quedaba en stock.
+            confirmReservation(usage);
+        }
         Optional<StockReservation> reservation = currentReservation(usage);
         if (reservation.filter(StockReservation::isActive).isPresent()) {
             settleActive(usage, reservation.get());
@@ -246,6 +298,15 @@ class MaterialStockSynchronizer {
     }
 
     private void free(MaintenanceMaterialUsage usage) {
+        if (usage.getStockRequestInDoubt() == StockRequestType.OUTPUT) {
+            // Lo usado salio, o sale ahora: la salida que se quedo sin respuesta se termina, y la linea
+            // queda consumida como en stock. Liberar no la deshace.
+            settle(usage);
+            return;
+        }
+        if (usage.getStockRequestInDoubt() == StockRequestType.RESERVATION) {
+            confirmReservation(usage);
+        }
         Optional<StockReservation> reservation = currentReservation(usage);
         if (reservation.filter(StockReservation::isActive).isPresent()) {
             stockClient.release(reservation.get().id());
@@ -291,18 +352,20 @@ class MaterialStockSynchronizer {
         return project;
     }
 
+    /** La salida de la linea, apuntada en duda hasta que stock conteste; quien la llama deja la linea consumida. */
     private void output(MaintenanceMaterialUsage usage, BigDecimal quantity, String notes) {
         MaintenanceOrder order = usage.getOrder();
-        String key = idempotencyKey(usage, "output", usage.getMaterialId(), usage.getWarehouseId(), order.getStockProjectId(),
-                quantity, order.getCode(), notes);
+        String key = idempotencyKey(usage, StockRequestType.OUTPUT, null);
+        usage.markInDoubt(StockRequestType.OUTPUT);
         stockClient.output(usage.getMaterialId(), usage.getWarehouseId(), order.getStockProjectId(), quantity, order.getCode(), notes, key);
     }
 
     /**
      * Las notas de la salida de lo usado cuando ninguna reserva lo cubre. Son las mismas por los dos
      * caminos que llegan a ella -la reserva se libera en este paso porque se uso menos, o ya no
-     * retenia nada- porque la clave de idempotencia sale del cuerpo: si la salida se queda sin
-     * respuesta despues de liberar, el reintento llega por el segundo camino y tiene que mandar lo mismo.
+     * retenia nada- porque stock compara el cuerpo del reintento con el del primero: si la salida se
+     * queda sin respuesta despues de liberar, el reintento llega por el segundo camino y tiene que
+     * mandar lo mismo, o stock lo rechazaria con 409 IDEM-001.
      */
     private static String directOutputNotes(MaintenanceMaterialUsage usage) {
         String order = "Maintenance order " + usage.getOrder().getCode();
@@ -311,35 +374,26 @@ class MaterialStockSynchronizer {
 
     /**
      * La clave de idempotencia de una peticion de la linea a mto-stock: {@code mto-maintenance:}, la
-     * linea, el paso y un resumen de lo que viaja. Es la misma para el mismo paso con el mismo cuerpo,
-     * asi que un reintento tras perder la respuesta la repite y stock devuelve lo que ya hizo. Cambia
-     * en cuanto cambia lo que viaja (lo previsto de una linea cuya reserva fallo, el proyecto): stock
-     * rechaza con 409 una clave repetida con otro cuerpo, y la linea quedaria atascada. El precio es
-     * que, si lo primero habia llegado a stock, ahi se queda, como sin clave.
+     * linea, la peticion y, en una reserva, la reserva anterior de la linea ({@code first} si no tuvo).
+     * No sale del cuerpo: un reintento lleva siempre la misma, y si el cuerpo cambiara stock lo
+     * rechazaria con 409 IDEM-001 en vez de aplicarlo otra vez. Por eso lo que viaja no cambia
+     * mientras la peticion esta en duda.
      *
-     * <p>La linea tiene que estar guardada: sin id, dos lineas con el mismo cuerpo compartirian clave y
-     * la segunda recibiria la reserva de la primera.</p>
+     * <p>Una reserva lleva la anterior porque si la que tenia se libero desde Almacen, la siguiente es
+     * otra reserva y no un reintento de aquella. Una salida no lleva nada mas: una linea da como mucho
+     * una, la de lo usado o la del exceso sobre su reserva.</p>
+     *
+     * <p>La linea tiene que estar guardada: sin id, dos lineas compartirian clave y la segunda
+     * recibiria lo que creo la primera.</p>
      */
-    static String idempotencyKey(MaintenanceMaterialUsage usage, String step, Object... request) {
+    static String idempotencyKey(MaintenanceMaterialUsage usage, StockRequestType request, UUID previousReservation) {
         if (usage.getId() == null) {
             throw new IllegalStateException("Material line " + usage.getMaterialCode() + " has no id yet: save it before asking stock for anything");
         }
-        MessageDigest digest = sha256();
-        for (Object part : request) {
-            byte[] bytes = (part instanceof BigDecimal decimal ? decimal.stripTrailingZeros().toPlainString() : String.valueOf(part))
-                    .getBytes(StandardCharsets.UTF_8);
-            digest.update(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
-            digest.update(bytes);
-        }
-        return "mto-maintenance:" + usage.getId() + ":" + step + ":" + HexFormat.of().formatHex(digest.digest(), 0, 16);
-    }
-
-    private static MessageDigest sha256() {
-        try {
-            return MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is not available", exception);
-        }
+        String key = "mto-maintenance:" + usage.getId();
+        return request == StockRequestType.RESERVATION
+                ? key + ":reserve:" + (previousReservation == null ? "first" : previousReservation)
+                : key + ":output";
     }
 
     /** Lo que stock tiene reservado, que desde Almacen se puede haber cambiado; lo previsto si no lo dice. */
@@ -347,10 +401,14 @@ class MaterialStockSynchronizer {
         return reservation.quantity() == null ? usage.getPlannedQuantity() : reservation.quantity();
     }
 
-    /** Lo que falta por reservar: cantidad prevista y ninguna reserva viva ni consumida. */
+    /**
+     * Lo que falta por reservar: cantidad prevista y ninguna reserva viva ni consumida. Una linea con
+     * una salida en duda no: su material quiza ya salio del almacen.
+     */
     private static boolean awaitsReservation(MaintenanceMaterialUsage usage) {
         StockSyncStatus status = usage.getStockSyncStatus();
-        return usage.getPlannedQuantity().signum() > 0 && status != StockSyncStatus.RESERVED && status != StockSyncStatus.CONSUMED;
+        return usage.getPlannedQuantity().signum() > 0 && status != StockSyncStatus.RESERVED && status != StockSyncStatus.CONSUMED
+                && usage.getStockRequestInDoubt() != StockRequestType.OUTPUT;
     }
 
     /** Algo a medias en stock: una reserva, o un intento que fallo o se rechazo. */

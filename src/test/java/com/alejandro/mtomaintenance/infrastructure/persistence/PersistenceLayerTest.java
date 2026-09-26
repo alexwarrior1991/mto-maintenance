@@ -32,9 +32,12 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockRequestType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryDefectRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository.LineRef;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceReportRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceStatusHistoryRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTaskRepository;
@@ -45,6 +48,7 @@ import java.util.EnumSet;
 import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceException;
@@ -519,6 +523,36 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertEquals(List.of(worked.getId()), taskRepository.findByShiftIdOrderBySequenceAsc(shift.getId()).stream().map(MaintenanceTask::getId).toList());
         assertEquals(1, taskRepository.findByShiftIdAndStatusIn(shift.getId(), EnumSet.of(MaintenanceTaskStatus.PENDING, MaintenanceTaskStatus.IN_PROGRESS)).size());
         assertEquals(List.of("DEF-RPT-B-" + suffix), defectRepository.findByOrderIdAndStatus(order.getId(), DefectStatus.OPEN).stream().map(CatenaryDefect::getCode).toList());
+    }
+
+    /**
+     * El reintento automatico pide las lineas FAILED con el id de su orden, y la peticion en duda se
+     * guarda con su tipo de PostgreSQL: es lo que dice, despues de un reinicio, que repetir primero.
+     */
+    @Test
+    void theRetryFindsTheFailedLinesWithTheirOrderAndTheRequestInDoubtIsKept() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        CatenaryAsset section = assetRepository.save(section("SEC-DBT-" + suffix, System.nanoTime()));
+        MaintenanceOrder order = orderRepository.save(order("MO-DBT-" + suffix, section, MaintenanceOrderStatus.PLANNED, MaintenancePriority.MEDIUM, null));
+        MaintenanceMaterialUsage failed = MaintenanceMaterialUsage.builder().order(order).materialId(UUID.randomUUID()).materialCode("GA70")
+                .warehouseId(UUID.randomUUID()).plannedQuantity(new BigDecimal("2")).unit("ud").build();
+        failed.markInDoubt(StockRequestType.RESERVATION);
+        failed.markFailed("reserve: Read timed out");
+        materialRepository.save(failed);
+        MaintenanceMaterialUsage reserved = MaintenanceMaterialUsage.builder().order(order).materialId(UUID.randomUUID()).materialCode("CL-10")
+                .warehouseId(UUID.randomUUID()).plannedQuantity(new BigDecimal("4")).unit("ud").build();
+        reserved.markReserved(UUID.randomUUID());
+        materialRepository.save(reserved);
+        entityManager.flush();
+        entityManager.clear();
+
+        List<LineRef> refs = materialRepository.findRefsByStockSyncStatus(StockSyncStatus.FAILED).stream()
+                .filter(ref -> ref.getOrderId().equals(order.getId()))
+                .toList();
+
+        assertEquals(List.of(failed.getId()), refs.stream().map(LineRef::getId).toList());
+        assertEquals(StockRequestType.RESERVATION, materialRepository.findById(failed.getId()).orElseThrow().getStockRequestInDoubt());
+        assertNull(materialRepository.findById(reserved.getId()).orElseThrow().getStockRequestInDoubt());
     }
 
     @Test
