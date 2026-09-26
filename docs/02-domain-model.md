@@ -103,6 +103,15 @@ error. Reservation happens at `plan` (or when the line is added to an order alre
 consumption at `complete`, release at `cancel`; without a stock project the consumption is a
 direct output.
 
+A line registered by mistake is removed, not cancelled (`DELETE /orders/{id}/materials/{usageId}`):
+the row goes and Envers keeps its last state as a DELETED revision. A reserved line is released in
+stock first; if stock does not answer, the removal fails with 503 and the line stays, because its
+reservation would stay alive there. A reservation stock no longer holds (released, cancelled or
+consumed from the warehouse) does not block it. A consumed line, or a line of a completed or
+cancelled order, cannot be removed. There is no `CANCELLED` state on purpose: `stockSyncStatus`
+describes the conversation with stock, and the unique (order, task, material, warehouse) would
+stop the line from being registered again.
+
 ## Status history
 
 Every transition of an order or a defect appends a `MaintenanceStatusHistory` row

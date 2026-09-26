@@ -96,15 +96,16 @@ is left `FAILED` and `POST /orders/{id}/materials/{usageId}/sync` retries.
 ## Security
 
 Keycloak resource server, audience `mto-maintenance-api`. Permissions are client roles, profiles are
-realm composites (`mto-maintenance-viewer`, `-technician`, `-manager`); see
-[`keycloak/README.md`](keycloak/README.md).
+realm composites (`mto-maintenance-viewer`, `-technician`, `-manager`), and the three also carry
+`config-read` and `stock-read` so a screen can name the tracks, stations, materials and warehouses
+this service only stores as ids; see [`keycloak/README.md`](keycloak/README.md).
 
 | Verb / action | Permission |
 |---|---|
 | `GET` | `maintenance-read` |
 | `POST`, `PUT` | `maintenance-write` |
-| `DELETE /assets/{id}` | `maintenance-delete` |
-| `cancel`, `complete` with `force`, `resolve`, `close`, `discard` | `maintenance-supervise` |
+| `DELETE /assets/{id}`, `DELETE /orders/{id}/materials/{usageId}` | `maintenance-delete` |
+| `cancel` of an order, `complete` of an order with `force`, `resolve`/`close`/`discard` of a defect | `maintenance-supervise` (on top of `maintenance-write`) |
 | `/actuator/**` (except health/info) | `ops-metrics` / `ops-write` |
 
 ```bash

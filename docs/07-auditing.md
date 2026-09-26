@@ -11,7 +11,7 @@ outside a request (consumer, scheduled work), `unknown` inside a request without
 ## What the previous values were
 
 Hibernate Envers, `audit_revision` as the custom revision entity (instant, username, user id,
-source `REST`/`MESSAGING`/`SYSTEM`). Audited: `CatenaryAsset`, `MaintenanceOrder`,
+source `HTTP`/`MESSAGING`/`SYSTEM`). Audited: `CatenaryAsset`, `MaintenanceOrder`,
 `MaintenanceTask` (with `maintenance_task_task_type_aud`), `MaintenanceTaskCheckItem`,
 `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`,
 `MaintenanceMaterialUsage`, `MaintenanceShift`.
@@ -26,6 +26,9 @@ transaction on purpose: Envers writes at commit).
 
 A migration that changes a column of an audited table must change its `_aud` twin in the same
 migration (nullable, no constraints).
+
+Deleting a row keeps its last state (`store_data_at_delete`): a material line removed from an
+order leaves a DELETED revision with the author, the source and the correlation id.
 
 Known gap: master-data upserts are native SQL and leave no revision.
 

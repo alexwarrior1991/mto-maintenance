@@ -48,7 +48,7 @@ asigna a las personas.
 |---|---|
 | `maintenance-read` | Todo `GET` bajo `/api/v1/maintenance` |
 | `maintenance-write` | Alta y modificación; transiciones ordinarias (`plan`, `assign`, `start`, `complete`, turnos, tareas, inspecciones, materiales) |
-| `maintenance-delete` | `DELETE /assets/{id}` (desactivación) |
+| `maintenance-delete` | `DELETE /assets/{id}` (desactivación) y `DELETE /orders/{id}/materials/{usageId}` (quitar una línea de material) |
 | `maintenance-supervise` | **Además de** `maintenance-write`: `cancel` de una orden, `complete` con `force`, `resolve`/`close`/`discard` de un defecto |
 | `ops-metrics` | Lectura de los endpoints de Actuator |
 | `ops-write` | Operaciones de Actuator que modifican estado |
@@ -58,6 +58,20 @@ asigna a las personas.
 | `mto-maintenance-viewer` | `maintenance-read` |
 | `mto-maintenance-technician` | `maintenance-read`, `maintenance-write` |
 | `mto-maintenance-manager` | los del técnico + `maintenance-delete`, `maintenance-supervise` |
+
+Los tres perfiles llevan además `config-read` de `mto-configuration-api` y `stock-read` de
+`mto-stock-api`. Este servicio guarda las vías, estaciones y paquetes de ejecución, y los materiales,
+almacenes y proyectos, solo como ids. Una pantalla (el backoffice, o el front de React) los nombra y
+ofrece desplegables leyéndolos de su servicio con el token de la persona, y sin esa lectura
+enseñaría números. Solo es lectura: nadie de mantenimiento modifica la infraestructura ni el
+almacén. Como consecuencia, estas personas ven también Infraestructura, Catálogos y Almacén en
+modo lectura.
+
+Estos composites nombran roles de otros clientes, así que la parcial necesita que las de
+`mto-configuration` y `mto-stock` estén aplicadas antes. `mto-platform/keycloak/apply-partials.sh`
+las aplica en ese orden, y `scripts/check_realm_consistency.py` lo comprueba. El realm de los tests
+(`src/test/resources/keycloak/mto-maintenance-test-realm.json`) no tiene esos clientes ni los
+necesita: aquí no se comprueba ninguno de sus roles.
 
 `maintenance-supervise` va aparte porque son las decisiones que deshacen o fuerzan trabajo: cancelar
 una orden libera reservas y devuelve defectos a `OPEN`; completar con `force` acepta una orden con

@@ -12,7 +12,7 @@
         },
         {
           "name": "maintenance-delete",
-          "description": "Desactivacion de activos"
+          "description": "Desactivacion de activos y retirada de lineas de material de una orden"
         },
         {
           "name": "maintenance-supervise",
@@ -31,32 +31,44 @@
     "realm": [
       {
         "name": "mto-maintenance-viewer",
-        "description": "Consulta de mantenimiento: activos, ordenes, turnos, inspecciones, defectos e informes",
+        "description": "Consulta de mantenimiento: activos, ordenes, turnos, inspecciones, defectos e informes. Lee tambien la infraestructura y el almacen a los que se refieren",
         "composite": true,
         "composites": {
           "client": {
             "mto-maintenance-api": [
               "maintenance-read"
+            ],
+            "mto-configuration-api": [
+              "config-read"
+            ],
+            "mto-stock-api": [
+              "stock-read"
             ]
           }
         }
       },
       {
         "name": "mto-maintenance-technician",
-        "description": "Trabajo de campo: ordenes, tareas por perfil, turnos, inspecciones, defectos y materiales",
+        "description": "Trabajo de campo: ordenes, tareas por perfil, turnos, inspecciones, defectos y materiales. Lee tambien la infraestructura y el almacen a los que se refieren",
         "composite": true,
         "composites": {
           "client": {
             "mto-maintenance-api": [
               "maintenance-read",
               "maintenance-write"
+            ],
+            "mto-configuration-api": [
+              "config-read"
+            ],
+            "mto-stock-api": [
+              "stock-read"
             ]
           }
         }
       },
       {
         "name": "mto-maintenance-manager",
-        "description": "Responsables de mantenimiento: ademas del trabajo de campo, cancelan ordenes, cierran defectos y desactivan activos",
+        "description": "Responsables de mantenimiento: ademas del trabajo de campo, cancelan ordenes, cierran defectos, desactivan activos y quitan lineas de material",
         "composite": true,
         "composites": {
           "client": {
@@ -65,6 +77,12 @@
               "maintenance-write",
               "maintenance-delete",
               "maintenance-supervise"
+            ],
+            "mto-configuration-api": [
+              "config-read"
+            ],
+            "mto-stock-api": [
+              "stock-read"
             ]
           }
         }
