@@ -38,7 +38,7 @@ class TrackMasterDataHandler implements MasterDataEntityHandler {
         } catch (NumberFormatException exception) {
             throw new ValidationException("Track entityId '" + entityId + "' is not numeric");
         }
-        int disabled = repository.deactivateByTrack(trackId);
+        int disabled = repository.deactivateByTrack(trackId, context.sequenceNumber());
         LOGGER.info("Track deleted: trackId={}, assets disabled={}, sequenceNumber={}", trackId, disabled, context.sequenceNumber());
     }
 }

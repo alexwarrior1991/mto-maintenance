@@ -15,6 +15,23 @@ order, inspection or task on a disabled asset; `preventiveIntervalDays` +
 `lastPreventiveCompletedAt` give `nextPreventiveDueAt` and the `preventiveDueBefore` filter (an
 asset never done is due).
 
+Enabled or not has two voices, and `enabled` is what they add up to:
+
+| Field | Who writes it | Meaning |
+|---|---|---|
+| `enabledAtSource` | only the master-data events (`null` on own sections) | what `mto-configuration` says: `false` after a `DELETED` of the asset or of its track |
+| `disabledLocally` | `DELETE`, and `PUT` with `enabled` | maintenance's own decision; no event touches it |
+| `enabled` | recomputed by both (a `CHECK` keeps it) | `coalesce(enabledAtSource, true) and not disabledLocally`: what every query and filter reads |
+
+So an asset disabled here stays disabled through any update or republish of the source, and one
+disabled at the source cannot be brought back here (`PUT` with `enabled=true` answers 409
+`AST-001`); it comes back when the source enables it, unless it is also disabled here. `PUT` with
+`enabled=false` is the same decision as `DELETE` and needs `maintenance-delete` too. A track deleted
+at the source disables what is on it: at the source for the synchronized assets (advancing their
+sequence watermark, so an older event of a profile arriving later does not bring it back), and here
+for an own section, which a person can enable again. Assets disabled here before `V10` cannot be
+told apart from those disabled at the source, and count as the latter.
+
 ## Orders (`MaintenanceOrder`)
 
 Types `PREVENTIVE`, `CORRECTIVE`, `INSPECTION`, `URGENT`; priorities `LOW … CRITICAL`; location

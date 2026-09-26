@@ -14,6 +14,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InboxMessageStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.SectionInsulatorInstallation;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetSwitch;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetSwitchRepository;
@@ -388,6 +389,67 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         entityManager.clear();
         assertEquals(8L, asset(early).getExecutionPackageId());
         assertEquals(8L, asset(late).getExecutionPackageId());
+    }
+
+    @Test
+    void aLocalDisableSurvivesEveryMasterDataEventButDoesNotOverrideTheSource() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        String profileId = String.valueOf(System.nanoTime());
+        dispatcher.handle(profileMessage(UUID.randomUUID(), profileId, "12-2.27", "12847.99", MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        entityManager.clear();
+        CatenaryAsset asset = asset(profileId);
+        asset.disableLocally();
+        assetRepository.saveAndFlush(asset);
+        entityManager.clear();
+
+        // Un cambio y un republicado (todo UPDATED, con enabled=true) ya no lo reactivan.
+        dispatcher.handle(profileMessage(UUID.randomUUID(), profileId, "12-2.27 renamed", "12847.99", MasterDataOperation.UPDATED), new MasterDataEventContext(2L));
+        dispatcher.handle(profileMessage(UUID.randomUUID(), profileId, "12-2.27 renamed", "12847.99", MasterDataOperation.UPDATED), new MasterDataEventContext(3L));
+        entityManager.clear();
+        CatenaryAsset afterEvents = asset(profileId);
+        assertEquals("12-2.27 renamed", afterEvents.getName(), "The events still apply");
+        assertFalse(afterEvents.getEnabled());
+        assertTrue(afterEvents.getEnabledAtSource());
+        assertTrue(afterEvents.getDisabledLocally());
+
+        // Reactivado aqui vuelve; borrado en el origen, gana el origen aunque aqui este activo.
+        afterEvents.enableLocally();
+        assetRepository.saveAndFlush(afterEvents);
+        entityManager.clear();
+        assertTrue(asset(profileId).getEnabled());
+        dispatcher.handle(profileMessage(UUID.randomUUID(), profileId, "12-2.27 renamed", "12847.99", MasterDataOperation.DELETED), new MasterDataEventContext(4L));
+        entityManager.clear();
+        CatenaryAsset deleted = asset(profileId);
+        assertFalse(deleted.getEnabled());
+        assertFalse(deleted.getEnabledAtSource());
+        assertFalse(deleted.getDisabledLocally());
+        deleted.enableLocally();
+        assertFalse(deleted.getEnabled(), "Lifting the local decision does not override the source");
+    }
+
+    @Test
+    void aTrackDeletionAdvancesTheWatermarkOfWhatIsOnItAndDisablesAnOwnSectionLocally() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long trackId = System.nanoTime();
+        long profileId = trackId + 3;
+        dispatcher.handle(trackProfileMessage(profileId, trackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(5L));
+        CatenaryAsset section = assetRepository.saveAndFlush(CatenaryAsset.builder().code("SEC-DEL-" + trackId).name("Own section")
+                .type(CatenaryAssetType.TRACK_SECTION).trackId(trackId).startKp(new BigDecimal("80000.000")).endKp(new BigDecimal("81000.000"))
+                .trackKind(TrackKind.MAIN).build());
+
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.TRACK, String.valueOf(trackId), MasterDataOperation.DELETED,
+                Map.of("id", trackId)), new MasterDataEventContext(10L));
+        // Un cambio del perfil anterior al borrado que llega despues: la secuencia es global, asi que se descarta.
+        dispatcher.handle(trackProfileMessage(profileId, trackId, 6L, MasterDataOperation.UPDATED), new MasterDataEventContext(7L));
+        entityManager.clear();
+
+        CatenaryAsset profile = asset(String.valueOf(profileId));
+        assertFalse(profile.getEnabled(), "It used to come back with the next event of the profile");
+        assertEquals(10L, profile.getSourceSequenceNumber());
+        CatenaryAsset ownSection = assetRepository.findById(section.getId()).orElseThrow();
+        assertFalse(ownSection.getEnabled());
+        assertTrue(ownSection.getDisabledLocally(), "An own section has no source: disabled here, so a person can bring it back");
+        assertNull(ownSection.getEnabledAtSource());
     }
 
     @Test

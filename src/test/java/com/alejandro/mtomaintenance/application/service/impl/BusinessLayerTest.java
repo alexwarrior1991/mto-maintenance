@@ -841,7 +841,21 @@ class BusinessLayerTest {
         assertEquals("12-2.27", synced.getName());
         assertEquals("Next to the bridge", synced.getDescription());
         assertFalse(synced.isEnabled());
+        assertTrue(synced.getDisabledLocally(), "Disabled here, which no master data event undoes");
         assertEquals(180, synced.getPreventiveIntervalDays());
+
+        fixture.service.update(synced.getId(), new CatenaryAssetUpdateRequest(null, null, true, null, null, null, null, null, null, null, null, null));
+        assertTrue(synced.isEnabled());
+        assertFalse(synced.getDisabledLocally());
+
+        // Desactivado en mto-configuration: reactivarlo aqui no serviria, el siguiente evento diria que no.
+        CatenaryAsset goneAtSource = CatenaryAsset.builder().code("PRF-gone").name("13-2.09").type(CatenaryAssetType.PROFILE)
+                .sourceService("mto-configuration").sourceEntityId("prf-2").enabledAtSource(false).enabled(false).build();
+        ReflectionTestUtils.setField(goneAtSource, "id", UUID.randomUUID());
+        when(fixture.lookups.asset(goneAtSource.getId())).thenReturn(goneAtSource);
+        assertThrows(AssetDisabledException.class, () -> fixture.service.update(goneAtSource.getId(),
+                new CatenaryAssetUpdateRequest(null, null, true, null, null, null, null, null, null, null, null, null)));
+        assertFalse(goneAtSource.isEnabled());
 
         // Un activo local admite cambiar la localizacion, siempre con un rango kp coherente y trackKind solo en tramos.
         CatenaryAsset local = profile("13-2.01", "13007.290");
@@ -862,7 +876,7 @@ class BusinessLayerTest {
     }
 
     @Test
-    void disablingAnAssetIsIdempotent() {
+    void disablingAnAssetIsIdempotentAndIsRecordedEvenWhenTheSourceHasItDisabledAlready() {
         AssetFixture fixture = new AssetFixture();
         CatenaryAsset asset = profile("12-2.27", "12847.990");
         when(fixture.lookups.asset(asset.getId())).thenReturn(asset);
@@ -872,6 +886,15 @@ class BusinessLayerTest {
 
         assertFalse(asset.isEnabled());
         verify(fixture.repository, times(1)).save(asset);
+
+        // Ya desactivado en el origen: la decision de aqui se guarda igual, para cuando el origen lo reactive.
+        CatenaryAsset goneAtSource = CatenaryAsset.builder().code("PRF-gone").name("13-2.09").type(CatenaryAssetType.PROFILE)
+                .sourceService("mto-configuration").sourceEntityId("prf-2").enabledAtSource(false).enabled(false).build();
+        ReflectionTestUtils.setField(goneAtSource, "id", UUID.randomUUID());
+        when(fixture.lookups.asset(goneAtSource.getId())).thenReturn(goneAtSource);
+        fixture.service.disable(goneAtSource.getId());
+        assertTrue(goneAtSource.getDisabledLocally());
+        verify(fixture.repository).save(goneAtSource);
     }
 
     // ---------------------------------------------------------------- defects
@@ -1527,7 +1550,7 @@ class BusinessLayerTest {
         assertTrue(lookups.taskTypes(List.of()).isEmpty());
 
         CatenaryAsset disabled = profile("12-2.27", "12847.990");
-        disabled.setEnabled(false);
+        disabled.disableLocally();
         when(assetRepository.findById(disabled.getId())).thenReturn(Optional.of(disabled));
         assertSame(disabled, lookups.asset(disabled.getId()));
         assertThrows(AssetDisabledException.class, () -> lookups.enabledAsset(disabled.getId()));

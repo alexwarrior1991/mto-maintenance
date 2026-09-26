@@ -88,8 +88,15 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
         if (request.description() != null) {
             asset.setDescription(request.description());
         }
-        if (request.enabled() != null) {
-            asset.setEnabled(request.enabled());
+        if (request.isDisabling()) {
+            asset.disableLocally();
+        } else if (Boolean.TRUE.equals(request.enabled())) {
+            if (asset.isDisabledAtSource()) {
+                // Reactivarlo aqui no serviria: el siguiente evento de datos maestros diria otra vez que no.
+                throw new AssetDisabledException("Catenary asset " + asset.getCode()
+                        + " is disabled in mto-configuration: it comes back when the source enables it again");
+            }
+            asset.enableLocally();
         }
         if (request.preventiveIntervalDays() != null) {
             asset.setPreventiveIntervalDays(request.preventiveIntervalDays());
@@ -154,10 +161,11 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     @Transactional
     public void disable(UUID id) {
         CatenaryAsset asset = lookups.asset(id);
-        if (!asset.isEnabled()) {
+        // Tambien si el origen ya lo tiene desactivado: la decision de aqui sobrevive a que lo reactive.
+        if (asset.getDisabledLocally()) {
             return;
         }
-        asset.setEnabled(false);
+        asset.disableLocally();
         repository.save(asset);
         LOGGER.info("Catenary asset disabled: code={}", asset.getCode());
     }

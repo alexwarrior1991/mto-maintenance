@@ -73,7 +73,10 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
 A `CatenaryAsset` is what maintenance is done on: a `TRACK_SECTION` (created through the API, a kp
 range on a track, `MAIN` or `DIVERTED`), or a `PROFILE`, `DISCONNECTOR` or `SECTION_INSULATOR`
 synchronized from `mto-configuration` (`source_service` + `source_entity_id`, never created through
-the API, only `description`/`enabled`/`preventiveIntervalDays` editable). A disconnector takes its
+the API, only `description`/`enabled`/`preventiveIntervalDays` editable). `enabled` is the sum of two
+voices: `enabledAtSource` (only the events write it) and `disabledLocally` (only `DELETE` and `PUT`
+write it; no event undoes it), kept together by a `CHECK`; `PUT enabled=false` needs
+`maintenance-delete` like the `DELETE`. A disconnector takes its
 track and package from its profile and an insulator its package from the profiles of its track,
 because the source publishes neither (`docs/06-messaging.md`). A `SECTION_INSULATOR`
 carries besides its two tracks, its `installationType` (`TRACK_CONNECTION` / `IN_TRACK`) and its
@@ -109,7 +112,9 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
 - Codes come from sequences (`MO-000001`, `SH-`, `INS-`, `DEF-`), never from `MAX + 1`.
 - `CatenaryAssetRepository.upsertFromMasterData`/`deactivateFromMasterData` are native SQL with the
   sequence watermark inside the `WHERE` (never read-then-write), which is why master-data changes
-  leave no Envers revision.
+  leave no Envers revision. They write `enabled_at_source` and recompute `enabled`, never
+  `disabled_locally`; `deactivateByTrack` advances the watermark of what it disables (the sequence of
+  `mto-configuration` is global).
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
   `CHECK` that exactly one is set.
 

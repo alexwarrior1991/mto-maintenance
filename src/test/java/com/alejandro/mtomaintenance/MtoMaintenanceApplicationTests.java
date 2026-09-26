@@ -197,7 +197,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         assetRepository.save(profile("12-2.27-" + suffix, trackId, "12847.990"));
         assetRepository.save(profile("12-2.28-" + suffix, trackId, "12899.290"));
         CatenaryAsset disabled = profile("12-2.29-" + suffix, trackId, "12950.000");
-        disabled.setEnabled(false);
+        disabled.disableLocally();
         assetRepository.save(disabled);
         CatenaryAssetResponse section = assetService.createTrackSection(new CatenaryAssetRequest("SEC-E2E-" + suffix, "E2E section", null, 6L, trackId, null,
                 new BigDecimal("12847.990"), new BigDecimal("14078.090"), TrackKind.MAIN, 365));

@@ -4,9 +4,11 @@ import com.alejandro.mtomaintenance.application.dto.order.CancelOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.CompleteOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderResponse;
+import com.alejandro.mtomaintenance.application.exception.AssetDisabledException;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskService;
@@ -54,6 +56,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -66,9 +69,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Contrato HTTP del controlador de ordenes con la cadena de seguridad real: aqui se prueba que el
  * rol de supervision protege 'cancel' y el 'force' de 'complete' (metodo), ademas del 201, el 400 y
- * los codigos de error estables.
+ * los codigos de error estables. Carga tambien el de activos, por la otra regla de metodo: desactivar
+ * con un PUT pide el rol de borrado, como el DELETE.
  */
-@WebMvcTest(MaintenanceOrderController.class)
+@WebMvcTest({MaintenanceOrderController.class, CatenaryAssetController.class})
 @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class, GlobalExceptionHandler.class})
 class MaintenanceOrderControllerMockMvcTest {
 
@@ -88,6 +92,34 @@ class MaintenanceOrderControllerMockMvcTest {
 
     @MockitoBean
     private StatusHistoryService historyService;
+
+    @MockitoBean
+    private CatenaryAssetService assetService;
+
+    @Test
+    void disablingAnAssetWithAPutNeedsTheDeleteRoleLikeTheDeleteAndTheRestOfThePutDoesNot() throws Exception {
+        UUID assetId = UUID.randomUUID();
+        String assets = "/api/v1/maintenance/assets/{id}";
+
+        mockMvc.perform(put(assets, assetId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":false}"))
+                .andExpect(status().isForbidden());
+        verify(assetService, never()).update(any(), any());
+
+        mockMvc.perform(put(assets, assetId).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_DELETE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":false}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(put(assets, assetId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":true,\"description\":\"Next to the bridge\"}"))
+                .andExpect(status().isOk());
+        verify(assetService, times(2)).update(eq(assetId), any());
+
+        when(assetService.update(eq(assetId), any())).thenThrow(new AssetDisabledException("Catenary asset PRF-1 is disabled in mto-configuration"));
+        mockMvc.perform(put(assets, assetId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":true}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("AST-001"));
+    }
 
     @Test
     void createReturnsCreatedLocationAndJsonBody() throws Exception {
