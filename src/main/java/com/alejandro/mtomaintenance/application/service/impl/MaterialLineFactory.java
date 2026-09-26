@@ -67,6 +67,10 @@ class MaterialLineFactory {
     }
 
     private Optional<StockMaterial> lookupMaterial(UUID materialId, String materialCode) {
+        if (materialId == null && (materialCode == null || materialCode.isBlank())) {
+            // La validacion del cuerpo ya lo impide; esto cubre a quien llegue sin pasar por ella.
+            throw new ValidationException("materialId or materialCode is required");
+        }
         if (!stockClient.isEnabled()) {
             return Optional.empty();
         }

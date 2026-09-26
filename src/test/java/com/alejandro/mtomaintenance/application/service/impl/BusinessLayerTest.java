@@ -1693,6 +1693,18 @@ class BusinessLayerTest {
     }
 
     @Test
+    void aMaterialLineWithNeitherIdNorCodeIsRejectedInsteadOfFailing() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaterialLineFactory factory = new MaterialLineFactory(mock(MaintenanceMaterialUsageRepository.class), stockClient);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+
+        assertThrows(ValidationException.class, () -> factory.buildLine(order, null, null, " ", UUID.randomUUID(), BigDecimal.ONE, "ud", false),
+                "It used to call trim() on the missing code and answer 500");
+        verify(stockClient, never()).findMaterialByCode(any());
+    }
+
+    @Test
     void removingALineReleasesItsReservationFirstAndKeepsWhatCannotGo() {
         MaterialFixture fixture = new MaterialFixture();
         MaintenanceOrder planned = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);

@@ -17,6 +17,8 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.core.PropertyReferenceException;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -24,7 +26,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.ObjectError;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -34,6 +38,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Converts every application exception into the standard API error response contract.
@@ -179,6 +184,52 @@ public class GlobalExceptionHandler {
                 List.of(new ValidationError(exception.getName(), "must be a valid " + typeName)),
                 request
         );
+    }
+
+    /**
+     * Returns 400 because a required request parameter is missing, such as {@code month} of the
+     * monthly report. Without this handler it fell into the catch-all and answered 500.
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiErrorResponse> handleMissingParameter(MissingServletRequestParameterException exception, HttpServletRequest request) {
+        return clientErrorResponse(
+                HttpStatus.BAD_REQUEST,
+                "Missing request parameter.",
+                "REQ-400",
+                List.of(new ValidationError(exception.getParameterName(), "is required")),
+                request
+        );
+    }
+
+    /**
+     * Returns 400 because {@code sort} names a property the entity does not have. Spring Data throws
+     * it while building the query and nobody translates it, so it used to answer 500.
+     */
+    @ExceptionHandler(PropertyReferenceException.class)
+    public ResponseEntity<ApiErrorResponse> handleUnknownSortProperty(PropertyReferenceException exception, HttpServletRequest request) {
+        LOGGER.warn("Unknown property in {} {}: {}", request.getMethod(), request.getRequestURI(), exception.getMessage());
+        return clientErrorResponse(
+                HttpStatus.BAD_REQUEST,
+                "Invalid sort property.",
+                "REQ-400",
+                List.of(new ValidationError("sort", "unknown property '" + exception.getPropertyName() + "'")),
+                request
+        );
+    }
+
+    /**
+     * Returns 405 with the {@code Allow} header: the resource exists, but not for that method. It
+     * used to fall into the catch-all and answer 500.
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException exception, HttpServletRequest request) {
+        LOGGER.warn("Unsupported method {} {}", request.getMethod(), request.getRequestURI());
+        ApiErrorResponse body = errorResponse(HttpStatus.METHOD_NOT_ALLOWED, "HTTP method not supported for this resource.", "REQ-405",
+                List.of(), request);
+        Set<HttpMethod> allowed = exception.getSupportedHttpMethods();
+        return allowed == null || allowed.isEmpty()
+                ? ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(body)
+                : ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).allow(allowed.toArray(HttpMethod[]::new)).body(body);
     }
 
     /**

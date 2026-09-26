@@ -131,6 +131,16 @@ class ReportExportControllerMockMvcTest {
     }
 
     @Test
+    void aMonthlyReportWithoutMonthIsA400() throws Exception {
+        mockMvc.perform(get(MONTHLY).with(role(SecurityRoles.MAINTENANCE_READ)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("REQ-400"))
+                .andExpect(jsonPath("$.validationErrors[0].field").value("month"));
+
+        verifyNoInteractions(reportService);
+    }
+
+    @Test
     void anUnknownFormatIsARejectedRequestAndNothingIsExported() throws Exception {
         when(reportService.progress(null, null, null, null, null)).thenReturn(progress());
 

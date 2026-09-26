@@ -124,11 +124,21 @@ class DtoValidationTest {
     }
 
     @Test
+    void aTaskMaterialLineNeedsAMaterialIdOrCode() {
+        UUID warehouseId = UUID.randomUUID();
+
+        assertTrue(validator.validate(new TaskMaterialRequest(UUID.randomUUID(), null, warehouseId, BigDecimal.ONE, "ud")).isEmpty());
+        assertTrue(validator.validate(new TaskMaterialRequest(null, "GA70", warehouseId, BigDecimal.ONE, null)).isEmpty());
+        assertEquals(Set.of("materialReference"), fields(validator.validate(new TaskMaterialRequest(null, " ", warehouseId, BigDecimal.ONE, "ud"))),
+                "Without it the line reached MaterialLineFactory and answered 500");
+    }
+
+    @Test
     void reasonsMeasurementsAndTaskMaterialsAreValidated() {
         assertEquals(Set.of("resolutionNotes"), fields(validator.validate(new ResolveDefectRequest(" ", null, null, null))));
         assertEquals(Set.of("reason"), fields(validator.validate(new DefectCommentRequest(""))));
         assertTrue(validator.validate(new CancelShiftRequest("rain")).isEmpty());
-        assertEquals(Set.of("warehouseId", "quantity"), fields(validator.validate(new TaskMaterialRequest(null, null, null, new BigDecimal("-1"), null))));
+        assertEquals(Set.of("warehouseId", "quantity", "materialReference"), fields(validator.validate(new TaskMaterialRequest(null, null, null, new BigDecimal("-1"), null))));
         assertEquals(Set.of("netWorkMinutes"), fields(validator.validate(new CloseShiftRequest(null, null, -5, null))));
         assertEquals(Set.of("measuredValue"), fields(validator.validate(new CheckItemUpdateRequest(new BigDecimal("1.2345"), null, null, null, null))));
     }
