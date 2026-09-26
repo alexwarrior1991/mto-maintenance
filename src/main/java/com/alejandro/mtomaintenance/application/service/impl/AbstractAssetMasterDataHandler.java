@@ -94,6 +94,18 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
         return false;
     }
 
+    /**
+     * Lo que se deriva de otros activos tras un upsert aplicado, en la misma transaccion: la via y el
+     * paquete que el origen no publica para un activo y que tiene otro (el perfil de un seccionador,
+     * los perfiles de la via de un aislador). Nada por defecto.
+     */
+    protected void afterSynchronized(String sourceEntityId) {
+    }
+
+    protected CatenaryAssetRepository assets() {
+        return repository;
+    }
+
     @Override
     public void onCreated(MasterDataChangedMessage message, MasterDataEventContext context) {
         synchronize(message, context);
@@ -154,6 +166,7 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
         }
 
         synchronizeSwitches(snapshot, sourceEntityId);
+        afterSynchronized(sourceEntityId);
 
         logger.info("Asset synchronized from {}: sourceEntityId={}, code={}, enabled={}, switches={}, sequenceNumber={}",
                 entityName(), sourceEntityId, code, snapshot.enabled(), snapshot.switches().size(),

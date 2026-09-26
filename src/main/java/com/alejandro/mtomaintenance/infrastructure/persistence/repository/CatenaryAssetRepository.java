@@ -115,6 +115,97 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             @Param("sourceSequenceNumber") Long sourceSequenceNumber
     );
 
+    /**
+     * Un seccionador esta sobre la via y en el paquete de su perfil: mto-configuration no publica
+     * ninguno de los dos para el. Tras el upsert del seccionador, los toma del perfil con el que
+     * cuelga, si ese perfil ya llego; si no, los pone {@link #propagateLocationToDisconnectors}
+     * cuando llegue. SQL nativo como el upsert, asi que tampoco deja revision de Envers.
+     */
+    @Modifying
+    @Query(value = """
+            update catenary_asset disconnector
+               set track_id = profile.track_id,
+                   execution_package_id = profile.execution_package_id,
+                   updated_at = now()
+              from catenary_asset profile
+             where disconnector.source_service = :sourceService
+               and disconnector.source_entity_id = :sourceEntityId
+               and disconnector.type = 'DISCONNECTOR'
+               and profile.source_service = disconnector.source_service
+               and profile.source_entity_id = disconnector.profile_source_id
+               and profile.type = 'PROFILE'
+               and (disconnector.track_id is distinct from profile.track_id
+                    or disconnector.execution_package_id is distinct from profile.execution_package_id)
+            """, nativeQuery = true)
+    int inheritLocationOfDisconnector(@Param("sourceService") String sourceService, @Param("sourceEntityId") String sourceEntityId);
+
+    /**
+     * Un aislador de seccion esta en el paquete de su via, que mto-configuration tampoco publica para
+     * el. Todos los perfiles de una via traen el mismo (el de la via): se toma el del ultimo que
+     * llego. Sin perfiles de su via aun, lo pone {@link #propagatePackageToSectionInsulators}.
+     */
+    @Modifying
+    @Query(value = """
+            update catenary_asset insulator
+               set execution_package_id = (
+                       select profile.execution_package_id
+                         from catenary_asset profile
+                        where profile.source_service = insulator.source_service
+                          and profile.type = 'PROFILE'
+                          and profile.track_id = insulator.track_id
+                          and profile.execution_package_id is not null
+                        order by profile.updated_at desc, profile.id
+                        limit 1),
+                   updated_at = now()
+             where insulator.source_service = :sourceService
+               and insulator.source_entity_id = :sourceEntityId
+               and insulator.type = 'SECTION_INSULATOR'
+               and insulator.track_id is not null
+            """, nativeQuery = true)
+    int inheritPackageOfSectionInsulator(@Param("sourceService") String sourceService, @Param("sourceEntityId") String sourceEntityId);
+
+    /**
+     * Tras el upsert de un perfil, sus seccionadores le siguen: da igual que evento llegue antes, y un
+     * perfil que cambia de via se lleva al seccionador con el.
+     */
+    @Modifying
+    @Query(value = """
+            update catenary_asset disconnector
+               set track_id = profile.track_id,
+                   execution_package_id = profile.execution_package_id,
+                   updated_at = now()
+              from catenary_asset profile
+             where profile.source_service = :sourceService
+               and profile.source_entity_id = :profileSourceEntityId
+               and profile.type = 'PROFILE'
+               and disconnector.source_service = profile.source_service
+               and disconnector.profile_source_id = profile.source_entity_id
+               and disconnector.type = 'DISCONNECTOR'
+               and (disconnector.track_id is distinct from profile.track_id
+                    or disconnector.execution_package_id is distinct from profile.execution_package_id)
+            """, nativeQuery = true)
+    int propagateLocationToDisconnectors(@Param("sourceService") String sourceService,
+                                         @Param("profileSourceEntityId") String profileSourceEntityId);
+
+    /** Tras el upsert de un perfil, los aisladores de su via toman su paquete: cambia con el de la via. */
+    @Modifying
+    @Query(value = """
+            update catenary_asset insulator
+               set execution_package_id = profile.execution_package_id,
+                   updated_at = now()
+              from catenary_asset profile
+             where profile.source_service = :sourceService
+               and profile.source_entity_id = :profileSourceEntityId
+               and profile.type = 'PROFILE'
+               and profile.execution_package_id is not null
+               and insulator.source_service = profile.source_service
+               and insulator.track_id = profile.track_id
+               and insulator.type = 'SECTION_INSULATOR'
+               and insulator.execution_package_id is distinct from profile.execution_package_id
+            """, nativeQuery = true)
+    int propagatePackageToSectionInsulators(@Param("sourceService") String sourceService,
+                                            @Param("profileSourceEntityId") String profileSourceEntityId);
+
     /** Una via borrada en origen deja sin sentido todo lo que hay sobre ella, tramos incluidos. */
     @Modifying
     @Query(value = """

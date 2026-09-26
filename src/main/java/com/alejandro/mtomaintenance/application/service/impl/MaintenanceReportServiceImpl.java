@@ -50,9 +50,11 @@ class MaintenanceReportServiceImpl implements MaintenanceReportService {
 
         // Agrupado por (EP, via, tipo). Un perfil cuenta como revisado si tuvo una tarea completada o
         // una inspeccion en el rango; sin rango, si alguna vez lo tuvo (lastPreventiveCompletedAt).
+        // Con filtro de via todo va en esa via, tambien el aislador que llega por su otra via.
         Map<String, List<CatenaryAsset>> groups = new LinkedHashMap<>();
         for (CatenaryAsset asset : assets) {
-            groups.computeIfAbsent(asset.getExecutionPackageId() + "|" + asset.getTrackId() + "|" + asset.getType(), key -> new ArrayList<>()).add(asset);
+            Long track = trackId == null ? asset.getTrackId() : trackId;
+            groups.computeIfAbsent(asset.getExecutionPackageId() + "|" + track + "|" + asset.getType(), key -> new ArrayList<>()).add(asset);
         }
 
         List<ProgressRowResponse> rows = new ArrayList<>();
@@ -80,7 +82,7 @@ class MaintenanceReportServiceImpl implements MaintenanceReportService {
                     }
                 }
             }
-            rows.add(new ProgressRowResponse(first.getExecutionPackageId(), first.getTrackId(), first.getType(),
+            rows.add(new ProgressRowResponse(first.getExecutionPackageId(), trackId == null ? first.getTrackId() : trackId, first.getType(),
                     group.size(), groupChecked, ratio(groupChecked, group.size()), groupCoveredKm, groupTotalKm));
             total += group.size();
             checked += groupChecked;

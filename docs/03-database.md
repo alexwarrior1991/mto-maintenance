@@ -106,6 +106,16 @@ The collection on `CatenaryAsset` is therefore `@NotAudited`.
 reason in `stock_sync_error`. No row changes: a line left `FAILED` by an old rejection is still
 retried by `sync`, which now tells the two apart.
 
+## Disconnector and insulator location (`V9`)
+
+No schema change. `mto-configuration` publishes neither the track nor the package of a
+disconnector, nor the package of a section insulator; since `V9` they are derived from the profiles
+(`docs/06-messaging.md`), and the migration filled what was stored: disconnectors from their profile
+(`profile_source_id` = the profile's `source_entity_id`), insulators from the profiles of their
+track, and then the empty `execution_package_id`/`track_id` of the orders, defects and inspections
+created on them (only the empty ones: a value is never overwritten). Like every master-data write it
+is SQL outside Hibernate, so the `_aud` twins show the holes until the next change through the API.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`

@@ -68,6 +68,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -530,6 +531,36 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertTrue(reportRepository.findAssetIdsWorkedBetween(null, null).contains(profile.getId()), "No window: everything ever worked");
         assertTrue(reportRepository.findAssetIdsWorkedBetween(null, to).contains(profile.getId()));
         assertFalse(reportRepository.findAssetIdsWorkedBetween(to, null).contains(profile.getId()));
+    }
+
+    @Test
+    void theProgressReportFindsDisconnectorsAndInsulatorsByPackageAndAnInsulatorByEitherOfItsTracks() {
+        long executionPackageId = System.nanoTime();
+        long trackId = executionPackageId + 1;
+        long connectedTrackId = executionPackageId + 2;
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        CatenaryAsset profile = profile("80-1.04-" + suffix, trackId, "80196.630");
+        profile.setExecutionPackageId(executionPackageId);
+        // Como los dejan ahora los manejadores de datos maestros: el seccionador con la via y el
+        // paquete de su perfil, el aislador con el paquete de su via.
+        CatenaryAsset disconnector = CatenaryAsset.builder().code("DSC-" + suffix).name("HSA-NS5").type(CatenaryAssetType.DISCONNECTOR)
+                .trackId(trackId).executionPackageId(executionPackageId).build();
+        CatenaryAsset insulator = CatenaryAsset.builder().code("SIN-" + suffix).name("SI-12").type(CatenaryAssetType.SECTION_INSULATOR)
+                .trackId(trackId).connectedTrackId(connectedTrackId).executionPackageId(executionPackageId).build();
+        assetRepository.saveAll(List.of(profile, disconnector, insulator));
+        entityManager.flush();
+        entityManager.clear();
+
+        assertEquals(Set.of(profile.getId(), disconnector.getId(), insulator.getId()),
+                ids(reportRepository.findReportableAssets(executionPackageId, null, null)));
+        assertEquals(Set.of(profile.getId(), disconnector.getId(), insulator.getId()), ids(reportRepository.findReportableAssets(null, trackId, null)));
+        assertEquals(Set.of(insulator.getId()), ids(reportRepository.findReportableAssets(null, connectedTrackId, null)),
+                "An insulator between two tracks is on both");
+        assertEquals(Set.of(disconnector.getId()), ids(reportRepository.findReportableAssets(executionPackageId, trackId, CatenaryAssetType.DISCONNECTOR)));
+    }
+
+    private static Set<UUID> ids(List<CatenaryAsset> assets) {
+        return assets.stream().map(CatenaryAsset::getId).collect(Collectors.toSet());
     }
 
     @Test
