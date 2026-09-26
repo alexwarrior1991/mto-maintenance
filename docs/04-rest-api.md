@@ -105,10 +105,12 @@ partsReplaced, resolvedInShiftId}`.
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset |
 | 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track) |
-| 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` line without `force`, removing a consumed line or a line of a completed or cancelled order |
+| 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order |
+| 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
 | 409 `<AGG>-409` | Duplicated code |
 | 415 `REQ-415` | Unsupported media type |
 | 422 `INS-001` | Inconsistent inspection result / checklist |
+| 422 `STK-422` | `mto-stock` rejected the step for another reason (a material or warehouse retired, a reservation no longer active...), on an explicit `sync` or when removing a reserved line; its code and message are in `message` |
 | 503 `STK-503` | `mto-stock` unreachable on an explicit `sync`, or when removing a reserved line (the line stays) |
 
 ## Security

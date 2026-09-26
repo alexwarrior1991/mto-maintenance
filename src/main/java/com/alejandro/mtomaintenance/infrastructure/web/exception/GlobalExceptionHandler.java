@@ -10,6 +10,7 @@ import com.alejandro.mtomaintenance.application.exception.InvalidTransitionExcep
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -65,9 +66,6 @@ public class GlobalExceptionHandler {
         return businessResponse(exception, HttpStatus.CONFLICT, request);
     }
 
-    /**
-     * Returns 409 because the command conflicts with the movement-derived available stock.
-     */
     /** Transicion no permitida: el recurso existe pero su estado actual no admite la operacion. */
     @ExceptionHandler({InvalidTransitionException.class, AssetDisabledException.class, ShiftException.class,
             MaterialUsageException.class})
@@ -80,10 +78,20 @@ public class GlobalExceptionHandler {
         return businessResponse(exception, HttpStatus.UNPROCESSABLE_CONTENT, request);
     }
 
-    /** Solo llega aqui cuando el cliente pidio sincronizar con stock explicitamente. */
+    /** Solo llega aqui cuando el cliente pidio hablar con stock explicitamente: sincronizar una linea o quitar una reservada. */
     @ExceptionHandler(StockUnavailableException.class)
     public ResponseEntity<ApiErrorResponse> handleStockUnavailable(StockUnavailableException exception, HttpServletRequest request) {
         return businessResponse(exception, HttpStatus.SERVICE_UNAVAILABLE, request);
+    }
+
+    /**
+     * Stock respondio que no. Sin existencias es un conflicto con el stock disponible (409, como en
+     * mto-stock); cualquier otro rechazo, una regla de stock incumplida (422). El codigo y el mensaje
+     * de stock van en el mensaje.
+     */
+    @ExceptionHandler(StockRejectedException.class)
+    public ResponseEntity<ApiErrorResponse> handleStockRejected(StockRejectedException exception, HttpServletRequest request) {
+        return businessResponse(exception, exception.isInsufficientStock() ? HttpStatus.CONFLICT : HttpStatus.UNPROCESSABLE_CONTENT, request);
     }
 
     @ExceptionHandler(ValidationException.class)

@@ -8,7 +8,9 @@ import com.alejandro.mtomaintenance.application.exception.InvalidTransitionExcep
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
+import com.alejandro.mtomaintenance.application.exception.UnsyncedMaterialsException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.dto.defect.DefectCommentRequest;
 import com.alejandro.mtomaintenance.application.dto.error.ValidationError;
@@ -76,6 +78,25 @@ class GlobalExceptionHandlerTest {
         assertEquals("INS-001", codeOf(handler.handleInspection(new InspectionException("no"), request), HttpStatus.UNPROCESSABLE_CONTENT));
         assertEquals("STK-503", codeOf(handler.handleStockUnavailable(new StockUnavailableException("down"), request), HttpStatus.SERVICE_UNAVAILABLE));
         assertEquals("VAL-001", codeOf(handler.handleValidation(new ValidationException("bad"), request), HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void aStockRejectionAnswers409WhenStockIsShortAnd422OtherwiseKeepingTheReasonOfStock() {
+        MockHttpServletRequest request = request("POST", "/api/v1/maintenance/orders/1/materials/2/sync");
+
+        ResponseEntity<ApiErrorResponse> shortage = handler.handleStockRejected(new StockRejectedException(
+                "mto-stock rejected 'reserve 5 of GA70' with 409 STK-001: Insufficient available stock", 409, "STK-001", null), request);
+        assertEquals("STK-001", codeOf(shortage, HttpStatus.CONFLICT));
+        assertTrue(shortage.getBody().message().contains("Insufficient available stock"));
+
+        assertEquals("STK-422", codeOf(handler.handleStockRejected(new StockRejectedException(
+                "mto-stock rejected 'reserve 5 of GA70' with 422 WH-001: Warehouse 'W1' is inactive", 422, "WH-001", null), request),
+                HttpStatus.UNPROCESSABLE_CONTENT));
+        assertEquals("STK-422", codeOf(handler.handleStockRejected(new StockRejectedException(
+                "mto-stock rejected 'read reservation 1' with 400", 400, null, null), request), HttpStatus.UNPROCESSABLE_CONTENT),
+                "A rejection whose body could not be read");
+        assertEquals("MAT-001", codeOf(handler.handleStateConflict(new UnsyncedMaterialsException("pending lines"), request), HttpStatus.CONFLICT),
+                "Completing with lines not synchronized is still MAT-001");
     }
 
     @Test

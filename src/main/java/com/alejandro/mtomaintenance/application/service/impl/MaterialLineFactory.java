@@ -3,6 +3,7 @@ package com.alejandro.mtomaintenance.application.service.impl;
 import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.stock.StockMaterial;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
+import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.service.StockClient;
@@ -79,9 +80,9 @@ class MaterialLineFactory {
                 return stockClient.findMaterialById(materialId);
             }
             return stockClient.findMaterialByCode(materialCode.trim());
-        } catch (StockUnavailableException exception) {
-            // Sin stock a mano se registra con lo que trae la peticion; la reserva quedara FAILED y se
-            // reintentara con /sync.
+        } catch (StockUnavailableException | StockRejectedException exception) {
+            // Sin stock a mano se registra con lo que trae la peticion; si la reserva tampoco sale,
+            // la linea lo dira (FAILED o REJECTED) y se reintentara con /sync.
             return Optional.empty();
         }
     }

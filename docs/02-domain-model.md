@@ -28,7 +28,7 @@ are computed from the task types (4.5 effective hours per shift), never stored.
 | `plan` | `DRAFT` | `plannedDate` not in the past; reserves every `NOT_REQUESTED` material in stock |
 | `assign` | `PLANNED`, `ASSIGNED` → `ASSIGNED`; `IN_PROGRESS` keeps its status | `teamId` or `assignedUser` |
 | `start` | `PLANNED`, `ASSIGNED`; `DRAFT` only for `URGENT` | sets `actualStartDate` |
-| `complete` | `IN_PROGRESS` | no task `PENDING`/`IN_PROGRESS`; at least one `COMPLETED` task or `closingNotes`; `INSPECTION` needs an inspection with `originOrderId`; a `FAILED` material blocks unless `force` (supervise); consumes reservations or registers direct outputs; `PREVENTIVE` updates `asset.lastPreventiveCompletedAt` |
+| `complete` | `IN_PROGRESS` | no task `PENDING`/`IN_PROGRESS`; at least one `COMPLETED` task or `closingNotes`; `INSPECTION` needs an inspection with `originOrderId`; a `FAILED` or `REJECTED` material line blocks unless `force` (supervise), and the other lines keep what stock did even when that rejects the completion; consumes reservations or registers direct outputs; `PREVENTIVE` updates `asset.lastPreventiveCompletedAt` |
 | `cancel` | any non-terminal | reason required; releases reservations; open tasks → `CANCELLED`; linked defect `IN_PROGRESS` → `OPEN` |
 | `PUT` | full in `DRAFT`/`PLANNED`; afterwards only `description`, `priority`, `closingNotes` | |
 
@@ -98,17 +98,48 @@ Severity `LOW … CRITICAL`, status `OPEN → IN_PROGRESS → RESOLVED → CLOSE
 
 A line per (order, optional task, material, warehouse) with `plannedQuantity`, `consumedQuantity`
 (≤ planned unless `allowOverConsumption`), `unit`, the stock reservation id and
-`stockSyncStatus` (`NOT_REQUESTED`, `RESERVED`, `CONSUMED`, `RELEASED`, `FAILED`) with the last
-error. Reservation happens at `plan` (or when the line is added to an order already planned),
-consumption at `complete`, release at `cancel`; without a stock project the consumption is a
-direct output.
+`stockSyncStatus` (`NOT_REQUESTED`, `RESERVED`, `CONSUMED`, `RELEASED`, `FAILED`, `REJECTED`) with
+the last error. Reservation happens at `plan` (or when the line is added to an order already
+planned), consumption at `complete`, release at `cancel`; without a stock project the consumption is a
+direct output. The project is the one of the order's execution package (`EP-<id>` in stock), looked
+up once per plan or start; if stock is down at that moment the lines are left `FAILED`.
+
+A step that does not go through leaves the line in one of two states, both blocking `complete`
+unless `force`:
+
+- `FAILED`: stock did not answer (network, timeout, 5xx, circuit open, the service account refused).
+  `POST .../sync` retries, and answers 503 `STK-503` while stock is still down.
+- `REJECTED`: stock answered no, and the reason (its code and message) is in `stockSyncError`. Retrying
+  alone changes nothing: first something must change (more stock, another warehouse, a smaller
+  quantity). An explicit `sync` answers 409 `STK-001` when there is not enough stock and 422
+  `STK-422` for any other rejection.
+
+`mto-stock` publishes nothing, so before consuming or releasing a line that has a reservation the
+service reads it (`GET /reservations/{id}`). The reservation may have changed from the warehouse, or
+in an earlier attempt that failed halfway:
+
+| Reservation in stock | Completing (consume) | Cancelling (release) |
+|---|---|---|
+| `ACTIVE` | consume if used = reserved; release and output what was used if less; consume and output the excess if more | release |
+| `CONSUMED` | output only the excess over what was reserved | stays `CONSUMED`: the material left the warehouse |
+| `RELEASED`, `CANCELLED`, or unknown to stock (404) | direct output of what was used, or `RELEASED` if nothing was | `RELEASED` |
+
+The reserved quantity is the one stock holds, which the warehouse may have changed. So repeating a
+step never consumes or releases the same thing twice. A line that never got a reservation and used
+nothing ends `NOT_REQUESTED` instead of staying `FAILED` for good. In an order in progress, `sync`
+also checks a `RESERVED` line: if the warehouse released its reservation, it asks for another one.
+A consumed reservation remains the line's until the order completes. A line already `CONSUMED`
+cannot change any more (409 `MAT-001`): completing only settles what is not consumed yet.
+
+What cannot be reconciled this way is a reservation or an output that reached stock but whose answer
+was lost (a timeout): retrying repeats it. Avoiding that needs an idempotency key in `mto-stock`.
 
 A line registered by mistake is removed, not cancelled (`DELETE /orders/{id}/materials/{usageId}`):
 the row goes and Envers keeps its last state as a DELETED revision. A reserved line is released in
 stock first; if stock does not answer, the removal fails with 503 and the line stays, because its
-reservation would stay alive there. A reservation stock no longer holds (released, cancelled or
-consumed from the warehouse) does not block it. A consumed line, or a line of a completed or
-cancelled order, cannot be removed. There is no `CANCELLED` state on purpose: `stockSyncStatus`
+reservation would stay alive there. A reservation stock no longer holds (released or cancelled from
+the warehouse, or unknown to stock) does not block it. A consumed line, one whose reservation was
+consumed from the warehouse, or a line of a completed or cancelled order, cannot be removed. There is no `CANCELLED` state on purpose: `stockSyncStatus`
 describes the conversation with stock, and the unique (order, task, material, warehouse) would
 stop the line from being registered again.
 

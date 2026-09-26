@@ -81,6 +81,9 @@ public class StockClientConfiguration {
      * Umbrales del circuito 'stock'. Spring Cloud CircuitBreaker no lee las propiedades
      * resilience4j.* del starter de Boot (no esta en el classpath), asi que se configura aqui con
      * los valores de app.stock.circuit-breaker.
+     *
+     * <p>Un rechazo de stock (un 4xx de negocio, {@link RestClientStockClient#isRejection}) no cuenta
+     * ni como fallo ni como exito: stock ha respondido, asi que no dice nada de si esta caido.</p>
      */
     @Bean
     public Customizer<Resilience4JCircuitBreakerFactory> stockCircuitBreakerCustomizer(StockProperties properties) {
@@ -93,6 +96,7 @@ public class StockClientConfiguration {
                         .failureRateThreshold(settings.failureRateThreshold())
                         .waitDurationInOpenState(settings.waitDurationInOpenState())
                         .automaticTransitionFromOpenToHalfOpenEnabled(true)
+                        .ignoreException(RestClientStockClient::isRejection)
                         .build())
                 .timeLimiterConfig(TimeLimiterConfig.custom()
                         .timeoutDuration(settings.timeout())

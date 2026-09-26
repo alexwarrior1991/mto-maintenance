@@ -117,8 +117,15 @@ public class MaintenanceMaterialUsage extends AuditableEntity {
     @Column(name = "stock_sync_error", columnDefinition = "text")
     private String stockSyncError;
 
+    /** A medias con stock, por una caida (FAILED) o por un rechazo (REJECTED): bloquea completar la orden salvo force. */
     public boolean isSyncFailed() {
-        return StockSyncStatus.FAILED == stockSyncStatus;
+        return StockSyncStatus.FAILED == stockSyncStatus || StockSyncStatus.REJECTED == stockSyncStatus;
+    }
+
+    /** Nada pedido a stock, o nada que pedirle ya: sin proyecto contra el que reservar, o sin nada usado ni retenido. */
+    public void markNotRequested() {
+        this.stockSyncStatus = StockSyncStatus.NOT_REQUESTED;
+        this.stockSyncError = null;
     }
 
     public void markReserved(UUID reservationId) {
@@ -139,6 +146,11 @@ public class MaintenanceMaterialUsage extends AuditableEntity {
 
     public void markFailed(String error) {
         this.stockSyncStatus = StockSyncStatus.FAILED;
+        this.stockSyncError = error;
+    }
+
+    public void markRejected(String error) {
+        this.stockSyncStatus = StockSyncStatus.REJECTED;
         this.stockSyncError = error;
     }
 }

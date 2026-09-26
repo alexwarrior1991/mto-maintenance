@@ -139,7 +139,7 @@ public class MaintenanceOrderController {
         return ResponseEntity.ok(orderService.start(id, request == null ? null : request.comment()));
     }
 
-    @Operation(summary = "Complete order", description = "IN_PROGRESS -> COMPLETED. Needs an actual start, no open tasks, a completed task or closing notes; consumes the materials in mto-stock. force (supervise role) completes with material lines still pending stock synchronization.")
+    @Operation(summary = "Complete order", description = "IN_PROGRESS -> COMPLETED. Needs an actual start, no open tasks, a completed task or closing notes; consumes the materials in mto-stock. A material line left FAILED or REJECTED rejects it (409 MAT-001) keeping what mto-stock already did with the others; force (supervise role) completes with those lines still pending stock synchronization.")
     @PreAuthorize("!#request.forced or hasRole('" + SecurityRoles.MAINTENANCE_SUPERVISE + "')")
     @PostMapping("/{id}/complete")
     public ResponseEntity<MaintenanceOrderResponse> complete(@PathVariable UUID id, @Valid @RequestBody CompleteOrderRequest request) {
@@ -252,15 +252,18 @@ public class MaintenanceOrderController {
         return ResponseEntity.ok(materialService.update(id, usageId, request));
     }
 
-    @Operation(summary = "Retry stock synchronization of a material line", tags = "Materials", description = "Answers 503 when mto-stock is still unavailable.")
+    @Operation(summary = "Retry stock synchronization of a material line", tags = "Materials", description = "Redoes the step the order status calls for, "
+            + "asking mto-stock first how the reservation of the line is, so it never consumes or releases twice. The line keeps what happened even "
+            + "when the answer is an error: 503 STK-503 when mto-stock is still unavailable (FAILED), 409 STK-001 when it has not enough stock and "
+            + "422 STK-422 when it rejects the step for another reason (REJECTED, with its reason).")
     @PostMapping("/{id}/materials/{usageId}/sync")
     public ResponseEntity<MaterialUsageResponse> syncMaterial(@PathVariable UUID id, @PathVariable UUID usageId) {
         return ResponseEntity.ok(materialService.sync(id, usageId));
     }
 
     @Operation(summary = "Remove material line", tags = "Materials", description = "Deletes the line; its reservation in mto-stock is released first, "
-            + "and a reservation that stock no longer holds does not block it. A consumed line, or a line of a completed or cancelled order, "
-            + "cannot be removed (409 MAT-001). Answers 503 when mto-stock does not answer, and the line stays.")
+            + "and a reservation that stock no longer holds does not block it. A consumed line, one whose reservation was consumed from the warehouse, "
+            + "or a line of a completed or cancelled order, cannot be removed (409 MAT-001). Answers 503 when mto-stock does not answer, and the line stays.")
     @DeleteMapping("/{id}/materials/{usageId}")
     public ResponseEntity<Void> removeMaterial(@PathVariable UUID id, @PathVariable UUID usageId) {
         materialService.remove(id, usageId);

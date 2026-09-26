@@ -23,6 +23,7 @@ import com.alejandro.mtomaintenance.infrastructure.web.exception.GlobalException
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageResponse;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
@@ -45,6 +46,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -209,6 +211,26 @@ class MaintenanceOrderControllerMockMvcTest {
         mockMvc.perform(delete(ORDERS + "/{id}/materials/{usageId}", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_DELETE)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("MAT-001"));
+    }
+
+    @Test
+    void aStockRejectionOnAnExplicitSyncAnswers409WhenStockIsShortAnd422OtherwiseWithTheReasonOfStock() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID usageId = UUID.randomUUID();
+        when(materialService.sync(orderId, usageId))
+                .thenThrow(new StockRejectedException("mto-stock rejected 'reserve 5 of GA70' with 409 STK-001: Insufficient available stock",
+                        409, "STK-001", null))
+                .thenThrow(new StockRejectedException("mto-stock rejected 'reserve 5 of GA70' with 422 WH-001: Warehouse 'W1' is inactive",
+                        422, "WH-001", null));
+
+        mockMvc.perform(post(ORDERS + "/{id}/materials/{usageId}/sync", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_WRITE)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("STK-001"))
+                .andExpect(jsonPath("$.message").value(containsString("Insufficient available stock")));
+        mockMvc.perform(post(ORDERS + "/{id}/materials/{usageId}/sync", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_WRITE)))
+                .andExpect(status().is(422))
+                .andExpect(jsonPath("$.errorCode").value("STK-422"))
+                .andExpect(jsonPath("$.message").value(containsString("WH-001")));
     }
 
     @Test

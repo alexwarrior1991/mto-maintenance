@@ -2,26 +2,34 @@ package com.alejandro.mtomaintenance.infrastructure.stock;
 
 import com.alejandro.mtomaintenance.application.dto.stock.StockMaterial;
 import com.alejandro.mtomaintenance.application.dto.stock.StockReservation;
-import com.alejandro.mtomaintenance.application.exception.StockReservationNotActiveException;
+import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import com.alejandro.mtomaintenance.configuration.stock.StockClientConfiguration;
+import com.alejandro.mtomaintenance.configuration.stock.StockProperties;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.timelimiter.TimeLimiterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
+import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
+import java.net.SocketTimeoutException;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
@@ -34,26 +42,25 @@ class StockClientTest {
 
     private MockRestServiceServer server;
     private RestClientStockClient client;
-    private io.github.resilience4j.circuitbreaker.CircuitBreaker breaker;
+    private CircuitBreakerRegistry registry;
 
     @BeforeEach
     void setUp() {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        // Circuito real con umbrales bajos: dos fallos seguidos lo abren.
-        breaker = io.github.resilience4j.circuitbreaker.CircuitBreaker.of("stock", CircuitBreakerConfig.custom()
-                .slidingWindowSize(2).minimumNumberOfCalls(2).failureRateThreshold(50).build());
-        CircuitBreaker springBreaker = new CircuitBreaker() {
-            @Override
-            public <T> T run(Supplier<T> toRun, Function<Throwable, T> fallback) {
-                try {
-                    return breaker.executeSupplier(toRun);
-                } catch (Throwable throwable) {
-                    return fallback.apply(throwable);
-                }
-            }
-        };
-        client = new RestClientStockClient(builder.baseUrl("http://stock").build(), springBreaker);
+        // El circuito de produccion, tal como lo configura StockClientConfiguration, con umbrales
+        // bajos: dos fallos seguidos lo abren.
+        registry = CircuitBreakerRegistry.ofDefaults();
+        Resilience4JCircuitBreakerFactory factory = new Resilience4JCircuitBreakerFactory(registry, TimeLimiterRegistry.ofDefaults(), null);
+        StockProperties properties = new StockProperties(true, "http://stock", "mto-stock",
+                new StockProperties.CircuitBreaker(2, 2, 50, Duration.ofSeconds(30), Duration.ofSeconds(5)));
+        new StockClientConfiguration().stockCircuitBreakerCustomizer(properties).customize(factory);
+        client = new RestClientStockClient(builder.baseUrl("http://stock").build(), factory.create("stock"));
+    }
+
+    /** El estado del circuito que creo la primera llamada; pedirlo antes lo crearia con la configuracion por defecto. */
+    private CircuitBreaker.State circuit() {
+        return registry.find("stock").orElseThrow().getState();
     }
 
     @Test
@@ -96,16 +103,82 @@ class StockClientTest {
     }
 
     @Test
-    void aBusinessRejectionFromStockBecomesAStockUnavailableExceptionWithTheReason() {
+    void projectsAreFoundBySearchingTheirCodeAndPickingTheExactOne() {
+        UUID ep6 = UUID.randomUUID();
+        server.expect(requestTo("http://stock/api/v1/inventory/projects?search=EP-6&size=200&sort=code,asc"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {"content":[{"id":"%s","code":"EP-6","name":"Package 6","active":true},
+                                    {"id":"%s","code":"EP-60","name":"Package 60","active":true}],
+                         "page":{"number":0}}""".formatted(ep6, UUID.randomUUID()), MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://stock/api/v1/inventory/projects?search=EP-7&size=200&sort=code,asc"))
+                .andRespond(withSuccess("""
+                        {"content":[{"id":"%s","code":"EP-70","name":"Package 70","active":true}],"page":{"number":0}}"""
+                        .formatted(UUID.randomUUID()), MediaType.APPLICATION_JSON));
+
+        assertEquals(Optional.of(ep6), client.findProjectIdByCode("EP-6"));
+        assertTrue(client.findProjectIdByCode("EP-7").isEmpty(), "EP-70 contains the text but is another package");
+        server.verify();
+    }
+
+    @Test
+    void aReservationIsReadAsStockHasItAndOneStockDoesNotKnowIsEmpty() {
         UUID reservationId = UUID.randomUUID();
-        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + reservationId + "/consume"))
+        UUID unknown = UUID.randomUUID();
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + reservationId))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {"id":"%s","material":{"id":"%s","code":"GA70"},"warehouse":{"id":"%s","code":"WH"},
+                         "project":{"id":"%s","code":"EP-6"},"quantity":1.5,"status":"CONSUMED","consumedAt":"2026-09-26T10:00:00Z"}"""
+                        .formatted(reservationId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()), MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + unknown))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND).contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"errorCode\":\"RES-404\",\"message\":\"Reservation not found\"}"));
+
+        StockReservation reservation = client.findReservation(reservationId).orElseThrow();
+
+        assertEquals(0, new BigDecimal("1.5").compareTo(reservation.quantity()));
+        assertTrue(reservation.isConsumed());
+        assertFalse(reservation.isActive());
+        assertTrue(client.findReservation(unknown).isEmpty());
+        server.verify();
+    }
+
+    @Test
+    void aBusinessRejectionCarriesTheCodeOfStockAndDoesNotOpenTheCircuit() {
+        UUID materialId = UUID.randomUUID();
+        UUID reservationId = UUID.randomUUID();
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations"))
                 .andRespond(withStatus(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"errorCode\":\"STK-001\",\"message\":\"insufficient stock\"}"));
+                        .body("{\"status\":409,\"errorCode\":\"STK-001\",\"message\":\"Insufficient available stock\",\"path\":\"/x\"}"));
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + reservationId + "/consume"))
+                .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY).contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"errorCode\":\"RES-001\",\"message\":\"Only active reservations can be changed\"}"));
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + reservationId + "/release"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND).contentType(MediaType.TEXT_HTML).body("<html>not here</html>"));
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + reservationId + "/release"))
+                .andRespond(withSuccess());
 
-        StockUnavailableException exception = assertThrows(StockUnavailableException.class, () -> client.consume(reservationId));
+        StockRejectedException shortage = assertThrows(StockRejectedException.class,
+                () -> client.reserve(materialId, UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("5")));
+        assertEquals(409, shortage.getStatus());
+        assertEquals("STK-001", shortage.getStockErrorCode());
+        assertTrue(shortage.isInsufficientStock());
+        assertTrue(shortage.getMessage().contains("409 STK-001: Insufficient available stock"), shortage.getMessage());
 
-        assertTrue(exception.getMessage().contains("409"));
-        assertTrue(exception.getMessage().contains("insufficient stock"));
+        StockRejectedException notActive = assertThrows(StockRejectedException.class, () -> client.consume(reservationId));
+        assertEquals("RES-001", notActive.getStockErrorCode());
+        assertFalse(notActive.isInsufficientStock());
+
+        // Un cuerpo que no es el JSON de stock (un proxy, por ejemplo) sigue siendo un rechazo, sin codigo.
+        StockRejectedException unreadable = assertThrows(StockRejectedException.class, () -> client.release(reservationId));
+        assertNull(unreadable.getStockErrorCode());
+        assertTrue(unreadable.getMessage().contains("<html>not here</html>"));
+
+        // Tres rechazos seguidos con un circuito que abre con dos fallos: sigue cerrado, porque stock respondio.
+        assertEquals(CircuitBreaker.State.CLOSED, circuit());
+        client.release(reservationId);
+        server.verify();
     }
 
     @Test
@@ -118,7 +191,7 @@ class StockClientTest {
 
         assertThrows(StockUnavailableException.class, () -> client.release(reservationId));
         assertThrows(StockUnavailableException.class, () -> client.release(reservationId));
-        assertEquals(io.github.resilience4j.circuitbreaker.CircuitBreaker.State.OPEN, breaker.getState());
+        assertEquals(CircuitBreaker.State.OPEN, circuit());
 
         // Tercera llamada: el servidor simulado no espera nada mas, asi que si llegara fallaria el test.
         StockUnavailableException fastFailure = assertThrows(StockUnavailableException.class, () -> client.release(reservationId));
@@ -127,30 +200,34 @@ class StockClientTest {
     }
 
     @Test
-    void releasingAReservationNoLongerActiveIsToldApartFromAnOutage() {
-        UUID released = UUID.randomUUID();
-        UUID unknown = UUID.randomUUID();
-        UUID forbidden = UUID.randomUUID();
-        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + released + "/release"))
-                .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY).contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"errorCode\":\"RES-001\",\"message\":\"Only active reservations can be changed\"}"));
-        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + unknown + "/release"))
-                .andRespond(withStatus(HttpStatus.NOT_FOUND));
-        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + forbidden + "/release"))
+    void theServiceAccountBeingRefusedIsAnOutageAndCountsForTheCircuit() {
+        UUID reservationId = UUID.randomUUID();
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + reservationId + "/release"))
                 .andRespond(withStatus(HttpStatus.FORBIDDEN));
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + reservationId + "/release"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
 
-        // 422 y 404: la reserva ya no retiene nada en stock.
-        StockReservationNotActiveException notActive = assertThrows(StockReservationNotActiveException.class, () -> client.release(released));
-        assertTrue(notActive.getMessage().contains("Only active reservations can be changed"));
-        // El circuito de este test se abre con dos fallos: se cierra entre llamada y llamada.
-        breaker.reset();
-        assertThrows(StockReservationNotActiveException.class, () -> client.release(unknown));
-        breaker.reset();
-
-        // Un 403 de la cuenta de servicio no dice nada de la reserva: sigue siendo indisponibilidad.
-        StockUnavailableException outage = assertThrows(StockUnavailableException.class, () -> client.release(forbidden));
-        assertFalse(outage instanceof StockReservationNotActiveException);
+        // 403 y 401 hablan de la cuenta de servicio, no de la reserva: se arreglan sin tocar la linea.
+        assertInstanceOf(StockUnavailableException.class, assertThrows(RuntimeException.class, () -> client.release(reservationId)));
+        assertInstanceOf(StockUnavailableException.class, assertThrows(RuntimeException.class, () -> client.release(reservationId)));
+        assertEquals(CircuitBreaker.State.OPEN, circuit());
         server.verify();
+    }
+
+    @Test
+    void onlyA4xxOtherThanTheCredentialsTimeoutsAndThrottlingIsARejection() {
+        assertTrue(RestClientStockClient.isRejection(HttpClientErrorException.create(
+                HttpStatus.CONFLICT, "Conflict", null, null, null)));
+        assertTrue(RestClientStockClient.isRejection(HttpClientErrorException.create(
+                HttpStatus.BAD_REQUEST, "Bad Request", null, null, null)));
+        for (HttpStatus status : new HttpStatus[] {HttpStatus.UNAUTHORIZED, HttpStatus.FORBIDDEN, HttpStatus.REQUEST_TIMEOUT,
+                HttpStatus.TOO_MANY_REQUESTS}) {
+            assertFalse(RestClientStockClient.isRejection(HttpClientErrorException.create(
+                    status, status.getReasonPhrase(), null, null, null)), status.toString());
+        }
+        assertFalse(RestClientStockClient.isRejection(HttpServerErrorException.create(
+                HttpStatus.SERVICE_UNAVAILABLE, "Unavailable", null, null, null)));
+        assertFalse(RestClientStockClient.isRejection(new SocketTimeoutException("read timed out")));
     }
 
     @Test

@@ -47,6 +47,12 @@ class NoOpStockClient implements StockClient {
     }
 
     @Override
+    public Optional<StockReservation> findReservation(UUID reservationId) {
+        LOGGER.debug("Stock client disabled: reservation lookup skipped ({})", reservationId);
+        return Optional.empty();
+    }
+
+    @Override
     public StockReservation reserve(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity) {
         throw new UnsupportedOperationException("stock client is disabled");
     }

@@ -91,7 +91,10 @@ reserves every line, completing it consumes the reservations (or registers a dir
 the order has no stock project), cancelling releases them. The call goes out with the service
 account `mto-maintenance-svc`, which needs `stock-read` and `stock-write` on `mto-stock-api`
 (`mto-platform/keycloak/apply-partials.sh` grants them locally). When `mto-stock` is down the line
-is left `FAILED` and `POST /orders/{id}/materials/{usageId}/sync` retries.
+is left `FAILED`; when it answers no (not enough stock, a warehouse retired...) it is left `REJECTED`
+with the reason. `POST /orders/{id}/materials/{usageId}/sync` retries, and before consuming or
+releasing it asks `mto-stock` how the reservation is, so repeating never consumes twice
+([`docs/02-domain-model.md`](docs/02-domain-model.md)).
 
 ## Security
 
