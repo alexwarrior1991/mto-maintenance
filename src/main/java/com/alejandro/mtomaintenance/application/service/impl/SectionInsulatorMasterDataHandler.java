@@ -14,7 +14,8 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Aislador de seccion: inspeccion propia. Cuelga de una estacion y trae su propio 'enabled'.
+ * Aislador de seccion: inspeccion propia. Cuelga de una estacion y trae su propio 'enabled'. El
+ * paquete no viene en el evento: es el de su via, y se toma de los perfiles de esa via.
  *
  * <p>Es el unico activo que se situa sobre <b>agujas</b>: normalmente separa las catenarias de dos
  * vias que conectan por una, y a veces esta en medio de una sola. El equipo que va de noche
@@ -39,6 +40,12 @@ class SectionInsulatorMasterDataHandler extends AbstractAssetMasterDataHandler {
     @Override
     protected boolean ownsSwitches() {
         return true;
+    }
+
+    /** Sin perfiles de su via aun, el paquete lo pone el primero que llegue. */
+    @Override
+    protected void afterSynchronized(String sourceEntityId) {
+        assets().inheritPackageOfSectionInsulator(SOURCE_SERVICE, sourceEntityId);
     }
 
     @Override

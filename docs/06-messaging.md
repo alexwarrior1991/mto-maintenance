@@ -38,9 +38,9 @@ transaction; `recordFailure` runs in its own after it. A message without `data`,
 
 | Entity | Handler | Effect |
 |---|---|---|
-| `profile` | `ProfileMasterDataHandler` | Upsert `PROFILE` (`PRF-<id>`, name = `profileId`, kp, `track.id`, `track.executionPackageId`, `sectionings[].code` joined) / deactivate on `DELETED` |
-| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id`, `profile.id`, `profile.kp`) / deactivate |
-| `section-insulator` | `SectionInsulatorMasterDataHandler` | Upsert `SECTION_INSULATOR` (`SIN-<id>`, `station.id`, `enabled`, `installationType`, `track.id`, `connectedTrack.id`, kp range) **plus its `switches[]` into `catenary_asset_switch`** / deactivate |
+| `profile` | `ProfileMasterDataHandler` | Upsert `PROFILE` (`PRF-<id>`, name = `profileId`, kp, `track.id`, `track.executionPackageId`, `sectionings[].code` joined), then passes its track and package on to its disconnectors and its package to the insulators of its track / deactivate on `DELETED` |
+| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id`, `profile.id`, `profile.kp`), then takes track and package from its profile / deactivate |
+| `section-insulator` | `SectionInsulatorMasterDataHandler` | Upsert `SECTION_INSULATOR` (`SIN-<id>`, `station.id`, `enabled`, `installationType`, `track.id`, `connectedTrack.id`, kp range) **plus its `switches[]` into `catenary_asset_switch`**, then takes the package of the profiles of its track / deactivate |
 | `track` | `TrackMasterDataHandler` | `DELETED` only: `deactivateByTrack(trackId)` |
 | `execution-package`, `station`, `cantilever`, `steady-arm` | none | logged and ignored |
 
@@ -51,6 +51,36 @@ disabled row. Payloads are read tolerantly (`MasterDataPayload`): numbers as str
 nested objects, lists of nested objects (`nestedList`), missing keys → `null`; an
 `installationType` this side does not know is stored as nothing rather than sent to the DLQ. A
 handler runs inside the inbox transaction and must not open its own.
+
+### Track and package derived from the profiles
+
+The contract leaves two holes that maintenance fills from its own rows, without changing it:
+
+- a **disconnector** event carries its station and its profile (id, name, kp), but neither the track
+  nor the execution package. Both are the profile's: `profile_source_id` of the disconnector is the
+  `source_entity_id` of its `PROFILE` asset (the numeric id `mto-configuration` publishes for both);
+- a **section insulator** event carries its track and the one it connects to, but not the package.
+  It is the package of its track, which every profile of that track carries
+  (`track.executionPackageId`).
+
+Four native statements in `CatenaryAssetRepository` keep it, after an upsert that was applied and in
+the same transaction, whichever event arrives first:
+
+| After the upsert of | Statement | Effect |
+|---|---|---|
+| a disconnector | `inheritLocationOfDisconnector` | track and package of its profile, if it has arrived |
+| a section insulator | `inheritPackageOfSectionInsulator` | package of the last profile received on its track |
+| a profile | `propagateLocationToDisconnectors` | its track and package to its disconnectors: a profile that changes track takes them along |
+| a profile | `propagatePackageToSectionInsulators` | its package to the insulators of its track: a track moved to another package moves them too |
+
+Without them, both types were missing from the progress and monthly reports by package (and the
+disconnectors from the progress report by track), from the searches by package or track, and from
+the `EP-<package>` stock project of their orders. `V9` filled what was already stored, including
+orders, defects and inspections created with the hole. Like the upsert, none of this leaves an
+Envers revision. A disconnector whose profile never arrives keeps both empty.
+
+A consequence: a track deleted at the source now also disables the disconnectors on it
+(`deactivateByTrack`), as it already did with its profiles and insulators.
 
 ### The switches of a section insulator
 

@@ -2060,6 +2060,26 @@ class BusinessLayerTest {
     }
 
     @Test
+    void filteredByTrackTheProgressReportCountsAnInsulatorOfTwoTracksUnderTheOneAskedFor() {
+        MaintenanceReportRepository repository = mock(MaintenanceReportRepository.class);
+        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository);
+        CatenaryAsset profile = profile("40-1.02", "40100.000");
+        profile.setTrackId(4L);
+        CatenaryAsset insulator = CatenaryAsset.builder().code("SIN-12").name("SI-12").type(CatenaryAssetType.SECTION_INSULATOR)
+                .trackId(2L).connectedTrackId(4L).executionPackageId(6L).build();
+        ReflectionTestUtils.setField(insulator, "id", UUID.randomUUID());
+        when(repository.findReportableAssets(null, 4L, null)).thenReturn(List.of(profile, insulator));
+        when(repository.findAssetIdsWorkedBetween(null, null)).thenReturn(Set.of());
+
+        ProgressReportResponse report = service.progress(null, 4L, null, null, null);
+
+        assertEquals(List.of(4L, 4L), report.rows().stream().map(ProgressRowResponse::trackId).toList(),
+                "The insulator reaches track 4 through its other track, and is counted there");
+        assertEquals(List.of(CatenaryAssetType.PROFILE, CatenaryAssetType.SECTION_INSULATOR),
+                report.rows().stream().map(ProgressRowResponse::assetType).toList());
+    }
+
+    @Test
     void theMonthlyReportAggregatesShiftsTasksProfilesAndMaterialsByMaterial() {
         MaintenanceReportRepository repository = mock(MaintenanceReportRepository.class);
         MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository);

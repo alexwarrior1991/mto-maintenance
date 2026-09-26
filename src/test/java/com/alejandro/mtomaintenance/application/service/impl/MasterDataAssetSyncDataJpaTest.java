@@ -32,6 +32,7 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -145,7 +146,8 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.TRACK, String.valueOf(trackId), MasterDataOperation.DELETED, Map.of("id", trackId)), new MasterDataEventContext(2L));
         entityManager.clear();
         assertFalse(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, profileId).orElseThrow().getEnabled());
-        assertTrue(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, disconnectorId).orElseThrow().getEnabled());
+        assertTrue(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, disconnectorId).orElseThrow().getEnabled(),
+                "Its profile (77) never arrived, so the disconnector has no track to go down with");
     }
 
     @Test
@@ -319,6 +321,76 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
     }
 
     @Test
+    void aDisconnectorTakesTheTrackAndPackageOfItsProfileWhicheverArrivesFirst() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long trackId = System.nanoTime();
+        long profileId = trackId + 7;
+        String early = "d-early-" + trackId;
+        String late = "d-late-" + trackId;
+
+        // El seccionador llega antes que su perfil: mto-configuration no publica su via ni su paquete.
+        dispatcher.handle(disconnectorMessage(early, profileId), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertNull(asset(early).getTrackId());
+        assertNull(asset(early).getExecutionPackageId());
+
+        // Llega el perfil y se los pasa; uno que llega despues los toma al momento.
+        dispatcher.handle(trackProfileMessage(profileId, trackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        dispatcher.handle(disconnectorMessage(late, profileId), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(trackId, asset(early).getTrackId());
+        assertEquals(6L, asset(early).getExecutionPackageId());
+        assertEquals(trackId, asset(late).getTrackId());
+        assertEquals(6L, asset(late).getExecutionPackageId());
+
+        // Un evento del seccionador no se los quita: se vuelven a tomar del perfil.
+        dispatcher.handle(disconnectorMessage(early, profileId), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertEquals(trackId, asset(early).getTrackId());
+
+        // El perfil cambia de via y de paquete: se lleva a sus seccionadores.
+        dispatcher.handle(trackProfileMessage(profileId, trackId + 1, 7L, MasterDataOperation.UPDATED), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertEquals(trackId + 1, asset(early).getTrackId());
+        assertEquals(7L, asset(early).getExecutionPackageId());
+        assertEquals(trackId + 1, asset(late).getTrackId());
+
+        // Ya estan sobre la via, asi que su borrado en origen los desactiva con ella.
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.TRACK, String.valueOf(trackId + 1), MasterDataOperation.DELETED,
+                Map.of("id", trackId + 1)), new MasterDataEventContext(3L));
+        entityManager.clear();
+        assertFalse(asset(early).getEnabled());
+        assertFalse(asset(late).getEnabled());
+    }
+
+    @Test
+    void aSectionInsulatorTakesThePackageOfTheProfilesOfItsTrackWhicheverArrivesFirst() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long trackId = System.nanoTime();
+        String early = "s-early-" + trackId;
+        String late = "s-late-" + trackId;
+
+        dispatcher.handle(insulatorOnTrack(early, trackId, trackId + 1), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertNull(asset(early).getExecutionPackageId(), "No profile of its track yet");
+
+        dispatcher.handle(trackProfileMessage(trackId + 11, trackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        // Un perfil de la otra via que conecta no cambia nada: el paquete es el de su via.
+        dispatcher.handle(trackProfileMessage(trackId + 12, trackId + 1, 9L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        dispatcher.handle(insulatorOnTrack(late, trackId, null), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(6L, asset(early).getExecutionPackageId());
+        assertEquals(6L, asset(late).getExecutionPackageId());
+        assertEquals(trackId, asset(early).getTrackId(), "The track of an insulator does come in its event");
+
+        // La via pasa a otro paquete: sus perfiles se republican con el, y sus aisladores le siguen.
+        dispatcher.handle(trackProfileMessage(trackId + 11, trackId, 8L, MasterDataOperation.UPDATED), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertEquals(8L, asset(early).getExecutionPackageId());
+        assertEquals(8L, asset(late).getExecutionPackageId());
+    }
+
+    @Test
     void aCantileverChangeIsRecordedInTheInboxAndTouchesNoAsset() {
         InboxMessageService inbox = new InboxMessageServiceImpl(inboxMessageRepository);
         MasterDataEventHandler dispatcher = dispatcher();
@@ -332,6 +404,33 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
 
         assertEquals(InboxProcessingResult.PROCESSED, result);
         assertEquals(before, assetRepository.count());
+    }
+
+    private CatenaryAsset asset(String sourceEntityId) {
+        return assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, sourceEntityId).orElseThrow();
+    }
+
+    /** Un seccionador tal como lo publica mto-configuration: estacion y perfil, sin via ni paquete. */
+    private static MasterDataChangedMessage disconnectorMessage(String disconnectorId, long profileId) {
+        return message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, disconnectorId, MasterDataOperation.UPDATED,
+                Map.of("id", disconnectorId, "name", "HSA-NS5", "station", Map.of("id", 9),
+                        "profile", Map.of("id", profileId, "profileId", "80-1.04", "kp", 80196.63)));
+    }
+
+    private static MasterDataChangedMessage trackProfileMessage(long profileId, long trackId, long executionPackageId, MasterDataOperation operation) {
+        return message(UUID.randomUUID(), MasterDataEntityNames.PROFILE, String.valueOf(profileId), operation,
+                Map.of("id", profileId, "profileId", "P-" + profileId, "kp", 80196.63,
+                        "track", Map.of("id", trackId, "executionPackageId", executionPackageId)));
+    }
+
+    /** Un aislador tal como lo publica mto-configuration: su via y la que conecta, sin paquete. */
+    private static MasterDataChangedMessage insulatorOnTrack(String insulatorId, long trackId, Long connectedTrackId) {
+        Map<String, Object> values = new HashMap<>(Map.of("id", insulatorId, "name", "SI-12", "station", Map.of("id", 9),
+                "track", Map.of("id", trackId)));
+        if (connectedTrackId != null) {
+            values.put("connectedTrack", Map.of("id", connectedTrackId));
+        }
+        return message(UUID.randomUUID(), MasterDataEntityNames.SECTION_INSULATOR, insulatorId, MasterDataOperation.UPDATED, values);
     }
 
     private MasterDataEventHandler dispatcher() {

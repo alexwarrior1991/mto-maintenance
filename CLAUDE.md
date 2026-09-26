@@ -73,7 +73,9 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
 A `CatenaryAsset` is what maintenance is done on: a `TRACK_SECTION` (created through the API, a kp
 range on a track, `MAIN` or `DIVERTED`), or a `PROFILE`, `DISCONNECTOR` or `SECTION_INSULATOR`
 synchronized from `mto-configuration` (`source_service` + `source_entity_id`, never created through
-the API, only `description`/`enabled`/`preventiveIntervalDays` editable). A `SECTION_INSULATOR`
+the API, only `description`/`enabled`/`preventiveIntervalDays` editable). A disconnector takes its
+track and package from its profile and an insulator its package from the profiles of its track,
+because the source publishes neither (`docs/06-messaging.md`). A `SECTION_INSULATOR`
 carries besides its two tracks, its `installationType` (`TRACK_CONNECTION` / `IN_TRACK`) and its
 turnouts (`catenary_asset_switch`: `W31` at its kp with its `1:9` rate) — a turnout is part of the
 insulator, not an asset of its own, so there is no new `CatenaryAssetType`. A `MaintenanceOrder`

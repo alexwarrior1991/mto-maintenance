@@ -48,7 +48,7 @@ GET/PUT         /defects/{id}
 POST            /defects/{id}/resolve | /close | /discard | /link-order/{orderId}
 GET             /defects/{id}/history | /revisions
 
-GET             /reports/progress             executionPackageId, trackId, assetType, from, to, format
+GET             /reports/progress             executionPackageId, trackId (also the insulators connecting to it), assetType, from, to, format
 GET             /reports/monthly              executionPackageId, month=yyyy-MM, format
 ```
 

@@ -34,6 +34,8 @@ public class MaintenanceReportRepository {
      * Activos revisables (todo menos los tramos), habilitados, con los filtros opcionales. El filtro
      * por tipo se anade solo cuando viene: un parametro de enum a null no tiene tipo para PostgreSQL
      * ({@code could not determine data type of parameter}), al contrario que los bigint.
+     *
+     * <p>Por via entra tambien el aislador que la conecta con otra: esta sobre las dos.</p>
      */
     public List<CatenaryAsset> findReportableAssets(Long executionPackageId, Long trackId, CatenaryAssetType assetType) {
         String typeFilter = assetType == null ? "" : "  and asset.type = :assetType\n";
@@ -42,7 +44,7 @@ public class MaintenanceReportRepository {
                 where asset.enabled = true
                   and asset.type <> :section
                   and (:executionPackageId is null or asset.executionPackageId = :executionPackageId)
-                  and (:trackId is null or asset.trackId = :trackId)
+                  and (:trackId is null or asset.trackId = :trackId or asset.connectedTrackId = :trackId)
                 """ + typeFilter + """
                 order by asset.executionPackageId, asset.trackId, asset.type, asset.startKp, asset.code
                 """, CatenaryAsset.class);

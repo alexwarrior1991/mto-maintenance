@@ -9,7 +9,10 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.List;
 
-/** Seccionador: tiene inspeccion propia. Cuelga de una estacion y, si viene, de un perfil (con su kp). */
+/**
+ * Seccionador: tiene inspeccion propia. Cuelga de una estacion y, si viene, de un perfil (con su kp).
+ * La via y el paquete no vienen en el evento: son los de su perfil, y se toman de el.
+ */
 @Service
 class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
 
@@ -50,5 +53,11 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
                 // igual si algun dia el origen lo anade.
                 payload.bool("enabled", true)
         );
+    }
+
+    /** Si su perfil aun no ha llegado, la via y el paquete los pone el perfil al llegar. */
+    @Override
+    protected void afterSynchronized(String sourceEntityId) {
+        assets().inheritLocationOfDisconnector(SOURCE_SERVICE, sourceEntityId);
     }
 }
