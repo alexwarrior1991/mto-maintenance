@@ -117,6 +117,13 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
   `mto-configuration` is global).
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
   `CHECK` that exactly one is set.
+- Every entity edited through the API extends `VersionedEntity` (`@Version`, `V11`): its response
+  carries `version`, its `PUT`/`PATCH` accept it (a stale one is 409 `CON-001`, checked by hand with
+  `StaleVersionException.check` because `@Version` does not see it within one transaction), and any
+  native SQL writing those tables must bump it. `PUT` never empties a field; `PATCH` with
+  `application/merge-patch+json` does (`MergePatch`, read by `MergePatchArgumentResolver`), and each
+  service lists what it may empty (`PatchRules.requireClearable`). `update` is `patch` with
+  `MergePatch.of(request)`: there is one code path per resource.
 
 ### Messaging
 

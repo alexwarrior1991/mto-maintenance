@@ -140,7 +140,7 @@ class DtoValidationTest {
         assertTrue(validator.validate(new CancelShiftRequest("rain")).isEmpty());
         assertEquals(Set.of("warehouseId", "quantity", "materialReference"), fields(validator.validate(new TaskMaterialRequest(null, null, null, new BigDecimal("-1"), null))));
         assertEquals(Set.of("netWorkMinutes"), fields(validator.validate(new CloseShiftRequest(null, null, -5, null))));
-        assertEquals(Set.of("measuredValue"), fields(validator.validate(new CheckItemUpdateRequest(new BigDecimal("1.2345"), null, null, null, null))));
+        assertEquals(Set.of("measuredValue"), fields(validator.validate(new CheckItemUpdateRequest(new BigDecimal("1.2345"), null, null, null, null, null))));
     }
 
     @Test
@@ -150,17 +150,17 @@ class DtoValidationTest {
         assertFalse(new CreateDefectFromInspectionRequest(null, null, null, null).isForced());
         assertTrue(new CompleteTaskRequest(UUID.randomUUID(), null, null, null, null, null, null, null, null).isWorkComplete());
         assertFalse(new CompleteTaskRequest(UUID.randomUUID(), null, null, null, false, null, null, null, null).isWorkComplete());
-        assertFalse(new MaintenanceOrderUpdateRequest(null, "d", MaintenancePriority.HIGH, null, null, null, "n", null, null, null, null, null, null).touchesRestrictedFields());
-        assertTrue(new MaintenanceOrderUpdateRequest("t", null, null, null, null, null, null, null, null, null, null, null, null).touchesRestrictedFields());
-        assertTrue(new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null, UUID.randomUUID()).touchesRestrictedFields());
-        assertFalse(new CatenaryAssetUpdateRequest(null, "d", true, 30, null, null, null, null, null, null, null, null).touchesIdentity());
-        assertTrue(new CatenaryAssetUpdateRequest("n", null, null, null, null, null, null, null, null, null, null, null).touchesIdentity());
-        assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN, null, null).touchesIdentity());
+        assertFalse(new MaintenanceOrderUpdateRequest(null, "d", MaintenancePriority.HIGH, null, null, null, "n", null, null, null, null, null, null, null).touchesRestrictedFields());
+        assertTrue(new MaintenanceOrderUpdateRequest("t", null, null, null, null, null, null, null, null, null, null, null, null, null).touchesRestrictedFields());
+        assertTrue(new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null, UUID.randomUUID(), null).touchesRestrictedFields());
+        assertFalse(new CatenaryAssetUpdateRequest(null, "d", true, 30, null, null, null, null, null, null, null, null, null).touchesIdentity());
+        assertTrue(new CatenaryAssetUpdateRequest("n", null, null, null, null, null, null, null, null, null, null, null, null).touchesIdentity());
+        assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN, null, null, null).touchesIdentity());
         // Los dos campos del aislador de seccion son suyos, no del cliente: un PUT que los toque en
         // un activo de datos maestros se rechaza igual que el nombre o el kp.
-        assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, null, 4L, null).touchesIdentity());
+        assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, null, 4L, null, null).touchesIdentity());
         assertTrue(new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, null, null,
-                SectionInsulatorInstallation.TRACK_CONNECTION).touchesIdentity());
+                SectionInsulatorInstallation.TRACK_CONNECTION, null).touchesIdentity());
     }
 
     private static Set<String> fields(Set<? extends ConstraintViolation<?>> violations) {

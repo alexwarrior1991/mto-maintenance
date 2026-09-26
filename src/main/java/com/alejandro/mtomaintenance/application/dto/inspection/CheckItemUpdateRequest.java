@@ -10,6 +10,7 @@ public record CheckItemUpdateRequest(
         Boolean adjusted,
         @Digits(integer = 9, fraction = 3) BigDecimal valueAfterAdjustment,
         CheckItemResult itemResult,
-        String notes
+        String notes,
+        Long version
 ) {
 }

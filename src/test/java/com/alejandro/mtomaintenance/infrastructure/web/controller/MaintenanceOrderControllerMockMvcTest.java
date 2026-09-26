@@ -32,6 +32,10 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncS
 import java.util.List;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
+import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderUpdateRequest;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -47,7 +51,11 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.math.BigDecimal;
 import java.util.UUID;
+import java.util.Set;
 
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
@@ -119,6 +127,84 @@ class MaintenanceOrderControllerMockMvcTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":true}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("AST-001"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aMergePatchEmptiesWhatComesAsNullAndIsValidatedLikeAPut() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        when(orderService.patch(eq(orderId), any())).thenReturn(response(orderId));
+
+        mockMvc.perform(patch(ORDERS + "/{id}", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE)
+                        .content("{\"plannedDate\":null,\"teamId\":null,\"description\":\"Night work\",\"version\":3}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<MergePatch<MaintenanceOrderUpdateRequest>> captor = ArgumentCaptor.forClass(MergePatch.class);
+        verify(orderService).patch(eq(orderId), captor.capture());
+        assertEquals(Set.of("plannedDate", "teamId"), captor.getValue().cleared());
+        assertEquals("Night work", captor.getValue().values().description());
+        assertEquals(3L, captor.getValue().values().version());
+
+        // version a null es no mandar version, no vaciarla.
+        mockMvc.perform(patch(ORDERS + "/{id}", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"version\":null}"))
+                .andExpect(status().isOk());
+        verify(orderService, times(2)).patch(eq(orderId), captor.capture());
+        assertTrue(captor.getValue().cleared().isEmpty());
+
+        // Un null con el nombre mal escrito no vaciaria nada sin decirlo: 400.
+        mockMvc.perform(patch(ORDERS + "/{id}", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"plannedDat\":null}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("VAL-001"));
+        mockMvc.perform(patch(ORDERS + "/{id}", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"title\":\"" + "x".repeat(256) + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("REQ-VALIDATION"))
+                .andExpect(jsonPath("$.validationErrors[0].field").value("title"));
+        mockMvc.perform(patch(ORDERS + "/{id}", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("[]"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("REQ-400"));
+        verify(orderService, times(2)).patch(eq(orderId), any());
+
+        when(orderService.patch(eq(orderId), any())).thenThrow(new StaleVersionException("Order MO-1 was changed by someone else"));
+        mockMvc.perform(patch(ORDERS + "/{id}", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"version\":2}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("CON-001"));
+    }
+
+    @Test
+    void theNestedResourcesTakeAMergePatchTooAndDisablingAnAssetByPatchNeedsTheDeleteRole() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        UUID itemId = UUID.randomUUID();
+        UUID usageId = UUID.randomUUID();
+
+        mockMvc.perform(patch(ORDERS + "/{id}/tasks/{taskId}", orderId, taskId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"notes\":null}"))
+                .andExpect(status().isOk());
+        verify(taskService).patch(eq(orderId), eq(taskId), argThat(patch -> patch.clears("notes")));
+        mockMvc.perform(patch(ORDERS + "/{id}/tasks/{taskId}/check-items/{itemId}", orderId, taskId, itemId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"measuredValue\":null,\"version\":0}"))
+                .andExpect(status().isOk());
+        verify(taskService).patchCheckItem(eq(orderId), eq(taskId), eq(itemId), argThat(patch -> patch.clears("measuredValue")));
+        mockMvc.perform(patch(ORDERS + "/{id}/materials/{usageId}", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"consumedQuantity\":-1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("REQ-VALIDATION"));
+        verify(materialService, never()).patch(any(), any(), any());
+
+        UUID assetId = UUID.randomUUID();
+        mockMvc.perform(patch("/api/v1/maintenance/assets/{id}", assetId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"enabled\":false}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(patch("/api/v1/maintenance/assets/{id}", assetId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"preventiveIntervalDays\":null}"))
+                .andExpect(status().isOk());
+        verify(assetService).patch(eq(assetId), argThat(patch -> patch.clears("preventiveIntervalDays")));
     }
 
     @Test
@@ -205,7 +291,7 @@ class MaintenanceOrderControllerMockMvcTest {
     private static MaintenanceOrderResponse response(UUID id) {
         return new MaintenanceOrderResponse(id, "MO-000001", "Preventive T2", null, MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT,
                 MaintenancePriority.MEDIUM, null, 6L, 2L, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                0, 0, BigDecimal.ZERO, 0, null);
+                0, 0, BigDecimal.ZERO, 0, null, null);
     }
 
     @Test
@@ -218,11 +304,16 @@ class MaintenanceOrderControllerMockMvcTest {
                 .andExpect(jsonPath("$.errorCode").value("REQ-400"))
                 .andExpect(jsonPath("$.validationErrors[0].field").value("sort"));
 
-        mockMvc.perform(patch(ORDERS + "/{id}", UUID.randomUUID()).with(role(SecurityRoles.MAINTENANCE_WRITE))
-                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+        mockMvc.perform(delete(ORDERS + "/{id}", UUID.randomUUID()).with(role(SecurityRoles.MAINTENANCE_DELETE)))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.errorCode").value("REQ-405"))
                 .andExpect(header().exists("Allow"));
+
+        // El PATCH existe, pero solo como merge patch: con JSON a secas no se sabria que un null vacia.
+        mockMvc.perform(patch(ORDERS + "/{id}", UUID.randomUUID()).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.errorCode").value("REQ-415"));
     }
 
     @Test
@@ -346,11 +437,11 @@ class MaintenanceOrderControllerMockMvcTest {
 
     private static MaterialUsageResponse materialResponse(UUID id, UUID orderId, UUID warehouseId) {
         return new MaterialUsageResponse(id, orderId, null, UUID.randomUUID(), "GA70", null, warehouseId, new BigDecimal("2"), BigDecimal.ZERO, "ud",
-                false, null, StockSyncStatus.NOT_REQUESTED, null, null);
+                false, null, StockSyncStatus.NOT_REQUESTED, null, null, null);
     }
 
     private static MaintenanceTaskResponse taskResponse(UUID id, UUID orderId) {
         return new MaintenanceTaskResponse(id, orderId, 1, "Profile 12-2.27", MaintenanceTaskStatus.PENDING, null, null, null, null, null, null, null,
-                List.of(), List.of("RG-01"), List.of(), null);
+                List.of(), List.of("RG-01"), List.of(), null, null);
     }
 }

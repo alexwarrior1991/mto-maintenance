@@ -51,7 +51,7 @@ import java.util.UUID;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
-public class MaintenanceMaterialUsage extends AuditableEntity {
+public class MaintenanceMaterialUsage extends VersionedEntity {
 
     @NotNull
     @ManyToOne(fetch = FetchType.LAZY, optional = false)

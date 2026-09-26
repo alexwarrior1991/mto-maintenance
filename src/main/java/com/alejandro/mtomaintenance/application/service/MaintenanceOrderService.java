@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.application.service;
 
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.order.AssignOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.CancelOrderRequest;
@@ -25,6 +26,9 @@ public interface MaintenanceOrderService {
     MaintenanceOrderResponse create(MaintenanceOrderRequest request);
 
     MaintenanceOrderResponse update(UUID id, MaintenanceOrderUpdateRequest request);
+
+    /** Como {@link #update}, y ademas vacia los campos que el parche pone a null (los que la orden admite). */
+    MaintenanceOrderResponse patch(UUID id, MergePatch<MaintenanceOrderUpdateRequest> patch);
 
     MaintenanceOrderResponse findById(UUID id);
 

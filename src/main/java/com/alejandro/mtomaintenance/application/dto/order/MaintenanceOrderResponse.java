@@ -40,6 +40,7 @@ public record MaintenanceOrderResponse(
         int completedTaskCount,
         BigDecimal estimatedMinutes,
         int estimatedShifts,
+        Long version,
         AuditMetadataResponse audit
 ) {
 }

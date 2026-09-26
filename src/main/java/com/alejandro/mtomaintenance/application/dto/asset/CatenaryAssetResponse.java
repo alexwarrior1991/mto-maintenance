@@ -40,6 +40,7 @@ public record CatenaryAssetResponse(
         Integer preventiveIntervalDays,
         Instant lastPreventiveCompletedAt,
         Instant nextPreventiveDueAt,
+        Long version,
         AuditMetadataResponse audit
 ) {
 }

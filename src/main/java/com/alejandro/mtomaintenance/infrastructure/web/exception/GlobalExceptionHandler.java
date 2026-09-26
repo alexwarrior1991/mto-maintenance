@@ -10,19 +10,23 @@ import com.alejandro.mtomaintenance.application.exception.InvalidTransitionExcep
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
+import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.core.PropertyReferenceException;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.ObjectError;
@@ -71,6 +75,31 @@ public class GlobalExceptionHandler {
             MaterialUsageException.class})
     public ResponseEntity<ApiErrorResponse> handleStateConflict(BusinessException exception, HttpServletRequest request) {
         return businessResponse(exception, HttpStatus.CONFLICT, request);
+    }
+
+    /**
+     * 409 CON-001: la peticion trae una version vieja, o dos escrituras se cruzaron y Hibernate
+     * rechazo la segunda. Nada se ha escrito; quien llama relee y decide.
+     */
+    @ExceptionHandler(StaleVersionException.class)
+    public ResponseEntity<ApiErrorResponse> handleStaleVersion(StaleVersionException exception, HttpServletRequest request) {
+        return businessResponse(exception, HttpStatus.CONFLICT, request);
+    }
+
+    @ExceptionHandler({ObjectOptimisticLockingFailureException.class, OptimisticLockException.class})
+    public ResponseEntity<ApiErrorResponse> handleOptimisticLock(Exception exception, HttpServletRequest request) {
+        LOGGER.warn("Concurrent write rejected for {} {}: {}", request.getMethod(), request.getRequestURI(), exception.getMessage());
+        return clientErrorResponse(HttpStatus.CONFLICT, "Someone else changed it at the same time; read it again.", "CON-001", List.of(), request);
+    }
+
+    /**
+     * 409 para lo que la validacion no vio y una restriccion de la base si: sin este manejador era un
+     * 500 sin explicacion. Las reglas conocidas se comprueban antes; esto es la red.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiErrorResponse> handleDataIntegrity(DataIntegrityViolationException exception, HttpServletRequest request) {
+        LOGGER.warn("Data integrity violation for {} {}: {}", request.getMethod(), request.getRequestURI(), exception.getMostSpecificCause().getMessage());
+        return clientErrorResponse(HttpStatus.CONFLICT, "The change conflicts with the stored data.", "APP-409", List.of(), request);
     }
 
     @ExceptionHandler(InspectionException.class)

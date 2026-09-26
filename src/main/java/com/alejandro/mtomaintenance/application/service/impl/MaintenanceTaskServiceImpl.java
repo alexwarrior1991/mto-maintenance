@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.inspection.CheckItemUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.task.CancelTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.CompleteTaskRequest;
@@ -13,6 +14,7 @@ import com.alejandro.mtomaintenance.application.dto.task.StartTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.TaskMaterialRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceTaskMapper;
 import com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator;
@@ -57,6 +59,9 @@ import java.util.UUID;
 class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MaintenanceTaskServiceImpl.class);
+
+    /** Lo que un PATCH puede vaciar de una tarea; la descripcion es obligatoria. */
+    private static final Set<String> CLEARABLE = Set.of("assignedUser", "taskTypeCodes", "notes", "defectsFound", "photoRefs");
 
     /** Lo que se hace en cada perfil de via principal: grupos 1, 2 y 4 del plan. */
     static final List<String> DEFAULT_PREVENTIVE_TASK_TYPES =
@@ -112,29 +117,34 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     @Override
     @Transactional
     public MaintenanceTaskResponse update(UUID orderId, UUID taskId, MaintenanceTaskUpdateRequest request) {
+        return patch(orderId, taskId, MergePatch.of(request));
+    }
+
+    @Override
+    @Transactional
+    public MaintenanceTaskResponse patch(UUID orderId, UUID taskId, MergePatch<MaintenanceTaskUpdateRequest> patch) {
         MaintenanceTask task = task(orderId, taskId);
+        MaintenanceTaskUpdateRequest request = patch.values();
+        StaleVersionException.check("Task " + task.getSequence() + " of order " + task.getOrder().getCode(), task.getVersion(), request.version());
+        PatchRules.requireClearable(patch, CLEARABLE);
         if (!task.isOpen()) {
             throw new InvalidTransitionException("Task " + task.getSequence() + " of order " + task.getOrder().getCode()
                     + " is " + task.getStatus() + " and cannot be changed");
         }
         if (request.description() != null) {
-            task.setDescription(request.description().trim());
+            task.setDescription(PatchRules.requireText(request.description(), "description"));
         }
-        if (request.assignedUser() != null) {
-            task.setAssignedUser(request.assignedUser());
-        }
-        if (request.taskTypeCodes() != null) {
+        PatchRules.set(patch, "assignedUser", request.assignedUser(), task::setAssignedUser);
+        if (request.taskTypeCodes() != null || patch.clears("taskTypeCodes")) {
             task.getTaskTypes().clear();
-            task.getTaskTypes().addAll(lookups.taskTypes(request.taskTypeCodes()));
+            if (request.taskTypeCodes() != null) {
+                task.getTaskTypes().addAll(lookups.taskTypes(request.taskTypeCodes()));
+            }
         }
-        if (request.notes() != null) {
-            task.setNotes(request.notes());
-        }
-        if (request.defectsFound() != null) {
-            task.setDefectsFound(request.defectsFound());
-        }
-        if (request.photoRefs() != null) {
-            task.setPhotoRefs(new ArrayList<>(request.photoRefs()));
+        PatchRules.set(patch, "notes", request.notes(), task::setNotes);
+        PatchRules.set(patch, "defectsFound", request.defectsFound(), task::setDefectsFound);
+        if (request.photoRefs() != null || patch.clears("photoRefs")) {
+            task.setPhotoRefs(request.photoRefs() == null ? new ArrayList<>() : new ArrayList<>(request.photoRefs()));
         }
         return mapper.toResponse(repository.save(task));
     }
@@ -292,6 +302,12 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     @Override
     @Transactional
     public MaintenanceTaskResponse updateCheckItem(UUID orderId, UUID taskId, UUID itemId, CheckItemUpdateRequest request) {
+        return patchCheckItem(orderId, taskId, itemId, MergePatch.of(request));
+    }
+
+    @Override
+    @Transactional
+    public MaintenanceTaskResponse patchCheckItem(UUID orderId, UUID taskId, UUID itemId, MergePatch<CheckItemUpdateRequest> patch) {
         MaintenanceTask task = task(orderId, taskId);
         if (!task.isOpen()) {
             throw new InvalidTransitionException("Task " + task.getSequence() + " is " + task.getStatus() + "; its check items are frozen");
@@ -300,7 +316,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
                 .filter(candidate -> candidate.getId().equals(itemId))
                 .findFirst()
                 .orElseThrow(() -> new NotFoundException("Check item", itemId));
-        ChecklistRules.apply(item, request);
+        ChecklistRules.apply(item, patch);
         return mapper.toResponse(repository.save(task));
     }
 

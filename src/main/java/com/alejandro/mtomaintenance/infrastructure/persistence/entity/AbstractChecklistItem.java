@@ -22,7 +22,7 @@ import java.math.BigDecimal;
 @MappedSuperclass
 @Getter
 @Setter
-public abstract class AbstractChecklistItem extends AuditableEntity {
+public abstract class AbstractChecklistItem extends VersionedEntity {
 
     @NotBlank
     @Size(max = 32)

@@ -21,6 +21,7 @@ public record MaterialUsageResponse(
         UUID stockReservationId,
         StockSyncStatus stockSyncStatus,
         String stockSyncError,
+        Long version,
         AuditMetadataResponse audit
 ) {
 }

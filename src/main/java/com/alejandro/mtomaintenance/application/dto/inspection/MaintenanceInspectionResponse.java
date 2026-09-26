@@ -31,6 +31,7 @@ public record MaintenanceInspectionResponse(
         UUID originOrderId,
         UUID shiftId,
         List<CheckItemResponse> items,
+        Long version,
         AuditMetadataResponse audit
 ) {
 }

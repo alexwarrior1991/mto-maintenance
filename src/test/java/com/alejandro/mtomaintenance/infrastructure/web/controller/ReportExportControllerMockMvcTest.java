@@ -188,7 +188,7 @@ class ReportExportControllerMockMvcTest {
     private static ShiftReportResponse shiftReport() {
         MaintenanceShiftResponse shift = new MaintenanceShiftResponse(UUID.randomUUID(), "SH-000001", LocalDate.of(2026, 1, 27),
                 null, "Rishpon", null, PossessionType.PARTIAL, null, null, null, null, null, null,
-                List.of(), null, null, 6L, List.of(2L), null, null, null, null, ShiftStatus.PLANNED, null, null);
+                List.of(), null, null, 6L, List.of(2L), null, null, null, null, ShiftStatus.PLANNED, null, null, null);
         return new ShiftReportResponse(shift, 0, 0, 0, 0, 0, List.of());
     }
 }

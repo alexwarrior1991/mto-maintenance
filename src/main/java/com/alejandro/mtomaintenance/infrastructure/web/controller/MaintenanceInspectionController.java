@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectResponse;
 import com.alejandro.mtomaintenance.application.dto.inspection.CheckItemUpdateRequest;
@@ -14,6 +15,9 @@ import com.alejandro.mtomaintenance.application.service.MaintenanceInspectionSer
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionResult;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
@@ -23,6 +27,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -60,11 +65,29 @@ public class MaintenanceInspectionController {
         return ResponseEntity.ok(inspectionService.update(id, request));
     }
 
+    @Operation(summary = "Patch inspection", description = "application/merge-patch+json: a key left out is not touched, null empties it (only the optional fields: emptying a required one is 400), a value changes it as in PUT. With version, 409 CON-001 if it changed since it was read.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = MergePatch.MEDIA_TYPE,
+                    schema = @Schema(implementation = MaintenanceInspectionUpdateRequest.class))))
+    @PatchMapping(value = "/{id}", consumes = MergePatch.MEDIA_TYPE)
+    public ResponseEntity<MaintenanceInspectionResponse> patch(@PathVariable UUID id,
+            @Parameter(hidden = true) @Valid MergePatch<MaintenanceInspectionUpdateRequest> patch) {
+        return ResponseEntity.ok(inspectionService.patch(id, patch));
+    }
+
     @Operation(summary = "Update an inspection item", description = "A measurement out of range cannot be OK unless adjusted back into range.")
     @PutMapping("/{id}/items/{itemId}")
     public ResponseEntity<MaintenanceInspectionResponse> updateItem(@PathVariable UUID id, @PathVariable UUID itemId,
                                                                     @Valid @RequestBody CheckItemUpdateRequest request) {
         return ResponseEntity.ok(inspectionService.updateItem(id, itemId, request));
+    }
+
+    @Operation(summary = "Patch an inspection item", description = "application/merge-patch+json: a key left out is not touched, null empties it (only the optional fields: emptying a required one is 400), a value changes it as in PUT. With version, 409 CON-001 if it changed since it was read.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = MergePatch.MEDIA_TYPE,
+                    schema = @Schema(implementation = CheckItemUpdateRequest.class))))
+    @PatchMapping(value = "/{id}/items/{itemId}", consumes = MergePatch.MEDIA_TYPE)
+    public ResponseEntity<MaintenanceInspectionResponse> patchItem(@PathVariable UUID id, @PathVariable UUID itemId,
+            @Parameter(hidden = true) @Valid MergePatch<CheckItemUpdateRequest> patch) {
+        return ResponseEntity.ok(inspectionService.patchItem(id, itemId, patch));
     }
 
     @Operation(summary = "Get inspection")

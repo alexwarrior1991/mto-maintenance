@@ -89,6 +89,42 @@ inlineDefects[], materials[], photoRefs[]}`; `MaintenanceShiftRequest{shiftDate,
 voltageCutoffAt, netWorkMinutes, observations}`; `ResolveDefectRequest{resolutionNotes, correctionType,
 partsReplaced, resolvedInShiftId}`.
 
+## Changing a resource: `PUT`, `PATCH` and `version`
+
+Every resource that is edited — assets, orders, tasks and their check items, shifts, inspections and
+their items, defects, material lines — takes the same body two ways:
+
+- `PUT` with `application/json`: a key that is absent or `null` is not touched. It cannot empty a
+  field.
+- `PATCH` with `application/merge-patch+json` (RFC 7396): absent is not touched, `null` empties it,
+  a value changes it as in the `PUT`. Only the optional fields can be emptied; emptying a required
+  one is 400 `VAL-001` naming it, and so is a key the body does not have (a misspelt `null` would
+  otherwise empty nothing without saying so). Another content type is 415. The same state rules
+  apply: an order after `PLANNED` only empties `description` and `closingNotes`, a synchronized
+  asset only `description` and `preventiveIntervalDays`.
+
+| Resource | What a `PATCH` can empty |
+|---|---|
+| Order | `description`, `plannedDate`, `teamId`, `assignedUser`, `closingNotes`, `executionPackageId`, `trackId`, `stationId`, `startKp`, `endKp`, `stockProjectId` |
+| Task | `assignedUser`, `taskTypeCodes`, `notes`, `defectsFound`, `photoRefs` |
+| Check item (task or inspection) | `measuredValue`, `valueAfterAdjustment`, `itemResult`, `notes` |
+| Shift | `teamId`, `baseName`, `vehicle`, `plannedStart`, `plannedEnd`, `blockingDisconnectorIds`, `earthingPoints`, `parkingPlace`, `executionPackageId`, `startKp`, `endKp`, `personnel`, `measurementEquipment`, `observations` |
+| Inspection | `inspector`, `description`, `detectedDefects`, `recommendedActions`, `kp` |
+| Defect | `technicalNotes`, `correctionType`, `partsReplaced`, `repairPlannedDate`, `photoRefs` |
+| Asset | `description`, `preventiveIntervalDays`, and on an own section `executionPackageId` and `stationId` |
+| Material line | nothing: the `PATCH` is there for the `version` |
+
+Each of those resources returns its `version` (a check item its own), and both bodies accept it,
+optional. With it, a request made on an older version answers 409 `CON-001` and writes nothing: read
+it again and decide. Without it everything works as before, last write wins. Two writes that cross
+inside the service are also 409 `CON-001` (optimistic locking), and a master-data event bumps the
+version of the asset it changes, so an edit read before the event does not overwrite it unnoticed.
+
+A text that is required and arrives blank (`"title": " "`) is 400 `VAL-001`, and lowering the planned
+quantity of a line below what was consumed without `allowOverConsumption` is 409 `MAT-001`: both used
+to reach a database constraint at commit and answer 500. Anything else a constraint catches is 409
+`APP-409` rather than 500.
+
 ## Status codes
 
 | Code | When |
@@ -96,7 +132,7 @@ partsReplaced, resolvedInShiftId}`.
 | 201 + `Location` | Creation |
 | 200 | Reads, updates, transitions, idempotent `create-defect`/`create-corrective-order` |
 | 204 | `DELETE /assets/{id}` (disables the asset), `DELETE /orders/{id}/materials/{usageId}` (removes the line) |
-| 400 `REQ-VALIDATION` / `VAL-001` | Bean Validation / domain invariant (kp range, quantity, unknown task type, unknown export `format`) |
+| 400 `REQ-VALIDATION` / `VAL-001` | Bean Validation / domain invariant (kp range, quantity, unknown task type, unknown export `format`, a blank required text, a `PATCH` that empties a required field or has an unknown key) |
 | 400 `REQ-400` | Malformed body, a parameter of the wrong type, a missing required parameter (`month` of the monthly report) or a `sort` on a property the entity does not have |
 | 401 `AUTH-401` / 403 `AUTH-403` | No token / missing role |
 | 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `INS`, `TPL`, `DEF`, `MAT`); a task type, a check item and an inspection item answer `APP-404` |
@@ -108,7 +144,9 @@ partsReplaced, resolvedInShiftId}`.
 | 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
 | 409 `<AGG>-409` | Duplicated code |
-| 415 `REQ-415` | Unsupported media type |
+| 409 `CON-001` | The `version` of the request is not the one stored, or two writes crossed: nothing was written |
+| 409 `APP-409` | A database constraint caught what the validation did not |
+| 415 `REQ-415` | Unsupported media type (a `PATCH` is only `application/merge-patch+json`) |
 | 422 `INS-001` | Inconsistent inspection result / checklist |
 | 422 `STK-422` | `mto-stock` rejected the step for another reason (a material or warehouse retired, a reservation no longer active...), on an explicit `sync` or when removing a reserved line; its code and message are in `message` |
 | 503 `STK-503` | `mto-stock` unreachable on an explicit `sync`, or when removing a reserved line (the line stays) |

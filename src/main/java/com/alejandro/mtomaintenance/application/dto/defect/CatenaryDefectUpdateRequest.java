@@ -13,6 +13,7 @@ public record CatenaryDefectUpdateRequest(
         @Size(max = 120) String correctionType,
         String partsReplaced,
         LocalDate repairPlannedDate,
-        List<String> photoRefs
+        List<String> photoRefs,
+        Long version
 ) {
 }

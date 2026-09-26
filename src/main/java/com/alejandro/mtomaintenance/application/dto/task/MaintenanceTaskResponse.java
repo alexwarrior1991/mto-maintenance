@@ -25,6 +25,7 @@ public record MaintenanceTaskResponse(
         List<String> photoRefs,
         List<String> taskTypeCodes,
         List<CheckItemResponse> checkItems,
+        Long version,
         AuditMetadataResponse audit
 ) {
 }

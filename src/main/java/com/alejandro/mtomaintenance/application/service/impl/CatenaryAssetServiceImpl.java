@@ -5,9 +5,11 @@ import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetResponse;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.exception.AssetDisabledException;
 import com.alejandro.mtomaintenance.application.exception.DuplicateCodeException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
@@ -29,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -36,6 +39,12 @@ import java.util.UUID;
 class CatenaryAssetServiceImpl implements CatenaryAssetService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CatenaryAssetServiceImpl.class);
+
+    /** Lo que un PATCH puede vaciar de un activo; en uno sincronizado, paquete y estacion son del origen. */
+    private static final Set<String> CLEARABLE = Set.of("description", "preventiveIntervalDays", "executionPackageId", "stationId");
+
+    /** Lo que en un activo de datos maestros solo cambia mto-configuration, tambien para vaciarlo. */
+    private static final Set<String> IDENTITY = Set.of("executionPackageId", "stationId");
 
     private final CatenaryAssetRepository repository;
     private final CatenaryAssetMapper mapper;
@@ -73,9 +82,18 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     @Override
     @Transactional
     public CatenaryAssetResponse update(UUID id, CatenaryAssetUpdateRequest request) {
-        CatenaryAsset asset = lookups.asset(id);
+        return patch(id, MergePatch.of(request));
+    }
 
-        if (asset.isFromMasterData() && request.touchesIdentity()) {
+    @Override
+    @Transactional
+    public CatenaryAssetResponse patch(UUID id, MergePatch<CatenaryAssetUpdateRequest> patch) {
+        CatenaryAsset asset = lookups.asset(id);
+        CatenaryAssetUpdateRequest request = patch.values();
+        StaleVersionException.check("Catenary asset " + asset.getCode(), asset.getVersion(), request.version());
+        PatchRules.requireClearable(patch, CLEARABLE);
+
+        if (asset.isFromMasterData() && (request.touchesIdentity() || patch.cleared().stream().anyMatch(IDENTITY::contains))) {
             // La identidad y la localizacion las decide mto-configuration: cambiarlas aqui dejaria
             // el activo distinto de su origen hasta el siguiente evento, que lo pisaria sin avisar.
             throw new AssetDisabledException("Catenary asset " + asset.getCode()
@@ -83,11 +101,9 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
         }
 
         if (request.name() != null) {
-            asset.setName(request.name().trim());
+            asset.setName(PatchRules.requireText(request.name(), "name"));
         }
-        if (request.description() != null) {
-            asset.setDescription(request.description());
-        }
+        PatchRules.set(patch, "description", request.description(), asset::setDescription);
         if (request.isDisabling()) {
             asset.disableLocally();
         } else if (Boolean.TRUE.equals(request.enabled())) {
@@ -98,19 +114,13 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
             }
             asset.enableLocally();
         }
-        if (request.preventiveIntervalDays() != null) {
-            asset.setPreventiveIntervalDays(request.preventiveIntervalDays());
-        }
+        PatchRules.set(patch, "preventiveIntervalDays", request.preventiveIntervalDays(), asset::setPreventiveIntervalDays);
         if (!asset.isFromMasterData()) {
-            if (request.executionPackageId() != null) {
-                asset.setExecutionPackageId(request.executionPackageId());
-            }
+            PatchRules.set(patch, "executionPackageId", request.executionPackageId(), asset::setExecutionPackageId);
             if (request.trackId() != null) {
                 asset.setTrackId(request.trackId());
             }
-            if (request.stationId() != null) {
-                asset.setStationId(request.stationId());
-            }
+            PatchRules.set(patch, "stationId", request.stationId(), asset::setStationId);
             if (request.startKp() != null) {
                 asset.setStartKp(request.startKp());
             }

@@ -59,7 +59,7 @@ import java.util.UUID;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
-public class MaintenanceOrder extends AuditableEntity {
+public class MaintenanceOrder extends VersionedEntity {
 
     @NotBlank
     @Size(max = 32)

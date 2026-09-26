@@ -59,7 +59,7 @@ import java.util.Set;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
-public class MaintenanceTask extends AuditableEntity {
+public class MaintenanceTask extends VersionedEntity {
 
     @NotNull
     @ManyToOne(fetch = FetchType.LAZY, optional = false)

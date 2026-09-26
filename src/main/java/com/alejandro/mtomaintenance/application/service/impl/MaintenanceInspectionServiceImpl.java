@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectResponse;
 import com.alejandro.mtomaintenance.application.dto.inspection.CheckItemUpdateRequest;
@@ -14,6 +15,7 @@ import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRespon
 import com.alejandro.mtomaintenance.application.exception.InspectionException;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryDefectMapper;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceInspectionMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
@@ -49,6 +51,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -56,6 +59,9 @@ import java.util.UUID;
 class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MaintenanceInspectionServiceImpl.class);
+
+    /** Lo que un PATCH puede vaciar de una inspeccion; fecha, tipo y resultado son obligatorios. */
+    private static final Set<String> CLEARABLE = Set.of("inspector", "description", "detectedDefects", "recommendedActions", "kp");
 
     private final MaintenanceInspectionRepository repository;
     private final CatenaryDefectRepository defectRepository;
@@ -110,31 +116,30 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
     @Override
     @Transactional
     public MaintenanceInspectionResponse update(UUID id, MaintenanceInspectionUpdateRequest request) {
+        return patch(id, MergePatch.of(request));
+    }
+
+    @Override
+    @Transactional
+    public MaintenanceInspectionResponse patch(UUID id, MergePatch<MaintenanceInspectionUpdateRequest> patch) {
         MaintenanceInspection inspection = inspection(id);
+        MaintenanceInspectionUpdateRequest request = patch.values();
+        StaleVersionException.check("Inspection " + inspection.getCode(), inspection.getVersion(), request.version());
+        PatchRules.requireClearable(patch, CLEARABLE);
         if (request.inspectionDate() != null) {
             inspection.setInspectionDate(request.inspectionDate());
         }
-        if (request.inspector() != null) {
-            inspection.setInspector(request.inspector());
-        }
+        PatchRules.set(patch, "inspector", request.inspector(), inspection::setInspector);
         if (request.inspectionKind() != null) {
             inspection.setInspectionKind(request.inspectionKind());
         }
         if (request.result() != null) {
             inspection.setResult(request.result());
         }
-        if (request.description() != null) {
-            inspection.setDescription(request.description());
-        }
-        if (request.detectedDefects() != null) {
-            inspection.setDetectedDefects(request.detectedDefects());
-        }
-        if (request.recommendedActions() != null) {
-            inspection.setRecommendedActions(request.recommendedActions());
-        }
-        if (request.kp() != null) {
-            inspection.setKp(request.kp());
-        }
+        PatchRules.set(patch, "description", request.description(), inspection::setDescription);
+        PatchRules.set(patch, "detectedDefects", request.detectedDefects(), inspection::setDetectedDefects);
+        PatchRules.set(patch, "recommendedActions", request.recommendedActions(), inspection::setRecommendedActions);
+        PatchRules.set(patch, "kp", request.kp(), inspection::setKp);
         validateResult(inspection);
         return mapper.toResponse(repository.save(inspection));
     }
@@ -142,12 +147,18 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
     @Override
     @Transactional
     public MaintenanceInspectionResponse updateItem(UUID id, UUID itemId, CheckItemUpdateRequest request) {
+        return patchItem(id, itemId, MergePatch.of(request));
+    }
+
+    @Override
+    @Transactional
+    public MaintenanceInspectionResponse patchItem(UUID id, UUID itemId, MergePatch<CheckItemUpdateRequest> patch) {
         MaintenanceInspection inspection = inspection(id);
         MaintenanceInspectionItem item = inspection.getItems().stream()
                 .filter(candidate -> candidate.getId().equals(itemId))
                 .findFirst()
                 .orElseThrow(() -> new NotFoundException("Inspection item", itemId));
-        ChecklistRules.apply(item, request);
+        ChecklistRules.apply(item, patch);
         validateResult(inspection);
         return mapper.toResponse(repository.save(inspection));
     }

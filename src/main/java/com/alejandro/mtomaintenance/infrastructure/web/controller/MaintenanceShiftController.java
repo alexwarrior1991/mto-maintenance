@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.export.ReportFormat;
 import com.alejandro.mtomaintenance.application.dto.export.ReportMediaTypes;
@@ -34,6 +35,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -75,6 +77,15 @@ public class MaintenanceShiftController {
     @PutMapping("/{id}")
     public ResponseEntity<MaintenanceShiftResponse> update(@PathVariable UUID id, @Valid @RequestBody MaintenanceShiftUpdateRequest request) {
         return ResponseEntity.ok(shiftService.update(id, request));
+    }
+
+    @Operation(summary = "Patch shift", description = "application/merge-patch+json: a key left out is not touched, null empties it (only the optional fields: emptying a required one is 400), a value changes it as in PUT. With version, 409 CON-001 if it changed since it was read.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = MergePatch.MEDIA_TYPE,
+                    schema = @Schema(implementation = MaintenanceShiftUpdateRequest.class))))
+    @PatchMapping(value = "/{id}", consumes = MergePatch.MEDIA_TYPE)
+    public ResponseEntity<MaintenanceShiftResponse> patch(@PathVariable UUID id,
+            @Parameter(hidden = true) @Valid MergePatch<MaintenanceShiftUpdateRequest> patch) {
+        return ResponseEntity.ok(shiftService.patch(id, patch));
     }
 
     @Operation(summary = "Get shift")

@@ -149,7 +149,7 @@ class RestControllerLayerTest {
     private static MaintenanceOrderResponse orderResponse(UUID id) {
         return new MaintenanceOrderResponse(id, "MO-000001", "Preventive T2", null, MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT,
                 MaintenancePriority.MEDIUM, null, 6L, 2L, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                0, 0, BigDecimal.ZERO, 0, null);
+                0, 0, BigDecimal.ZERO, 0, null, null);
     }
 
     @Test

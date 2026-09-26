@@ -3,6 +3,7 @@ package com.alejandro.mtomaintenance.application.service.impl;
 import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
@@ -13,6 +14,7 @@ import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapper;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceShiftMapper;
@@ -68,6 +70,11 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MaintenanceShiftServiceImpl.class);
 
+    /** Lo que un PATCH puede vaciar de un turno; fecha, posesion y vias son obligatorias. */
+    private static final Set<String> CLEARABLE = Set.of("teamId", "baseName", "vehicle", "plannedStart", "plannedEnd",
+            "blockingDisconnectorIds", "earthingPoints", "parkingPlace", "executionPackageId", "startKp", "endKp",
+            "personnel", "measurementEquipment", "observations");
+
     private final MaintenanceShiftRepository repository;
     private final MaintenanceTaskRepository taskRepository;
     private final CatenaryDefectRepository defectRepository;
@@ -118,45 +125,44 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     @Override
     @Transactional
     public MaintenanceShiftResponse update(UUID id, MaintenanceShiftUpdateRequest request) {
+        return patch(id, MergePatch.of(request));
+    }
+
+    @Override
+    @Transactional
+    public MaintenanceShiftResponse patch(UUID id, MergePatch<MaintenanceShiftUpdateRequest> patch) {
         MaintenanceShift shift = lookups.shift(id);
+        MaintenanceShiftUpdateRequest request = patch.values();
+        StaleVersionException.check("Shift " + shift.getCode(), shift.getVersion(), request.version());
+        PatchRules.requireClearable(patch, CLEARABLE);
         if (!ShiftStateMachine.allowsUpdate(shift.getStatus())) {
             throw new InvalidTransitionException("Shift " + shift.getCode() + " is " + shift.getStatus() + " and cannot be changed");
         }
         if (request.shiftDate() != null) {
             shift.setShiftDate(request.shiftDate());
         }
-        if (request.teamId() != null) {
+        if (patch.clears("teamId")) {
+            shift.setTeam(null);
+        } else if (request.teamId() != null) {
             shift.setTeam(lookups.team(request.teamId()));
         }
-        if (request.baseName() != null) {
-            shift.setBaseName(request.baseName());
-        }
-        if (request.vehicle() != null) {
-            shift.setVehicle(request.vehicle());
-        }
+        PatchRules.set(patch, "baseName", request.baseName(), shift::setBaseName);
+        PatchRules.set(patch, "vehicle", request.vehicle(), shift::setVehicle);
         if (request.possessionType() != null) {
             shift.setPossessionType(request.possessionType());
         }
-        if (request.plannedStart() != null) {
-            shift.setPlannedStart(request.plannedStart());
-        }
-        if (request.plannedEnd() != null) {
-            shift.setPlannedEnd(request.plannedEnd());
-        }
-        if (request.blockingDisconnectorIds() != null) {
-            // Se sustituye el conjunto entero: null = no tocar, vacio = ninguno abierto.
+        PatchRules.set(patch, "plannedStart", request.plannedStart(), shift::setPlannedStart);
+        PatchRules.set(patch, "plannedEnd", request.plannedEnd(), shift::setPlannedEnd);
+        if (request.blockingDisconnectorIds() != null || patch.clears("blockingDisconnectorIds")) {
+            // Se sustituye el conjunto entero: null en un PUT = no tocar; vacio, o null en un PATCH = ninguno abierto.
             shift.getBlockingDisconnectors().clear();
-            shift.getBlockingDisconnectors().addAll(disconnectors(request.blockingDisconnectorIds()));
+            if (request.blockingDisconnectorIds() != null) {
+                shift.getBlockingDisconnectors().addAll(disconnectors(request.blockingDisconnectorIds()));
+            }
         }
-        if (request.earthingPoints() != null) {
-            shift.setEarthingPoints(request.earthingPoints());
-        }
-        if (request.parkingPlace() != null) {
-            shift.setParkingPlace(request.parkingPlace());
-        }
-        if (request.executionPackageId() != null) {
-            shift.setExecutionPackageId(request.executionPackageId());
-        }
+        PatchRules.set(patch, "earthingPoints", request.earthingPoints(), shift::setEarthingPoints);
+        PatchRules.set(patch, "parkingPlace", request.parkingPlace(), shift::setParkingPlace);
+        PatchRules.set(patch, "executionPackageId", request.executionPackageId(), shift::setExecutionPackageId);
         if (request.trackIds() != null) {
             if (request.trackIds().isEmpty()) {
                 throw new ValidationException("A shift must cover at least one track");
@@ -164,21 +170,11 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
             shift.getTrackIds().clear();
             shift.getTrackIds().addAll(request.trackIds());
         }
-        if (request.startKp() != null) {
-            shift.setStartKp(request.startKp());
-        }
-        if (request.endKp() != null) {
-            shift.setEndKp(request.endKp());
-        }
-        if (request.personnel() != null) {
-            shift.setPersonnel(request.personnel());
-        }
-        if (request.measurementEquipment() != null) {
-            shift.setMeasurementEquipment(request.measurementEquipment());
-        }
-        if (request.observations() != null) {
-            shift.setObservations(request.observations());
-        }
+        PatchRules.set(patch, "startKp", request.startKp(), shift::setStartKp);
+        PatchRules.set(patch, "endKp", request.endKp(), shift::setEndKp);
+        PatchRules.set(patch, "personnel", request.personnel(), shift::setPersonnel);
+        PatchRules.set(patch, "measurementEquipment", request.measurementEquipment(), shift::setMeasurementEquipment);
+        PatchRules.set(patch, "observations", request.observations(), shift::setObservations);
         validate(shift);
         return mapper.toResponse(repository.save(shift));
     }

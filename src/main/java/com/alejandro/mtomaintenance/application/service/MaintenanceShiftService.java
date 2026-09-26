@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.application.service;
 
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
@@ -24,6 +25,9 @@ public interface MaintenanceShiftService {
     MaintenanceShiftResponse create(MaintenanceShiftRequest request);
 
     MaintenanceShiftResponse update(UUID id, MaintenanceShiftUpdateRequest request);
+
+    /** Como {@link #update}, y ademas vacia lo que el parche pone a null. */
+    MaintenanceShiftResponse patch(UUID id, MergePatch<MaintenanceShiftUpdateRequest> patch);
 
     MaintenanceShiftResponse findById(UUID id);
 

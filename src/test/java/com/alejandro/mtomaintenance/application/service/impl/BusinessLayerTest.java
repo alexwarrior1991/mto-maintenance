@@ -60,6 +60,8 @@ import com.alejandro.mtomaintenance.application.exception.InvalidTransitionExcep
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.UnsyncedMaterialsException;
@@ -397,8 +399,8 @@ class BusinessLayerTest {
         when(fixture.repository.findByIdAndOrderId(line.getId(), order.getId())).thenReturn(Optional.of(line));
 
         assertThrows(MaterialUsageException.class, () -> fixture.service.update(order.getId(), line.getId(),
-                new MaterialUsageUpdateRequest(null, new BigDecimal("3"), null)));
-        fixture.service.update(order.getId(), line.getId(), new MaterialUsageUpdateRequest(null, new BigDecimal("3"), true));
+                new MaterialUsageUpdateRequest(null, new BigDecimal("3"), null, null)));
+        fixture.service.update(order.getId(), line.getId(), new MaterialUsageUpdateRequest(null, new BigDecimal("3"), true, null));
         assertEquals(0, new BigDecimal("3").compareTo(line.getConsumedQuantity()));
     }
 
@@ -715,9 +717,9 @@ class BusinessLayerTest {
         when(fixture.lookups.order(assigned.getId())).thenReturn(assigned);
 
         assertThrows(InvalidTransitionException.class, () -> fixture.service.update(assigned.getId(),
-                new MaintenanceOrderUpdateRequest("New title", null, null, null, null, null, null, null, null, null, null, null, null)));
+                new MaintenanceOrderUpdateRequest("New title", null, null, null, null, null, null, null, null, null, null, null, null, null)));
         fixture.service.update(assigned.getId(), new MaintenanceOrderUpdateRequest(null, "Re-tension the wire", MaintenancePriority.HIGH,
-                null, null, null, "half done", null, null, null, null, null, null));
+                null, null, null, "half done", null, null, null, null, null, null, null));
 
         assertEquals("Re-tension the wire", assigned.getDescription());
         assertEquals(MaintenancePriority.HIGH, assigned.getPriority());
@@ -728,23 +730,23 @@ class BusinessLayerTest {
         MaintenanceOrder draft = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
         when(fixture.lookups.order(draft.getId())).thenReturn(draft);
         fixture.service.update(draft.getId(), new MaintenanceOrderUpdateRequest(" Preventive T2 ", null, null, LocalDate.of(2026, 2, 1),
-                null, "yossi", null, 7L, null, null, null, null, null));
+                null, "yossi", null, 7L, null, null, null, null, null, null));
         assertEquals("Preventive T2", draft.getTitle());
         assertEquals(LocalDate.of(2026, 2, 1), draft.getPlannedDate());
         assertEquals(7L, draft.getExecutionPackageId());
         assertThrows(ValidationException.class, () -> fixture.service.update(draft.getId(),
-                new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null, null, new BigDecimal("15000.000"), null, null)));
+                new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null, null, new BigDecimal("15000.000"), null, null, null)));
 
         // URGENT no baja nunca de CRITICAL aunque la peticion lo pida.
         MaintenanceOrder urgent = order(MaintenanceOrderType.URGENT, MaintenanceOrderStatus.IN_PROGRESS);
         when(fixture.lookups.order(urgent.getId())).thenReturn(urgent);
-        fixture.service.update(urgent.getId(), new MaintenanceOrderUpdateRequest(null, null, MaintenancePriority.LOW, null, null, null, null, null, null, null, null, null, null));
+        fixture.service.update(urgent.getId(), new MaintenanceOrderUpdateRequest(null, null, MaintenancePriority.LOW, null, null, null, null, null, null, null, null, null, null, null));
         assertEquals(MaintenancePriority.CRITICAL, urgent.getPriority());
 
         MaintenanceOrder completed = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.COMPLETED);
         when(fixture.lookups.order(completed.getId())).thenReturn(completed);
         assertThrows(InvalidTransitionException.class, () -> fixture.service.update(completed.getId(),
-                new MaintenanceOrderUpdateRequest(null, "late", null, null, null, null, null, null, null, null, null, null, null)));
+                new MaintenanceOrderUpdateRequest(null, "late", null, null, null, null, null, null, null, null, null, null, null, null)));
     }
 
     @Test
@@ -835,8 +837,8 @@ class BusinessLayerTest {
         when(fixture.lookups.asset(synced.getId())).thenReturn(synced);
 
         assertThrows(AssetDisabledException.class, () -> fixture.service.update(synced.getId(),
-                new CatenaryAssetUpdateRequest("renamed", null, null, null, null, null, null, null, null, null, null, null)));
-        fixture.service.update(synced.getId(), new CatenaryAssetUpdateRequest(null, "Next to the bridge", false, 180, null, null, null, null, null, null, null, null));
+                new CatenaryAssetUpdateRequest("renamed", null, null, null, null, null, null, null, null, null, null, null, null)));
+        fixture.service.update(synced.getId(), new CatenaryAssetUpdateRequest(null, "Next to the bridge", false, 180, null, null, null, null, null, null, null, null, null));
 
         assertEquals("12-2.27", synced.getName());
         assertEquals("Next to the bridge", synced.getDescription());
@@ -844,7 +846,7 @@ class BusinessLayerTest {
         assertTrue(synced.getDisabledLocally(), "Disabled here, which no master data event undoes");
         assertEquals(180, synced.getPreventiveIntervalDays());
 
-        fixture.service.update(synced.getId(), new CatenaryAssetUpdateRequest(null, null, true, null, null, null, null, null, null, null, null, null));
+        fixture.service.update(synced.getId(), new CatenaryAssetUpdateRequest(null, null, true, null, null, null, null, null, null, null, null, null, null));
         assertTrue(synced.isEnabled());
         assertFalse(synced.getDisabledLocally());
 
@@ -854,20 +856,20 @@ class BusinessLayerTest {
         ReflectionTestUtils.setField(goneAtSource, "id", UUID.randomUUID());
         when(fixture.lookups.asset(goneAtSource.getId())).thenReturn(goneAtSource);
         assertThrows(AssetDisabledException.class, () -> fixture.service.update(goneAtSource.getId(),
-                new CatenaryAssetUpdateRequest(null, null, true, null, null, null, null, null, null, null, null, null)));
+                new CatenaryAssetUpdateRequest(null, null, true, null, null, null, null, null, null, null, null, null, null)));
         assertFalse(goneAtSource.isEnabled());
 
         // Un activo local admite cambiar la localizacion, siempre con un rango kp coherente y trackKind solo en tramos.
         CatenaryAsset local = profile("13-2.01", "13007.290");
         when(fixture.lookups.asset(local.getId())).thenReturn(local);
         assertThrows(ValidationException.class, () -> fixture.service.update(local.getId(),
-                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN, null, null)));
+                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN, null, null, null)));
         assertThrows(ValidationException.class, () -> fixture.service.update(local.getId(),
-                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, new BigDecimal("13000.000"), null, null, null)));
+                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, new BigDecimal("13000.000"), null, null, null, null)));
 
         CatenaryAsset section = trackSection();
         when(fixture.lookups.asset(section.getId())).thenReturn(section);
-        fixture.service.update(section.getId(), new CatenaryAssetUpdateRequest(" T2 renamed ", null, null, null, 7L, 3L, 9L, null, null, TrackKind.DIVERTED, null, null));
+        fixture.service.update(section.getId(), new CatenaryAssetUpdateRequest(" T2 renamed ", null, null, null, 7L, 3L, 9L, null, null, TrackKind.DIVERTED, null, null, null));
         assertEquals("T2 renamed", section.getName());
         assertEquals(7L, section.getExecutionPackageId());
         assertEquals(3L, section.getTrackId());
@@ -895,6 +897,161 @@ class BusinessLayerTest {
         fixture.service.disable(goneAtSource.getId());
         assertTrue(goneAtSource.getDisabledLocally());
         verify(fixture.repository).save(goneAtSource);
+    }
+
+    // ----------------------------------------------------------- merge patch
+
+    @Test
+    void aPatchEmptiesWhatEachResourceAdmitsAndRefusesTheRequiredFieldsWithA400() {
+        OrderFixture orders = new OrderFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
+        order.setPlannedDate(LocalDate.now().plusDays(2));
+        order.setTeam(team("T1"));
+        when(orders.lookups.order(order.getId())).thenReturn(order);
+        orders.service.patch(order.getId(), new MergePatch<>(orderUpdate(null), Set.of("plannedDate", "teamId", "stationId")));
+        assertNull(order.getPlannedDate());
+        assertNull(order.getTeam());
+        assertEquals(2L, order.getTrackId(), "What the patch leaves out is not touched");
+        ValidationException required = assertThrows(ValidationException.class,
+                () -> orders.service.patch(order.getId(), new MergePatch<>(orderUpdate(null), Set.of("title", "priority"))));
+        assertEquals("These fields cannot be emptied: priority, title", required.getMessage());
+        order.setStatus(MaintenanceOrderStatus.IN_PROGRESS);
+        order.setPlannedDate(LocalDate.now());
+        assertThrows(InvalidTransitionException.class,
+                () -> orders.service.patch(order.getId(), new MergePatch<>(orderUpdate(null), Set.of("plannedDate"))),
+                "Emptying is changing: after PLANNED only description and closing notes");
+        orders.service.patch(order.getId(), new MergePatch<>(orderUpdate(null), Set.of("closingNotes")));
+        assertEquals(LocalDate.now(), order.getPlannedDate());
+
+        ShiftFixture shifts = new ShiftFixture();
+        MaintenanceShift shift = shift(2L, PossessionType.PARTIAL, ShiftStatus.PLANNED);
+        shift.setTeam(team("T2"));
+        shift.setPlannedStart(Instant.parse("2026-02-01T22:00:00Z"));
+        when(shifts.lookups.shift(shift.getId())).thenReturn(shift);
+        shifts.service.patch(shift.getId(), new MergePatch<>(shiftUpdate(null), Set.of("teamId", "plannedStart", "blockingDisconnectorIds")));
+        assertNull(shift.getTeam());
+        assertNull(shift.getPlannedStart());
+        assertThrows(ValidationException.class, () -> shifts.service.patch(shift.getId(), new MergePatch<>(shiftUpdate(null), Set.of("trackIds"))));
+
+        DefectFixture defects = new DefectFixture();
+        CatenaryDefect defect = defect(DefectStatus.OPEN);
+        defect.setRepairPlannedDate(LocalDate.now().plusDays(7));
+        when(defects.repository.findById(defect.getId())).thenReturn(Optional.of(defect));
+        defects.service.patch(defect.getId(), new MergePatch<>(new CatenaryDefectUpdateRequest(null, null, null, null, null, null, null, null),
+                Set.of("repairPlannedDate", "photoRefs")));
+        assertNull(defect.getRepairPlannedDate());
+        assertTrue(defect.getPhotoRefs().isEmpty());
+        assertThrows(ValidationException.class, () -> defects.service.patch(defect.getId(),
+                new MergePatch<>(new CatenaryDefectUpdateRequest(null, " ", null, null, null, null, null, null), Set.of())),
+                "A blank description is a 400 here, not a 500 against @NotBlank at commit");
+
+        InspectionFixture inspections = new InspectionFixture();
+        MaintenanceInspection inspection = inspection(InspectionResult.OK);
+        inspection.setKp(new BigDecimal("13499.290"));
+        MaintenanceInspectionItem height = MaintenanceInspectionItem.fromTemplate(inspection, templateItem("CW_HEIGHT", 1, true));
+        ReflectionTestUtils.setField(height, "id", UUID.randomUUID());
+        height.setMeasuredValue(new BigDecimal("5200"));
+        inspection.getItems().add(height);
+        when(inspections.repository.findById(inspection.getId())).thenReturn(Optional.of(inspection));
+        inspections.service.patch(inspection.getId(), new MergePatch<>(new MaintenanceInspectionUpdateRequest(null, null, null, null, null, null, null, null, null),
+                Set.of("kp")));
+        assertNull(inspection.getKp());
+        inspections.service.patchItem(inspection.getId(), height.getId(),
+                new MergePatch<>(new CheckItemUpdateRequest(null, null, null, null, null, null), Set.of("measuredValue")));
+        assertNull(height.getMeasuredValue());
+        assertThrows(ValidationException.class, () -> inspections.service.patchItem(inspection.getId(), height.getId(),
+                new MergePatch<>(new CheckItemUpdateRequest(null, null, null, null, null, null), Set.of("adjusted"))),
+                "Adjusted is yes or no, never nothing");
+
+        MaterialFixture materials = new MaterialFixture();
+        MaintenanceOrder planned = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        when(materials.lookups.order(planned.getId())).thenReturn(planned);
+        MaintenanceMaterialUsage line = storedLine(materials, planned, line(planned));
+        assertThrows(ValidationException.class, () -> materials.service.patch(planned.getId(), line.getId(),
+                new MergePatch<>(new MaterialUsageUpdateRequest(null, null, null, null), Set.of("consumedQuantity"))));
+
+        AssetFixture assets = new AssetFixture();
+        CatenaryAsset synced = profile("12-2.27", "12847.990");
+        synced.setSourceService("mto-configuration");
+        synced.setSourceEntityId("prf-1");
+        synced.setPreventiveIntervalDays(180);
+        when(assets.lookups.asset(synced.getId())).thenReturn(synced);
+        assets.service.patch(synced.getId(), new MergePatch<>(assetUpdate(null), Set.of("preventiveIntervalDays", "description")));
+        assertNull(synced.getPreventiveIntervalDays());
+        assertThrows(AssetDisabledException.class, () -> assets.service.patch(synced.getId(), new MergePatch<>(assetUpdate(null), Set.of("stationId"))),
+                "Emptying the station of a synchronized asset is changing what mto-configuration decides");
+        CatenaryAsset section = trackSection();
+        section.setStationId(9L);
+        when(assets.lookups.asset(section.getId())).thenReturn(section);
+        assets.service.patch(section.getId(), new MergePatch<>(assetUpdate(null), Set.of("stationId")));
+        assertNull(section.getStationId());
+    }
+
+    @Test
+    void aStaleVersionIsRejectedBeforeAnythingChangesAndWithoutVersionEverythingIsAsBefore() {
+        OrderFixture fixture = new OrderFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
+        ReflectionTestUtils.setField(order, "version", 3L);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+
+        StaleVersionException stale = assertThrows(StaleVersionException.class, () -> fixture.service.update(order.getId(),
+                new MaintenanceOrderUpdateRequest(null, "Someone else's view", null, null, null, null, null, null, null, null, null, null, null, 2L)));
+        assertTrue(stale.getMessage().contains("version 3"));
+        assertNull(order.getDescription());
+        verify(fixture.repository, never()).save(any());
+
+        fixture.service.update(order.getId(), new MaintenanceOrderUpdateRequest(null, "Read just now", null, null, null, null, null, null, null, null, null, null, null, 3L));
+        assertEquals("Read just now", order.getDescription());
+        fixture.service.update(order.getId(), new MaintenanceOrderUpdateRequest(null, "No version", null, null, null, null, null, null, null, null, null, null, null, null));
+        assertEquals("No version", order.getDescription());
+
+        // Un punto de checklist lleva su propia version.
+        TaskFixture tasks = new TaskFixture();
+        MaintenanceOrder running = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceTask task = task(running, MaintenanceTaskStatus.PENDING);
+        MaintenanceTaskCheckItem item = MaintenanceTaskCheckItem.fromTemplate(task, templateItem("CW_HEIGHT", 1, true));
+        ReflectionTestUtils.setField(item, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(item, "version", 1L);
+        task.getCheckItems().add(item);
+        when(tasks.lookups.order(running.getId())).thenReturn(running);
+        when(tasks.repository.findByIdAndOrderId(task.getId(), running.getId())).thenReturn(Optional.of(task));
+        assertThrows(StaleVersionException.class, () -> tasks.service.updateCheckItem(running.getId(), task.getId(), item.getId(),
+                new CheckItemUpdateRequest(new BigDecimal("5200"), null, null, null, null, 0L)));
+        assertNull(item.getMeasuredValue());
+    }
+
+    @Test
+    void aBlankTitleIsA400AndLoweringThePlannedQuantityBelowWhatWasConsumedIsTheOverConsumptionRule() {
+        OrderFixture orders = new OrderFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
+        when(orders.lookups.order(order.getId())).thenReturn(order);
+        assertThrows(ValidationException.class, () -> orders.service.update(order.getId(),
+                new MaintenanceOrderUpdateRequest("  ", null, null, null, null, null, null, null, null, null, null, null, null, null)));
+        assertEquals("Order", order.getTitle());
+
+        MaterialFixture materials = new MaterialFixture();
+        MaintenanceOrder planned = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        when(materials.lookups.order(planned.getId())).thenReturn(planned);
+        MaintenanceMaterialUsage line = storedLine(materials, planned, line(planned));
+        line.setConsumedQuantity(new BigDecimal("2"));
+        MaterialUsageException below = assertThrows(MaterialUsageException.class, () -> materials.service.update(planned.getId(), line.getId(),
+                new MaterialUsageUpdateRequest(new BigDecimal("1"), null, null, null)));
+        assertTrue(below.getMessage().contains("below"), "It used to break a CHECK of the database and answer 500");
+        line.setAllowOverConsumption(true);
+        materials.service.update(planned.getId(), line.getId(), new MaterialUsageUpdateRequest(new BigDecimal("1"), null, null, null));
+        assertEquals(0, BigDecimal.ONE.compareTo(line.getPlannedQuantity()));
+    }
+
+    private static MaintenanceOrderUpdateRequest orderUpdate(Long version) {
+        return new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null, null, version);
+    }
+
+    private static MaintenanceShiftUpdateRequest shiftUpdate(Long version) {
+        return new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, version);
+    }
+
+    private static CatenaryAssetUpdateRequest assetUpdate(Long version) {
+        return new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null, version);
     }
 
     // ---------------------------------------------------------------- defects
@@ -960,7 +1117,7 @@ class BusinessLayerTest {
         assertThrows(InvalidTransitionException.class, () -> fixture.service.close(defect.getId(), new DefectCommentRequest("again")));
         assertThrows(InvalidTransitionException.class, () -> fixture.service.resolve(defect.getId(), new ResolveDefectRequest("again", null, null, null)));
         assertThrows(InvalidTransitionException.class, () -> fixture.service.update(defect.getId(),
-                new CatenaryDefectUpdateRequest(DefectSeverity.LOW, null, null, null, null, null, null)));
+                new CatenaryDefectUpdateRequest(DefectSeverity.LOW, null, null, null, null, null, null, null)));
 
         // Con la orden completada la resolucion no necesita turno.
         MaintenanceOrder done = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.COMPLETED);
@@ -1002,7 +1159,7 @@ class BusinessLayerTest {
         CatenaryDefect fresh = defect(DefectStatus.OPEN);
         when(fixture.repository.findById(fresh.getId())).thenReturn(Optional.of(fresh));
         fixture.service.update(fresh.getId(), new CatenaryDefectUpdateRequest(DefectSeverity.CRITICAL, " Kink in the wire ", "measured 3 mm", null, null,
-                LocalDate.of(2026, 2, 3), List.of("kink.jpg")));
+                LocalDate.of(2026, 2, 3), List.of("kink.jpg"), null));
         assertEquals(DefectSeverity.CRITICAL, fresh.getSeverity());
         assertEquals("Kink in the wire", fresh.getDescription());
         assertEquals(LocalDate.of(2026, 2, 3), fresh.getRepairPlannedDate());
@@ -1042,10 +1199,10 @@ class BusinessLayerTest {
         // Un update con conjunto vacio los quita; con null no los toca.
         when(fixture.lookups.shift(saved.getId())).thenReturn(saved);
         fixture.service.update(saved.getId(), new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null));
+                null, null, null, null, null, null));
         assertEquals(3, saved.getBlockingDisconnectors().size());
         fixture.service.update(saved.getId(), new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null, Set.of(), null, null, null, null,
-                null, null, null, null, null));
+                null, null, null, null, null, null));
         assertTrue(saved.getBlockingDisconnectors().isEmpty());
     }
 
@@ -1265,24 +1422,24 @@ class BusinessLayerTest {
         when(fixture.repository.findById(inspection.getId())).thenReturn(Optional.of(inspection));
 
         assertThrows(InspectionException.class, () -> fixture.service.updateItem(inspection.getId(), height.getId(),
-                new CheckItemUpdateRequest(new BigDecimal("5620"), null, null, CheckItemResult.OK, null)));
+                new CheckItemUpdateRequest(new BigDecimal("5620"), null, null, CheckItemResult.OK, null, null)));
         fixture.service.updateItem(inspection.getId(), height.getId(),
-                new CheckItemUpdateRequest(null, null, new BigDecimal("5300"), CheckItemResult.OK, "brought back to 5300"));
+                new CheckItemUpdateRequest(null, null, new BigDecimal("5300"), CheckItemResult.OK, "brought back to 5300", null));
 
         assertTrue(height.getAdjusted(), "A value after adjustment marks the item as adjusted");
         assertEquals(CheckItemResult.OK, height.getItemResult());
         assertEquals(new BigDecimal("5300"), height.effectiveValue());
         assertFalse(height.isOutOfRange());
 
-        fixture.service.updateItem(inspection.getId(), height.getId(), new CheckItemUpdateRequest(null, null, null, CheckItemResult.DEFECT, null));
+        fixture.service.updateItem(inspection.getId(), height.getId(), new CheckItemUpdateRequest(null, null, null, CheckItemResult.DEFECT, null, null));
         assertThrows(InspectionException.class, () -> fixture.service.update(inspection.getId(),
-                new MaintenanceInspectionUpdateRequest(null, null, null, InspectionResult.OK, null, null, null, null)));
+                new MaintenanceInspectionUpdateRequest(null, null, null, InspectionResult.OK, null, null, null, null, null)));
         assertEquals(InspectionResult.OK, inspection.getResult(), "The result is applied before the check so the caller sees why it failed");
         assertThrows(NotFoundException.class, () -> fixture.service.updateItem(inspection.getId(), UUID.randomUUID(),
-                new CheckItemUpdateRequest(null, null, null, CheckItemResult.OK, null)));
+                new CheckItemUpdateRequest(null, null, null, CheckItemResult.OK, null, null)));
 
         fixture.service.update(inspection.getId(), new MaintenanceInspectionUpdateRequest(LocalDate.of(2026, 1, 29), "dana", InspectionKind.TECHNICAL,
-                InspectionResult.MAJOR_DEFECT, "measured", "Height out of range", "Adjust", new BigDecimal("13500.000")));
+                InspectionResult.MAJOR_DEFECT, "measured", "Height out of range", "Adjust", new BigDecimal("13500.000"), null));
         assertEquals(InspectionResult.MAJOR_DEFECT, inspection.getResult());
         assertEquals("dana", inspection.getInspector());
         assertEquals(InspectionKind.TECHNICAL, inspection.getInspectionKind());
@@ -1469,8 +1626,8 @@ class BusinessLayerTest {
         when(fixture.repository.findByIdAndOrderId(task.getId(), order.getId())).thenReturn(Optional.of(task));
         when(fixture.lookups.taskTypes(List.of("RG-01"))).thenReturn(taskTypes("RG-01"));
 
-        fixture.service.updateCheckItem(order.getId(), task.getId(), item.getId(), new CheckItemUpdateRequest(new BigDecimal("5200"), null, null, CheckItemResult.OK, null));
-        fixture.service.update(order.getId(), task.getId(), new MaintenanceTaskUpdateRequest(" Pole 12-2.27 ", "dana", List.of("RG-01"), null, "bird nest", List.of("nest.jpg")));
+        fixture.service.updateCheckItem(order.getId(), task.getId(), item.getId(), new CheckItemUpdateRequest(new BigDecimal("5200"), null, null, CheckItemResult.OK, null, null));
+        fixture.service.update(order.getId(), task.getId(), new MaintenanceTaskUpdateRequest(" Pole 12-2.27 ", "dana", List.of("RG-01"), null, "bird nest", List.of("nest.jpg"), null));
 
         assertEquals(CheckItemResult.OK, item.getItemResult());
         assertEquals("Pole 12-2.27", task.getDescription());
@@ -1484,9 +1641,9 @@ class BusinessLayerTest {
         assertEquals(MaintenanceTaskStatus.CANCELLED, task.getStatus());
         assertEquals("Prepared\nCancelled: profile skipped this cycle", task.getNotes());
         assertThrows(InvalidTransitionException.class, () -> fixture.service.updateCheckItem(order.getId(), task.getId(), item.getId(),
-                new CheckItemUpdateRequest(null, null, null, CheckItemResult.DEFECT, null)));
+                new CheckItemUpdateRequest(null, null, null, CheckItemResult.DEFECT, null, null)));
         assertThrows(InvalidTransitionException.class, () -> fixture.service.update(order.getId(), task.getId(),
-                new MaintenanceTaskUpdateRequest("x", null, null, null, null, null)));
+                new MaintenanceTaskUpdateRequest("x", null, null, null, null, null, null)));
         assertThrows(InvalidTransitionException.class, () -> fixture.service.cancel(order.getId(), task.getId(), new CancelTaskRequest("again")));
     }
 
@@ -1913,7 +2070,7 @@ class BusinessLayerTest {
         consumed.markConsumed();
 
         assertThrows(MaterialUsageException.class, () -> fixture.service.update(order.getId(), consumed.getId(),
-                new MaterialUsageUpdateRequest(null, new BigDecimal("3"), true)));
+                new MaterialUsageUpdateRequest(null, new BigDecimal("3"), true, null)));
         assertEquals(0, new BigDecimal("2").compareTo(consumed.getConsumedQuantity()));
         assertFalse(consumed.getAllowOverConsumption());
     }
@@ -1933,14 +2090,14 @@ class BusinessLayerTest {
         when(fixture.lookups.order(planned.getId())).thenReturn(planned);
         when(fixture.repository.findByIdAndOrderId(line.getId(), planned.getId())).thenReturn(Optional.of(line));
 
-        assertThrows(MaterialUsageException.class, () -> fixture.service.update(planned.getId(), line.getId(), new MaterialUsageUpdateRequest(new BigDecimal("5"), null, null)));
-        fixture.service.update(planned.getId(), line.getId(), new MaterialUsageUpdateRequest(null, null, true));
+        assertThrows(MaterialUsageException.class, () -> fixture.service.update(planned.getId(), line.getId(), new MaterialUsageUpdateRequest(new BigDecimal("5"), null, null, null)));
+        fixture.service.update(planned.getId(), line.getId(), new MaterialUsageUpdateRequest(null, null, true, null));
         assertTrue(line.getAllowOverConsumption());
 
         fixture.service.sync(planned.getId(), line.getId());
         verify(fixture.stock).syncNow(line);
 
-        assertThrows(NotFoundException.class, () -> fixture.service.update(planned.getId(), UUID.randomUUID(), new MaterialUsageUpdateRequest(null, null, true)));
+        assertThrows(NotFoundException.class, () -> fixture.service.update(planned.getId(), UUID.randomUUID(), new MaterialUsageUpdateRequest(null, null, true, null)));
         assertThrows(NotFoundException.class, () -> fixture.service.register(planned.getId(),
                 new MaterialUsageRequest(UUID.randomUUID(), "GA70", UUID.randomUUID(), BigDecimal.ONE, "ud", UUID.randomUUID(), null)),
                 "A task id that is not one of the order's tasks");
@@ -2297,7 +2454,7 @@ class BusinessLayerTest {
                 closed ? 290 : null,
                 List.of(), "PT-14", "Rishpon depot", 6L, List.of(2L),
                 new BigDecimal("12847.990"), new BigDecimal("14078.090"),
-                "3 linemen", "Laser", status, null, null);
+                "3 linemen", "Laser", status, null, null, null);
         return new ShiftReportResponse(shift, rows.size(), 0, rows.size(), 0, 0, rows);
     }
 
@@ -2645,6 +2802,6 @@ class BusinessLayerTest {
 
     private static MaintenanceShiftUpdateRequest shiftUpdate(Set<Long> trackIds, PossessionType possession) {
         return new MaintenanceShiftUpdateRequest(null, null, null, null, possession, null, null, null, null, null, null, trackIds, null, null,
-                null, null, null);
+                null, null, null, null);
     }
 }

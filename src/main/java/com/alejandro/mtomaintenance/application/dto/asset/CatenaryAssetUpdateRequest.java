@@ -26,7 +26,8 @@ public record CatenaryAssetUpdateRequest(
         @Digits(integer = 9, fraction = 3) BigDecimal endKp,
         TrackKind trackKind,
         Long connectedTrackId,
-        SectionInsulatorInstallation installationType
+        SectionInsulatorInstallation installationType,
+        Long version
 ) {
     /**
      * Verdadero si la peticion toca algo que en un activo de datos maestros es de solo lectura.

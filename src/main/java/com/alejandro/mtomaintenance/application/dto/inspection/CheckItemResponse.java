@@ -20,6 +20,7 @@ public record CheckItemResponse(
         CheckItemResult itemResult,
         String notes,
         Integer orderIndex,
-        Boolean outOfRange
+        Boolean outOfRange,
+        Long version
 ) {
 }
