@@ -116,6 +116,16 @@ track, and then the empty `execution_package_id`/`track_id` of the orders, defec
 created on them (only the empty ones: a value is never overwritten). Like every master-data write it
 is SQL outside Hibernate, so the `_aud` twins show the holes until the next change through the API.
 
+## Asset enabled at the source and locally (`V10`)
+
+`catenary_asset` gains `enabled_at_source` (nullable: what `mto-configuration` last said; `null` on
+own sections) and `disabled_locally` (`not null default false`: maintenance's decision), both also in
+`catenary_asset_aud`. `enabled` stays as the effective value every query and the `(type, enabled)`
+index read, and `chk_catenary_asset_enabled` keeps it equal to
+`coalesce(enabled_at_source, true) and not disabled_locally`. The master-data upsert writes
+`enabled_at_source` and recomputes `enabled` without touching `disabled_locally`. Existing rows:
+synchronized ones got `enabled_at_source = enabled`, own ones `disabled_locally = not enabled`.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`

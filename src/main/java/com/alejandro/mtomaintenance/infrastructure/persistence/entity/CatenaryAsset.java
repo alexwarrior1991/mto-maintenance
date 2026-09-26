@@ -158,8 +158,25 @@ public class CatenaryAsset extends AuditableEntity {
     @Column(name = "source_sequence_number")
     private Long sourceSequenceNumber;
 
+    /** Lo ultimo que dijo mto-configuration; null en los activos propios. Solo lo escribe el upsert. */
+    @Column(name = "enabled_at_source")
+    private Boolean enabledAtSource;
+
+    /** La decision de mantenimiento (DELETE, o PUT con enabled=false): ningun evento la toca. */
     @NotNull
     @Builder.Default
+    @Setter(AccessLevel.NONE)
+    @Column(name = "disabled_locally", nullable = false)
+    private Boolean disabledLocally = false;
+
+    /**
+     * El valor efectivo, el que leen todas las consultas: {@code coalesce(enabledAtSource, true) and
+     * not disabledLocally}. No se escribe suelto (un CHECK de la base lo impide): lo recalculan
+     * {@link #disableLocally}, {@link #enableLocally} y el upsert de datos maestros.
+     */
+    @NotNull
+    @Builder.Default
+    @Setter(AccessLevel.NONE)
     @Column(name = "enabled", nullable = false)
     private Boolean enabled = true;
 
@@ -177,5 +194,21 @@ public class CatenaryAsset extends AuditableEntity {
 
     public boolean isEnabled() {
         return Boolean.TRUE.equals(enabled);
+    }
+
+    /** Desactivado en mto-configuration: vuelve cuando el origen lo reactive, no antes. */
+    public boolean isDisabledAtSource() {
+        return Boolean.FALSE.equals(enabledAtSource);
+    }
+
+    public void disableLocally() {
+        this.disabledLocally = true;
+        this.enabled = false;
+    }
+
+    /** Quita la desactivacion de mantenimiento; si el origen lo tiene desactivado, sigue desactivado. */
+    public void enableLocally() {
+        this.disabledLocally = false;
+        this.enabled = !isDisabledAtSource();
     }
 }

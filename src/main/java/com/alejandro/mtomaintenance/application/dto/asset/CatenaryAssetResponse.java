@@ -10,6 +10,10 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Un activo. {@code enabled} es el valor efectivo; {@code enabledAtSource} (null en los propios) y
+ * {@code disabledLocally} dicen por que esta desactivado: en mto-configuration, aqui, o las dos.
+ */
 public record CatenaryAssetResponse(
         UUID id,
         String code,
@@ -31,6 +35,8 @@ public record CatenaryAssetResponse(
         String sourceEntityId,
         Long sourceSequenceNumber,
         Boolean enabled,
+        Boolean enabledAtSource,
+        Boolean disabledLocally,
         Integer preventiveIntervalDays,
         Instant lastPreventiveCompletedAt,
         Instant nextPreventiveDueAt,

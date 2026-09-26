@@ -203,5 +203,20 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         });
         assertEquals(RevisionType.MOD, rows.getFirst()[2], "Without an ADD revision the first API edit is recorded as a modification");
         assertEquals("system", ((AuditRevision) rows.getFirst()[1]).getUsername(), "No authenticated user: the system is the author");
+
+        // Desactivarlo aqui es una escritura de la API: deja revision, y el siguiente evento no la deshace.
+        inTransaction(em -> {
+            em.find(CatenaryAsset.class, assetId).disableLocally();
+            return null;
+        });
+        inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27 renamed", "PROFILE",
+                6L, 2L, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 12L));
+        List<Number> afterDisable = reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId));
+        assertEquals(2, afterDisable.size());
+        CatenaryAsset disabled = reading(reader -> reader.find(CatenaryAsset.class, assetId, afterDisable.getLast()));
+        assertTrue(disabled.getDisabledLocally());
+        assertFalse(disabled.getEnabled());
+        Boolean enabledNow = inTransaction(em -> em.find(CatenaryAsset.class, assetId).getEnabled());
+        assertFalse(enabledNow, "The event after it does not undo the local decision");
     }
 }

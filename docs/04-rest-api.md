@@ -103,7 +103,7 @@ partsReplaced, resolvedInShiftId}`.
 | 404 `HTTP-404` | Unknown route |
 | 405 `REQ-405` | The route exists but not for that method; the `Allow` header lists the ones it takes |
 | 409 `TRN-001` | Invalid transition |
-| 409 `AST-001` | Disabled asset |
+| 409 `AST-001` | Disabled asset; a field of a synchronized asset that only `mto-configuration` changes; `enabled=true` on an asset disabled at the source |
 | 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track) |
 | 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
@@ -119,5 +119,5 @@ partsReplaced, resolvedInShiftId}`.
 |---|---|
 | `GET` | `MAINTENANCE_READ` |
 | `POST`, `PUT` | `MAINTENANCE_WRITE` |
-| `DELETE` | `MAINTENANCE_DELETE` |
+| `DELETE`, and `PUT /assets/{id}` with `enabled=false` (the same decision) | `MAINTENANCE_DELETE` (method security on the `PUT`, on top of `MAINTENANCE_WRITE`) |
 | `cancel` **of an order**, `complete` of an order with `force=true`, `resolve`, `close`, `discard` of a defect | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security); cancelling a shift or a task only needs `MAINTENANCE_WRITE` |

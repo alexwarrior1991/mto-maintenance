@@ -48,7 +48,7 @@ asigna a las personas.
 |---|---|
 | `maintenance-read` | Todo `GET` bajo `/api/v1/maintenance` |
 | `maintenance-write` | Alta y modificación; transiciones ordinarias (`plan`, `assign`, `start`, `complete`, turnos, tareas, inspecciones, materiales) |
-| `maintenance-delete` | `DELETE /assets/{id}` (desactivación) y `DELETE /orders/{id}/materials/{usageId}` (quitar una línea de material) |
+| `maintenance-delete` | `DELETE /assets/{id}` y `PUT /assets/{id}` con `enabled=false` (desactivación), y `DELETE /orders/{id}/materials/{usageId}` (quitar una línea de material) |
 | `maintenance-supervise` | **Además de** `maintenance-write`: `cancel` de una orden, `complete` con `force`, `resolve`/`close`/`discard` de un defecto |
 | `ops-metrics` | Lectura de los endpoints de Actuator |
 | `ops-write` | Operaciones de Actuator que modifican estado |

@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderResponse;
 import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
+import com.alejandro.mtomaintenance.configuration.security.SecurityRoles;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -18,6 +19,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -55,7 +57,10 @@ public class CatenaryAssetController {
         return ResponseEntity.created(URI.create(MaintenanceApiPaths.BASE + "/assets/" + response.id())).body(response);
     }
 
-    @Operation(summary = "Update asset", description = "Assets synchronized from master data only accept description, enabled and preventiveIntervalDays.")
+    @Operation(summary = "Update asset", description = "Assets synchronized from master data only accept description, enabled and preventiveIntervalDays. "
+            + "enabled=false disables the asset here, like DELETE, and needs the delete role too; it survives every master data event. "
+            + "enabled=true lifts that, and answers 409 AST-001 when mto-configuration has the asset disabled: it comes back when the source enables it.")
+    @PreAuthorize("!#request.disabling or hasRole('" + SecurityRoles.MAINTENANCE_DELETE + "')")
     @PutMapping("/{id}")
     public ResponseEntity<CatenaryAssetResponse> update(@PathVariable UUID id, @Valid @RequestBody CatenaryAssetUpdateRequest request) {
         return ResponseEntity.ok(assetService.update(id, request));
@@ -92,7 +97,8 @@ public class CatenaryAssetController {
                 preventiveDueBefore, connectedTrackId, switchCode, pageable));
     }
 
-    @Operation(summary = "Disable asset", description = "Assets are never deleted: orders, inspections and defects reference them. DELETE disables the asset.")
+    @Operation(summary = "Disable asset", description = "Assets are never deleted: orders, inspections and defects reference them. DELETE disables the asset here; "
+            + "a master data event does not undo it, and PUT with enabled=true does.")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> disable(@PathVariable UUID id) {
         assetService.disable(id);

@@ -145,7 +145,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assetRepository.save(profile("13-2.02-" + suffix, trackId, "13060.290"));
         assetRepository.save(profile("12-2.27-" + suffix, trackId, "12847.990"));
         CatenaryAsset disabled = profile("13-2.01-" + suffix, trackId, "13007.290");
-        disabled.setEnabled(false);
+        disabled.disableLocally();
         assetRepository.save(disabled);
         assetRepository.save(profile("14-2.02-" + suffix, trackId, "14078.090"));
         entityManager.flush();
@@ -220,6 +220,32 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 .and(CatenaryAssetSpecification.preventiveDueBefore(Instant.now())), Sort.by("code"));
 
         assertEquals(List.of("SEC-NEVER-" + suffix, "SEC-OVERDUE-" + suffix), due.stream().map(CatenaryAsset::getCode).toList());
+    }
+
+    @Test
+    void theEffectiveEnabledIsTheSourceAndTheLocalDecisionTogetherAndTheDatabaseKeepsItSo() {
+        String sourceId = "prf-" + UUID.randomUUID();
+        assertEquals(1, upsert(sourceId, "12-2.27", 1L));
+        CatenaryAsset asset = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+        assertTrue(asset.getEnabledAtSource());
+        assertFalse(asset.getDisabledLocally());
+        assertTrue(asset.getEnabled());
+
+        asset.disableLocally();
+        assetRepository.saveAndFlush(asset);
+        assertEquals(1, upsert(sourceId, "12-2.27", 2L));
+        CatenaryAsset afterEvent = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+        assertFalse(afterEvent.getEnabled(), "The upsert recomputes enabled without touching the local decision");
+        assertTrue(afterEvent.getEnabledAtSource());
+
+        // Nadie escribe enabled suelto: la base rechaza una fila que contradice a las otras dos.
+        CatenaryAsset contradictory = CatenaryAsset.builder().code("SEC-ENA-" + UUID.randomUUID().toString().substring(0, 8)).name("Section")
+                .type(CatenaryAssetType.TRACK_SECTION).trackId(1L).startKp(new BigDecimal("1.000")).endKp(new BigDecimal("2.000"))
+                .trackKind(TrackKind.MAIN).enabled(false).build();
+        assertThrows(PersistenceException.class, () -> {
+            assetRepository.save(contradictory);
+            entityManager.flush();
+        });
     }
 
     @Test

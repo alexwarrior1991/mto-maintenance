@@ -107,7 +107,7 @@ this service only stores as ids; see [`keycloak/README.md`](keycloak/README.md).
 |---|---|
 | `GET` | `maintenance-read` |
 | `POST`, `PUT` | `maintenance-write` |
-| `DELETE /assets/{id}`, `DELETE /orders/{id}/materials/{usageId}` | `maintenance-delete` |
+| `DELETE /assets/{id}`, `PUT /assets/{id}` with `enabled=false`, `DELETE /orders/{id}/materials/{usageId}` | `maintenance-delete` |
 | `cancel` of an order, `complete` of an order with `force`, `resolve`/`close`/`discard` of a defect | `maintenance-supervise` (on top of `maintenance-write`) |
 | `/actuator/**` (except health/info) | `ops-metrics` / `ops-write` |
 

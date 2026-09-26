@@ -44,19 +44,22 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
      * where: un evento mas antiguo que lo aplicado no toca la fila (devuelve 0), y dos entregas
      * concurrentes no pueden pisarse. Sin numero de secuencia se aplica y se conserva la marca.
      * Nunca leer-y-escribir. Al ser SQL nativo no deja revision de Envers.
+     *
+     * <p>{@code enabled} del evento va a {@code enabled_at_source}; el efectivo se recalcula sin tocar
+     * {@code disabled_locally}, asi que una desactivacion hecha aqui sobrevive a cualquier evento.</p>
      */
     @Modifying
     @Query(value = """
             insert into catenary_asset (
                 id, code, name, type, execution_package_id, track_id, connected_track_id, station_id,
                 start_kp, end_kp, profile_source_id, sectioning, installation_type,
-                source_service, source_entity_id, source_sequence_number, enabled,
+                source_service, source_entity_id, source_sequence_number, enabled_at_source, enabled,
                 created_at, updated_at, created_by, updated_by
             ) values (
                 gen_random_uuid(), :code, :name, cast(:type as catenary_asset_type), :executionPackageId, :trackId,
                 :connectedTrackId, :stationId, :startKp, :endKp, :profileSourceId, :sectioning,
                 cast(:installationType as section_insulator_installation),
-                :sourceService, :sourceEntityId, :sourceSequenceNumber, :enabled, now(), now(), 'system', 'system'
+                :sourceService, :sourceEntityId, :sourceSequenceNumber, :enabled, :enabled, now(), now(), 'system', 'system'
             ) on conflict (source_service, source_entity_id) do update
                set code = excluded.code,
                    name = excluded.name,
@@ -69,7 +72,8 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                    profile_source_id = excluded.profile_source_id,
                    sectioning = excluded.sectioning,
                    installation_type = excluded.installation_type,
-                   enabled = excluded.enabled,
+                   enabled_at_source = excluded.enabled_at_source,
+                   enabled = excluded.enabled_at_source and not catenary_asset.disabled_locally,
                    source_sequence_number = coalesce(
                        excluded.source_sequence_number, catenary_asset.source_sequence_number),
                    updated_at = now()
@@ -100,7 +104,8 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     @Modifying
     @Query(value = """
             update catenary_asset
-               set enabled = false,
+               set enabled_at_source = false,
+                   enabled = false,
                    source_sequence_number = coalesce(:sourceSequenceNumber, source_sequence_number),
                    updated_at = now()
              where source_service = :sourceService
@@ -206,14 +211,27 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     int propagatePackageToSectionInsulators(@Param("sourceService") String sourceService,
                                             @Param("profileSourceEntityId") String profileSourceEntityId);
 
-    /** Una via borrada en origen deja sin sentido todo lo que hay sobre ella, tramos incluidos. */
+    /**
+     * Una via borrada en origen deja sin sentido todo lo que hay sobre ella. En lo sincronizado es el
+     * origen quien lo dice ({@code enabled_at_source}), y la marca avanza hasta el borrado: la
+     * secuencia es global en mto-configuration, asi que un evento de un perfil anterior al borrado que
+     * llegue despues se descarta en lugar de reactivarlo. Un tramo propio no tiene origen: queda
+     * desactivado aqui, y una persona puede reactivarlo.
+     */
     @Modifying
     @Query(value = """
             update catenary_asset
-               set enabled = false,
+               set enabled_at_source = case when source_service is null then null else false end,
+                   disabled_locally = disabled_locally or source_service is null,
+                   enabled = false,
+                   source_sequence_number = case when source_service is null then source_sequence_number
+                                                 else greatest(source_sequence_number, cast(:sequenceNumber as bigint)) end,
                    updated_at = now()
              where track_id = :trackId
-               and enabled = true
+               and (source_service is null
+                    or source_sequence_number is null
+                    or cast(:sequenceNumber as bigint) is null
+                    or cast(:sequenceNumber as bigint) >= source_sequence_number)
             """, nativeQuery = true)
-    int deactivateByTrack(@Param("trackId") Long trackId);
+    int deactivateByTrack(@Param("trackId") Long trackId, @Param("sequenceNumber") Long sequenceNumber);
 }
