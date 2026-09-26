@@ -21,6 +21,7 @@ import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor
 import com.alejandro.mtomaintenance.application.service.ReportExportService;
 import com.alejandro.mtomaintenance.application.service.StatusHistoryService;
 import com.alejandro.mtomaintenance.application.service.StockClient;
+import com.alejandro.mtomaintenance.application.service.StockSyncRetryService;
 import com.alejandro.mtomaintenance.application.service.WorkloadEstimator;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetResponse;
@@ -325,6 +326,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
                 ReportExportService.class,
                 StatusHistoryService.class,
                 StockClient.class,
+                StockSyncRetryService.class,
                 WorkloadEstimator.class);
 
         static final List<String> HANDLED_ENTITIES = List.of(

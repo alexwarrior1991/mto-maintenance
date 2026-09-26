@@ -15,6 +15,7 @@ import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRespon
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.order.PlanOrderRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
+import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.UnsyncedMaterialsException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
@@ -159,6 +160,12 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
             set(patch, "stationId", request.stationId(), order::setStationId);
             set(patch, "startKp", request.startKp(), order::setStartKp);
             set(patch, "endKp", request.endKp(), order::setEndKp);
+            if (changesStockProject(patch, request, order) && order.getMaterials().stream().anyMatch(MaintenanceMaterialUsage::isInDoubt)) {
+                // Una reserva que se quedo sin respuesta se repite contra el mismo proyecto: con otro, stock
+                // la rechazaria con IDEM-001, y la que quiza ya creo se quedaria alli sin que la linea lo sepa.
+                throw new MaterialUsageException("Order " + order.getCode() + " has material lines with a request to stock without an "
+                        + "answer yet; sync them before changing the stock project");
+            }
             set(patch, "stockProjectId", request.stockProjectId(), order::setStockProjectId);
             if (order.getStartKp() != null && order.getEndKp() != null) {
                 domain(() -> new KilometricRange(order.getStartKp(), order.getEndKp()));
@@ -346,6 +353,13 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     @Transactional(readOnly = true)
     public PageResponse<EntityRevisionResponse<MaintenanceOrderResponse>> findRevisions(UUID id, Pageable pageable) {
         return auditService.findRevisions(MaintenanceOrder.class, id, this::toResponse, pageable);
+    }
+
+    private static boolean changesStockProject(MergePatch<MaintenanceOrderUpdateRequest> patch, MaintenanceOrderUpdateRequest request,
+                                               MaintenanceOrder order) {
+        return patch.clears("stockProjectId")
+                ? order.getStockProjectId() != null
+                : request.stockProjectId() != null && !request.stockProjectId().equals(order.getStockProjectId());
     }
 
     private void transition(MaintenanceOrder order, MaintenanceOrderStatus target, String comment) {

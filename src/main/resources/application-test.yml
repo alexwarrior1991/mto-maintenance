@@ -43,6 +43,10 @@ app:
   # HTTP se prueba aparte en StockClientTest con un servidor simulado.
   stock:
     enabled: ${APP_STOCK_ENABLED:false}
+    # Tampoco reintenta nada por su cuenta mientras corre la suite: BusinessLayerTest llama al
+    # reintento. Con stock apagado ya no existiria; va explicito por si un test lo enciende.
+    sync-retry:
+      enabled: ${APP_STOCK_SYNC_RETRY_ENABLED:false}
 
 management:
   endpoint:

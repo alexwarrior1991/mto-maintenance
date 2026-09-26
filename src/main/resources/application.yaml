@@ -253,3 +253,11 @@ app:
       failure-rate-threshold: ${APP_STOCK_CB_FAILURE_RATE_THRESHOLD:50}
       wait-duration-in-open-state: ${APP_STOCK_CB_WAIT_DURATION_IN_OPEN_STATE:30s}
       timeout: ${APP_STOCK_CB_TIMEOUT:10s}
+    # Reintento automatico de las lineas de material FAILED (stock no contesto). Es lo que resuelve
+    # una reserva o una salida en duda mientras mto-stock todavia recuerda su clave de idempotencia
+    # (app.idempotency.retention alli, 30 dias). Cada vuelta se para en la primera linea a la que stock
+    # sigue sin contestar, asi que con stock caido cuesta una llamada. Con enabled=false las lineas
+    # FAILED esperan a que alguien sincronice, y una peticion en duda puede sobrevivir a su clave.
+    sync-retry:
+      enabled: ${APP_STOCK_SYNC_RETRY_ENABLED:true}
+      interval: ${APP_STOCK_SYNC_RETRY_INTERVAL:PT5M}

@@ -148,23 +148,44 @@ also checks a `RESERVED` line: if the warehouse released its reservation, it ask
 A consumed reservation remains the line's until the order completes. A line already `CONSUMED`
 cannot change any more (409 `MAT-001`): completing only settles what is not consumed yet.
 
-A reservation or an output that reached stock but whose answer was lost (a timeout) cannot be asked
-about this way: the line never learnt what was created. Those two requests carry an `Idempotency-Key`
-(`mto-maintenance:<line>:<step>:<digest of what travels>`, see `mto-stock`'s `docs/04-rest-api.md`),
-the same for the same step with the same body, so the retry gets back what stock already did instead
-of doing it again:
+A reservation or an output that reached stock but whose answer was lost (a timeout, a 5xx) cannot
+be asked about this way: the line never learnt what was created. Those two requests carry an
+`Idempotency-Key` (see `mto-stock`'s `docs/04-rest-api.md`), and the line remembers the one left
+without an answer in `stockRequestInDoubt` (`RESERVATION` or `OUTPUT`) until stock answers it:
 
-- The key of a reservation also carries the reservation the line had before. Asking for another one
-  after the warehouse released it is a new request, not a retry — with the old key, stock would hand
-  back the released one.
-- The key changes with what travels: a planned quantity edited on a line whose reservation failed, or
-  another stock project, is a new request. Stock rejects a key repeated with another body (409
-  `IDEM-001`), and the line would be stuck; the price is that, if the lost request did reach stock,
-  its reservation stays there, as it did before the key existed, until the warehouse releases it.
-- For the retry to send the same body, nothing in it depends on the moment it is sent (stock stamps
-  `reservedAt` and `occurredAt` on arrival), and the output of what was used when no reservation
-  covers it has the same notes whichever way it is reached — the reservation released in this very
-  step because less was used, or already holding nothing.
+- The key is the line, the request and, for a reservation, the reservation the line had before:
+  `mto-maintenance:<line>:reserve:first`, `mto-maintenance:<line>:reserve:<previous>`,
+  `mto-maintenance:<line>:output`. It does not depend on the body, so a retry always sends the same
+  key, and stock gives back what it already did. Asking for another reservation after the warehouse
+  released the previous one is a new request, hence the previous one in the key; a line gives at most
+  one output (what was used, or the excess over its reservation).
+- Whatever is done next with the line against stock starts by repeating the request in doubt, with
+  the same key and the same body: `sync`, `start` (which reserves again), `complete` (the reservation
+  in doubt is confirmed and then consumed, never replaced by a direct output), `cancel` (confirmed and
+  then released; an output in doubt is finished, and the line ends `CONSUMED` like in stock) and
+  removing the line (a reservation in doubt is confirmed to release it; with an output in doubt the
+  line cannot be removed, 409 `MAT-001`, because the material may have left already). If stock now
+  answers no, the request never reached it — it would have handed it back without validating anything
+  — and the line carries on as if it had not been sent.
+- Until stock answers, what travels in that request does not change: the line's planned and consumed
+  quantities (409 `MAT-001`; the same value, or `allowOverConsumption`, are accepted) and the order's
+  stock project (409 `MAT-001`). With another body under the same key stock would answer 409
+  `IDEM-001`; if that ever happens the line is left `REJECTED` with the reason, and whatever the lost
+  request created is for the warehouse to look at.
+- Stock remembers a key for 30 days (`app.idempotency.retention` there). `FAILED` lines are retried on
+  their own every 5 minutes (`app.stock.sync-retry.*`, `StockSyncRetryService`), exactly like a
+  `sync`, so a request in doubt is settled within minutes of stock answering again; each round stops
+  at the first line stock still does not answer, and the next one carries on after it. `REJECTED`
+  lines are not retried: repeating what stock refused gives the same answer until something changes.
+- The body does not depend on the moment it is sent (stock stamps `reservedAt` and `occurredAt` on
+  arrival, and would ignore them in the comparison anyway), and the output of what was used when no
+  reservation covers it has the same notes whichever way it is reached — the reservation released in
+  this very step because less was used, or already holding nothing.
+
+What is left: a request whose stock call succeeded but whose local transaction then rolled back (a
+concurrent edit at commit) leaves no trace here; its retry, if the body changed meanwhile, is
+refused with `IDEM-001` and the line says so. `FAILED` lines from before `V12` carry no request in
+doubt: nobody knows which request failed.
 
 A line registered by mistake is removed, not cancelled (`DELETE /orders/{id}/materials/{usageId}`):
 the row goes and Envers keeps its last state as a DELETED revision. A reserved line is released in

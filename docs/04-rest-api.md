@@ -125,6 +125,14 @@ quantity of a line below what was consumed without `allowOverConsumption` is 409
 to reach a database constraint at commit and answer 500. Anything else a constraint catches is 409
 `APP-409` rather than 500.
 
+A material line answers, besides `stockSyncStatus` and `stockSyncError`, `stockRequestInDoubt`:
+`RESERVATION` or `OUTPUT` when the line sent that request to `mto-stock` and got no answer (it is
+`FAILED`), `null` otherwise. Until stock answers, the next thing done with the line repeats that
+request first, and what travels in it cannot change: its planned and consumed quantities (the same
+value is accepted) and the order's `stockProjectId` are 409 `MAT-001`, and a line with an output in
+doubt cannot be removed (the material may have left already). `FAILED` lines are retried on their own
+every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-domain-model.md`.
+
 ## Status codes
 
 | Code | When |
@@ -141,7 +149,7 @@ to reach a database constraint at commit and answer 500. Anything else a constra
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset; a field of a synchronized asset that only `mto-configuration` changes; `enabled=true` on an asset disabled at the source |
 | 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track) |
-| 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order |
+| 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
 | 409 `<AGG>-409` | Duplicated code |
 | 409 `CON-001` | The `version` of the request is not the one stored, or two writes crossed: nothing was written |

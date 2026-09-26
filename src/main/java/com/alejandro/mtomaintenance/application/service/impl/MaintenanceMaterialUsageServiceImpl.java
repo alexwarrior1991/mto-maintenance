@@ -26,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
@@ -91,6 +92,14 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
             // Lo que diga despues no llegaria a stock: completar solo liquida lo que no esta consumido.
             throw new MaterialUsageException("Material " + usage.getMaterialCode() + " was already consumed in stock and the line cannot change");
         }
+        if (usage.isInDoubt() && (changes(request.plannedQuantity(), usage.getPlannedQuantity())
+                || changes(request.consumedQuantity(), usage.getConsumedQuantity()))) {
+            // Es lo que viaja en la peticion en duda, que se repite tal cual: con otra cantidad stock no
+            // la reconoceria (409 IDEM-001), y lo que quiza ya hizo se quedaria alli sin nadie que lo sepa.
+            throw new MaterialUsageException("Material " + usage.getMaterialCode() + " has a "
+                    + usage.getStockRequestInDoubt().name().toLowerCase(Locale.ROOT)
+                    + " sent to stock without an answer yet; sync the line before changing its quantities");
+        }
         if (request.allowOverConsumption() != null) {
             usage.setAllowOverConsumption(request.allowOverConsumption());
         }
@@ -145,6 +154,10 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
         stock.releaseNow(usage);
         order.getMaterials().remove(usage);
         repository.delete(usage);
+    }
+
+    private static boolean changes(BigDecimal requested, BigDecimal current) {
+        return requested != null && requested.compareTo(current) != 0;
     }
 
     private MaintenanceMaterialUsage line(UUID orderId, UUID usageId) {

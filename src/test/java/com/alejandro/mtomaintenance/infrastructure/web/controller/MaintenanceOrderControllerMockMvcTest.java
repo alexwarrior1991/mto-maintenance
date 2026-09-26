@@ -437,7 +437,7 @@ class MaintenanceOrderControllerMockMvcTest {
 
     private static MaterialUsageResponse materialResponse(UUID id, UUID orderId, UUID warehouseId) {
         return new MaterialUsageResponse(id, orderId, null, UUID.randomUUID(), "GA70", null, warehouseId, new BigDecimal("2"), BigDecimal.ZERO, "ud",
-                false, null, StockSyncStatus.NOT_REQUESTED, null, null, null);
+                false, null, StockSyncStatus.NOT_REQUESTED, null, null, null, null);
     }
 
     private static MaintenanceTaskResponse taskResponse(UUID id, UUID orderId) {

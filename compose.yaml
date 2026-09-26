@@ -36,6 +36,7 @@ services:
       # mto-stock, reached through the host like the rest of the platform.
       APP_STOCK_ENABLED: ${APP_STOCK_ENABLED:-true}
       MTO_STOCK_URL: ${MTO_STOCK_URL:-http://host.docker.internal:8080}
+      APP_STOCK_SYNC_RETRY_ENABLED: ${APP_STOCK_SYNC_RETRY_ENABLED:-true}
       KEYCLOAK_TOKEN_URI: ${KEYCLOAK_TOKEN_URI:-http://auth.mto.local:8082/realms/mto/protocol/openid-connect/token}
       KEYCLOAK_SERVICE_CLIENT_ID: ${KEYCLOAK_SERVICE_CLIENT_ID:-mto-maintenance-svc}
       KEYCLOAK_SERVICE_CLIENT_SECRET: ${KEYCLOAK_SERVICE_CLIENT_SECRET:?KEYCLOAK_SERVICE_CLIENT_SECRET must be set}

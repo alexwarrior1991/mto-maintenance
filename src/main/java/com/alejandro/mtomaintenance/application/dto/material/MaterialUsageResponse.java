@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.application.dto.material;
 
 import com.alejandro.mtomaintenance.application.dto.common.AuditMetadataResponse;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockRequestType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 
 import java.math.BigDecimal;
@@ -21,6 +22,7 @@ public record MaterialUsageResponse(
         UUID stockReservationId,
         StockSyncStatus stockSyncStatus,
         String stockSyncError,
+        StockRequestType stockRequestInDoubt,
         Long version,
         AuditMetadataResponse audit
 ) {
