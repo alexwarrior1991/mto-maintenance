@@ -42,6 +42,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -255,5 +256,14 @@ public class MaintenanceOrderController {
     @PostMapping("/{id}/materials/{usageId}/sync")
     public ResponseEntity<MaterialUsageResponse> syncMaterial(@PathVariable UUID id, @PathVariable UUID usageId) {
         return ResponseEntity.ok(materialService.sync(id, usageId));
+    }
+
+    @Operation(summary = "Remove material line", tags = "Materials", description = "Deletes the line; its reservation in mto-stock is released first, "
+            + "and a reservation that stock no longer holds does not block it. A consumed line, or a line of a completed or cancelled order, "
+            + "cannot be removed (409 MAT-001). Answers 503 when mto-stock does not answer, and the line stays.")
+    @DeleteMapping("/{id}/materials/{usageId}")
+    public ResponseEntity<Void> removeMaterial(@PathVariable UUID id, @PathVariable UUID usageId) {
+        materialService.remove(id, usageId);
+        return ResponseEntity.noContent().build();
     }
 }

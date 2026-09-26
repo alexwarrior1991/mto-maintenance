@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.infrastructure.stock;
 
 import com.alejandro.mtomaintenance.application.dto.stock.StockMaterial;
 import com.alejandro.mtomaintenance.application.dto.stock.StockReservation;
+import com.alejandro.mtomaintenance.application.exception.StockReservationNotActiveException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
@@ -121,6 +123,33 @@ class StockClientTest {
         // Tercera llamada: el servidor simulado no espera nada mas, asi que si llegara fallaria el test.
         StockUnavailableException fastFailure = assertThrows(StockUnavailableException.class, () -> client.release(reservationId));
         assertTrue(fastFailure.getMessage().contains("unavailable"));
+        server.verify();
+    }
+
+    @Test
+    void releasingAReservationNoLongerActiveIsToldApartFromAnOutage() {
+        UUID released = UUID.randomUUID();
+        UUID unknown = UUID.randomUUID();
+        UUID forbidden = UUID.randomUUID();
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + released + "/release"))
+                .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY).contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"errorCode\":\"RES-001\",\"message\":\"Only active reservations can be changed\"}"));
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + unknown + "/release"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND));
+        server.expect(requestTo("http://stock/api/v1/inventory/reservations/" + forbidden + "/release"))
+                .andRespond(withStatus(HttpStatus.FORBIDDEN));
+
+        // 422 y 404: la reserva ya no retiene nada en stock.
+        StockReservationNotActiveException notActive = assertThrows(StockReservationNotActiveException.class, () -> client.release(released));
+        assertTrue(notActive.getMessage().contains("Only active reservations can be changed"));
+        // El circuito de este test se abre con dos fallos: se cierra entre llamada y llamada.
+        breaker.reset();
+        assertThrows(StockReservationNotActiveException.class, () -> client.release(unknown));
+        breaker.reset();
+
+        // Un 403 de la cuenta de servicio no dice nada de la reserva: sigue siendo indisponibilidad.
+        StockUnavailableException outage = assertThrows(StockUnavailableException.class, () -> client.release(forbidden));
+        assertFalse(outage instanceof StockReservationNotActiveException);
         server.verify();
     }
 

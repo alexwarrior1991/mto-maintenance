@@ -17,4 +17,11 @@ public interface MaintenanceMaterialUsageService {
 
     /** Reintenta la conversacion pendiente con stock. Solo aqui un stock caido responde 503. */
     MaterialUsageResponse sync(UUID orderId, UUID usageId);
+
+    /**
+     * Quita la linea de la orden: la borra, y Envers guarda su ultimo estado como revision DELETED.
+     * Si tiene reserva, se libera antes en mto-stock; si stock no responde, 503 y la linea sigue. Una
+     * linea consumida, o de una orden completada o cancelada, no se quita.
+     */
+    void remove(UUID orderId, UUID usageId);
 }

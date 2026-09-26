@@ -89,8 +89,9 @@ class RestControllerLayerTest {
     void orderControllerDelegatesCreationSearchAndTransitions() {
         MaintenanceOrderService orderService = mock(MaintenanceOrderService.class);
         MaintenanceTaskService taskService = mock(MaintenanceTaskService.class);
+        MaintenanceMaterialUsageService materialService = mock(MaintenanceMaterialUsageService.class);
         MaintenanceOrderController controller = new MaintenanceOrderController(orderService, taskService,
-                mock(MaintenanceMaterialUsageService.class), mock(StatusHistoryService.class));
+                materialService, mock(StatusHistoryService.class));
         UUID orderId = UUID.randomUUID();
         UUID assetId = UUID.randomUUID();
         Pageable pageable = PageRequest.of(0, 20);
@@ -110,6 +111,8 @@ class RestControllerLayerTest {
         var searchResponse = controller.search(MaintenanceOrderStatus.PLANNED, null, MaintenancePriority.HIGH, null, null, 2L, null, null, from, to, null, null, null, null, null, pageable);
         var cancelResponse = controller.cancel(orderId, new CancelOrderRequest("rain"));
         var generateResponse = controller.generateTasks(orderId, null);
+        UUID usageId = UUID.randomUUID();
+        var removeResponse = controller.removeMaterial(orderId, usageId);
 
         assertEquals(HttpStatus.CREATED, createResponse.getStatusCode());
         assertEquals("/api/v1/maintenance/orders/" + orderId, createResponse.getHeaders().getLocation().toString());
@@ -117,6 +120,8 @@ class RestControllerLayerTest {
         assertSame(order, cancelResponse.getBody());
         assertSame(generated, generateResponse.getBody());
         verify(orderService).search(MaintenanceOrderStatus.PLANNED, null, MaintenancePriority.HIGH, null, null, 2L, null, null, from, to, null, null, null, null, null, pageable);
+        assertEquals(HttpStatus.NO_CONTENT, removeResponse.getStatusCode());
+        verify(materialService).remove(orderId, usageId);
     }
 
     @Test

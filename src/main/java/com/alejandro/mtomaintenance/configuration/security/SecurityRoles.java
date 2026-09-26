@@ -21,7 +21,7 @@ public final class SecurityRoles {
      */
     public static final String MAINTENANCE_WRITE = "MAINTENANCE_WRITE";
 
-    /** Desactivacion de activos y equipos. */
+    /** Todo DELETE: desactivar un activo y quitar una linea de material (los equipos no tienen DELETE: se retiran con active). */
     public static final String MAINTENANCE_DELETE = "MAINTENANCE_DELETE";
 
     /**
