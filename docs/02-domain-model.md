@@ -148,8 +148,23 @@ also checks a `RESERVED` line: if the warehouse released its reservation, it ask
 A consumed reservation remains the line's until the order completes. A line already `CONSUMED`
 cannot change any more (409 `MAT-001`): completing only settles what is not consumed yet.
 
-What cannot be reconciled this way is a reservation or an output that reached stock but whose answer
-was lost (a timeout): retrying repeats it. Avoiding that needs an idempotency key in `mto-stock`.
+A reservation or an output that reached stock but whose answer was lost (a timeout) cannot be asked
+about this way: the line never learnt what was created. Those two requests carry an `Idempotency-Key`
+(`mto-maintenance:<line>:<step>:<digest of what travels>`, see `mto-stock`'s `docs/04-rest-api.md`),
+the same for the same step with the same body, so the retry gets back what stock already did instead
+of doing it again:
+
+- The key of a reservation also carries the reservation the line had before. Asking for another one
+  after the warehouse released it is a new request, not a retry — with the old key, stock would hand
+  back the released one.
+- The key changes with what travels: a planned quantity edited on a line whose reservation failed, or
+  another stock project, is a new request. Stock rejects a key repeated with another body (409
+  `IDEM-001`), and the line would be stuck; the price is that, if the lost request did reach stock,
+  its reservation stays there, as it did before the key existed, until the warehouse releases it.
+- For the retry to send the same body, nothing in it depends on the moment it is sent (stock stamps
+  `reservedAt` and `occurredAt` on arrival), and the output of what was used when no reservation
+  covers it has the same notes whichever way it is reached — the reservation released in this very
+  step because less was used, or already holding nothing.
 
 A line registered by mistake is removed, not cancelled (`DELETE /orders/{id}/materials/{usageId}`):
 the row goes and Envers keeps its last state as a DELETED revision. A reserved line is released in

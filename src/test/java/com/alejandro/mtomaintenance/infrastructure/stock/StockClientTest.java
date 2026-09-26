@@ -15,6 +15,7 @@ import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuit
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
@@ -32,6 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -88,17 +91,48 @@ class StockClientTest {
         UUID reservationId = UUID.randomUUID();
         server.expect(requestTo("http://stock/api/v1/inventory/reservations"))
                 .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", "mto-maintenance:line-1:reserve:abc"))
                 .andExpect(jsonPath("$.materialId").value(materialId.toString()))
                 .andExpect(jsonPath("$.quantity").value(2.5))
+                // Sin hora de este lado: cambiaria de un intento a otro, y stock no reconoceria el reintento.
+                .andExpect(jsonPath("$.reservedAt").doesNotExist())
                 .andRespond(withSuccess("""
                         {"id":"%s","material":{"id":"%s","code":"GA70"},"warehouse":{"id":"%s","code":"WH"},
                          "project":{"id":"%s","code":"EP-6"},"quantity":2.5,"status":"ACTIVE"}"""
                         .formatted(reservationId, materialId, warehouseId, projectId), MediaType.APPLICATION_JSON));
 
-        StockReservation reservation = client.reserve(materialId, warehouseId, projectId, new BigDecimal("2.5"));
+        StockReservation reservation = client.reserve(materialId, warehouseId, projectId, new BigDecimal("2.5"),
+                "mto-maintenance:line-1:reserve:abc");
 
         assertEquals(reservationId, reservation.id());
         assertEquals(projectId, reservation.projectId());
+        server.verify();
+    }
+
+    /**
+     * La salida lleva su clave, y el mismo cuerpo en cada intento: stock solo reconoce el reintento
+     * si llega igual, asi que nada de lo que viaja puede depender del momento en que se manda.
+     */
+    @Test
+    void outputsCarryTheirIdempotencyKeyAndTheSameBodyOnEveryAttempt() {
+        UUID materialId = UUID.randomUUID();
+        UUID warehouseId = UUID.randomUUID();
+        String body = """
+                {"materialId":"%s","warehouseId":"%s","projectId":null,"quantity":1.5,
+                 "externalReference":"MO-000001","notes":"Maintenance order MO-000001"}""".formatted(materialId, warehouseId);
+        for (int attempt = 0; attempt < 2; attempt++) {
+            server.expect(requestTo("http://stock/api/v1/inventory/movements/outputs"))
+                    .andExpect(method(HttpMethod.POST))
+                    .andExpect(header("Idempotency-Key", "mto-maintenance:line-1:output:abc"))
+                    .andExpect(content().json(body, JsonCompareMode.STRICT))
+                    .andRespond(withSuccess());
+        }
+
+        client.output(materialId, warehouseId, null, new BigDecimal("1.5"), "MO-000001", "Maintenance order MO-000001",
+                "mto-maintenance:line-1:output:abc");
+        client.output(materialId, warehouseId, null, new BigDecimal("1.5"), "MO-000001", "Maintenance order MO-000001",
+                "mto-maintenance:line-1:output:abc");
+
         server.verify();
     }
 
@@ -160,7 +194,7 @@ class StockClientTest {
                 .andRespond(withSuccess());
 
         StockRejectedException shortage = assertThrows(StockRejectedException.class,
-                () -> client.reserve(materialId, UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("5")));
+                () -> client.reserve(materialId, UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("5"), "key-1"));
         assertEquals(409, shortage.getStatus());
         assertEquals("STK-001", shortage.getStockErrorCode());
         assertTrue(shortage.isInsufficientStock());

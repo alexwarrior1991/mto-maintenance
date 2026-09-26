@@ -9,13 +9,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -49,6 +49,7 @@ public class RestClientStockClient implements StockClient {
     static final String PROJECTS = "/api/v1/inventory/projects";
     static final String RESERVATIONS = "/api/v1/inventory/reservations";
     static final String OUTPUTS = "/api/v1/inventory/movements/outputs";
+    static final String IDEMPOTENCY_KEY = "Idempotency-Key";
 
     private final RestClient restClient;
     private final CircuitBreaker circuitBreaker;
@@ -121,13 +122,18 @@ public class RestClientStockClient implements StockClient {
         });
     }
 
+    /**
+     * El cuerpo no lleva {@code reservedAt}: stock la pone al recibir la reserva, y una hora de este
+     * lado cambiaría de un intento a otro. Con la clave, stock solo reconoce un reintento si el cuerpo
+     * es el mismo; si no, responde 409 {@code IDEM-001}.
+     */
     @Override
-    public StockReservation reserve(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity) {
+    public StockReservation reserve(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String idempotencyKey) {
         return call("reserve " + quantity + " of " + materialId, () -> {
             ReservationPayload payload = restClient.post()
                     .uri(RESERVATIONS)
-                    .body(Map.of("materialId", materialId, "warehouseId", warehouseId, "projectId", projectId,
-                            "quantity", quantity, "reservedAt", Instant.now()))
+                    .headers(headers -> idempotent(headers, idempotencyKey))
+                    .body(Map.of("materialId", materialId, "warehouseId", warehouseId, "projectId", projectId, "quantity", quantity))
                     .retrieve()
                     .body(ReservationPayload.class);
             if (payload == null) {
@@ -153,20 +159,27 @@ public class RestClientStockClient implements StockClient {
         });
     }
 
+    /** Sin {@code occurredAt}, por lo mismo que {@link #reserve} va sin {@code reservedAt}. */
     @Override
-    public void output(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String externalReference, String notes) {
+    public void output(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String externalReference, String notes,
+                       String idempotencyKey) {
         call("output " + quantity + " of " + materialId, () -> {
             Map<String, Object> body = new java.util.HashMap<>();
             body.put("materialId", materialId);
             body.put("warehouseId", warehouseId);
             body.put("projectId", projectId);
             body.put("quantity", quantity);
-            body.put("occurredAt", Instant.now());
             body.put("externalReference", externalReference);
             body.put("notes", notes);
-            restClient.post().uri(OUTPUTS).body(body).retrieve().toBodilessEntity();
+            restClient.post().uri(OUTPUTS).headers(headers -> idempotent(headers, idempotencyKey)).body(body).retrieve().toBodilessEntity();
             return null;
         });
+    }
+
+    private static void idempotent(HttpHeaders headers, String idempotencyKey) {
+        if (idempotencyKey != null) {
+            headers.set(IDEMPOTENCY_KEY, idempotencyKey);
+        }
     }
 
     /**

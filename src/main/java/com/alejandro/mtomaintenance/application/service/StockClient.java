@@ -30,13 +30,22 @@ public interface StockClient {
     /** La reserva como la tiene stock ahora; vacio si stock no la conoce (404). */
     Optional<StockReservation> findReservation(UUID reservationId);
 
-    StockReservation reserve(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity);
+    /**
+     * Reserva en stock. {@code idempotencyKey} viaja en la cabecera {@code Idempotency-Key}: con la
+     * misma clave y el mismo cuerpo, stock devuelve la reserva que ya hizo en vez de hacer otra, así
+     * que repetir la petición después de perder la respuesta no reserva dos veces.
+     */
+    StockReservation reserve(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String idempotencyKey);
 
     /** Consume la reserva completa (mto-stock no admite consumo parcial). */
     void consume(UUID reservationId);
 
     void release(UUID reservationId);
 
-    /** Salida directa sin reserva, con la orden como referencia externa. */
-    void output(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String externalReference, String notes);
+    /**
+     * Salida directa sin reserva, con la orden como referencia externa. La clave, como en
+     * {@link #reserve}: repetida con el mismo cuerpo, stock no saca el material otra vez.
+     */
+    void output(UUID materialId, UUID warehouseId, UUID projectId, BigDecimal quantity, String externalReference, String notes,
+                String idempotencyKey);
 }
