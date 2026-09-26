@@ -99,6 +99,13 @@ by the master-data handler, the same reason `inbox_message` has no twin: it woul
 as "never changed". The history of the insulator lives in `mto-configuration`, which owns the data.
 The collection on `CatenaryAsset` is therefore `@NotAudited`.
 
+## Stock rejections (`V8`)
+
+`stock_sync_status` gains `REJECTED` (`ALTER TYPE … ADD VALUE`; the `_aud` twin uses the same type).
+`FAILED` now means only that `mto-stock` did not answer; `REJECTED` that it answered no, with its
+reason in `stock_sync_error`. No row changes: a line left `FAILED` by an old rejection is still
+retried by `sync`, which now tells the two apart.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`

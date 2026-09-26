@@ -6,6 +6,8 @@ import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageRespon
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageUpdateRequest;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
+import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.mapper.MaterialUsageMapper;
 import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.domain.model.Quantity;
@@ -57,9 +59,6 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
         MaintenanceMaterialUsage saved = lineFactory.saveLine(usage);
         if (order.getStatus() != MaintenanceOrderStatus.DRAFT) {
             // Con la orden ya planificada, el material se reserva al momento.
-            if (order.getStockProjectId() == null) {
-                stock.resolveProjectId(order).ifPresent(order::setStockProjectId);
-            }
             stock.reserve(saved);
             saved = repository.save(saved);
         }
@@ -73,6 +72,10 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
         MaintenanceOrder order = usage.getOrder();
         if (order.isTerminal()) {
             throw new MaterialUsageException("Order " + order.getCode() + " is " + order.getStatus() + " and its materials are frozen");
+        }
+        if (usage.getStockSyncStatus() == StockSyncStatus.CONSUMED) {
+            // Lo que diga despues no llegaria a stock: completar solo liquida lo que no esta consumido.
+            throw new MaterialUsageException("Material " + usage.getMaterialCode() + " was already consumed in stock and the line cannot change");
         }
         if (request.allowOverConsumption() != null) {
             usage.setAllowOverConsumption(request.allowOverConsumption());
@@ -94,8 +97,12 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
         return mapper.toResponse(repository.save(usage));
     }
 
+    /**
+     * {@code noRollbackFor}: si stock falla o dice que no, la respuesta es el error, pero la linea
+     * guarda lo que haya pasado (el paso que se hizo antes de fallar, y el motivo).
+     */
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = {StockUnavailableException.class, StockRejectedException.class})
     public MaterialUsageResponse sync(UUID orderId, UUID usageId) {
         MaintenanceMaterialUsage usage = line(orderId, usageId);
         stock.syncNow(usage);

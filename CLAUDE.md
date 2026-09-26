@@ -91,7 +91,8 @@ was finished, `OPEN` with `repairPlannedDate` if not). A `MaintenanceInspection`
 `InspectionTemplate` of the asset type into its items, and can create a defect and a corrective
 order (both idempotent). Every material line (`MaintenanceMaterialUsage`) is reserved in
 `mto-stock` when the order is planned, consumed when it is completed and released when it is
-cancelled; a failure leaves the line `FAILED` and `POST .../materials/{id}/sync` retries. A line
+cancelled; a failure leaves the line `FAILED` (stock did not answer) or `REJECTED` (it said no, with
+its reason) and `POST .../materials/{id}/sync` retries. A line
 registered by mistake is removed with `DELETE .../materials/{id}` (a physical delete that Envers keeps
 as a DELETED revision), releasing its reservation first; it is never cancelled.
 
@@ -125,11 +126,17 @@ The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before 
 `StockClient` (interface in `application/service`) is the only door to `mto-stock`.
 `RestClientStockClient` authenticates with the Keycloak service account `mto-maintenance-svc`
 (`client_credentials`, audience `mto-stock-api`) and runs every call inside the Spring Cloud
-circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`). Any failure is a
-`StockUnavailableException`; `MaterialStockSynchronizer` turns it into a `FAILED` line instead of
-failing the order transition. A release that stock answers with 404 or 422 is its subclass
-`StockReservationNotActiveException`: the reservation no longer holds anything, so removing a line
-goes ahead. `NoOpStockClient` replaces it with `app.stock.enabled=false`.
+circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`). A failure is one
+of two exceptions. `StockRejectedException` means stock answered no: a 4xx other than
+401/403/408/429, carrying stock's `errorCode` (409 `STK-001` is no stock). `RestClientStockClient.isRejection`
+is also the predicate the breaker ignores, so rejections never open it. Everything else (network,
+timeout, 5xx, open circuit, the service account refused) is `StockUnavailableException`.
+`MaterialStockSynchronizer` turns them into a `REJECTED` or `FAILED` line instead of failing the
+order transition, and before consuming or releasing a line that has a reservation it asks stock how
+that reservation is (`findReservation`), so a retry never consumes or releases twice (the table is in
+`docs/02-domain-model.md`). Completing an order rejected for such lines (`UnsyncedMaterialsException`)
+and an explicit `sync` keep what stock already did (`noRollbackFor`). `NoOpStockClient` replaces it
+with `app.stock.enabled=false`.
 
 ### Report export
 

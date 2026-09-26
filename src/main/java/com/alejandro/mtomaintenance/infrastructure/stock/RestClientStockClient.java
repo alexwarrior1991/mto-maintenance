@@ -2,7 +2,7 @@ package com.alejandro.mtomaintenance.infrastructure.stock;
 
 import com.alejandro.mtomaintenance.application.dto.stock.StockMaterial;
 import com.alejandro.mtomaintenance.application.dto.stock.StockReservation;
-import com.alejandro.mtomaintenance.application.exception.StockReservationNotActiveException;
+import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.service.StockClient;
 import org.slf4j.Logger;
@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -28,12 +29,21 @@ import java.util.function.Supplier;
  * no rompa nada aqui.
  *
  * <p>Toda llamada pasa por el circuito 'stock': con stock caido, las llamadas fallan al instante en
- * vez de esperar un timeout cada una, y cualquier fallo -de red, de circuito o un rechazo de negocio
- * de stock- llega al servicio como {@link StockUnavailableException} con el motivo.</p>
+ * vez de esperar un timeout cada una. Un fallo llega al servicio de una de dos maneras. Si stock
+ * respondio que no -sin existencias, un material o almacen retirado, una reserva que ya no esta
+ * activa- es {@link StockRejectedException}, con el codigo y el mensaje de stock, y no cuenta para
+ * el circuito, porque stock esta respondiendo (ver {@link #isRejection}). Todo lo demas -red, tiempo
+ * agotado, 5xx, circuito abierto- es {@link StockUnavailableException}.</p>
  */
 public class RestClientStockClient implements StockClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RestClientStockClient.class);
+
+    /**
+     * Los 4xx que no son un rechazo de lo pedido: 401 y 403 hablan de la cuenta de servicio (es
+     * configuracion, y se arregla sin tocar la linea), y 408 y 429 son transitorios.
+     */
+    private static final Set<Integer> NOT_REJECTIONS = Set.of(401, 403, 408, 429);
 
     static final String MATERIALS = "/api/v1/inventory/materials";
     static final String PROJECTS = "/api/v1/inventory/projects";
@@ -82,10 +92,13 @@ public class RestClientStockClient implements StockClient {
 
     @Override
     public Optional<UUID> findProjectIdByCode(String code) {
-        // La lista de proyectos de stock no filtra por codigo: se pide una pagina y se busca aqui.
+        // La lista de proyectos de stock no filtra por codigo exacto: busca el texto en el codigo o el
+        // nombre. Se pide ordenada por codigo, para que EP-6 venga antes que EP-60, y la coincidencia
+        // exacta se elige aqui.
         return call("find project " + code, () -> {
             PagePayload<ProjectPayload> page = restClient.get()
-                    .uri(uriBuilder -> uriBuilder.path(PROJECTS).queryParam("code", code).queryParam("size", 200).build())
+                    .uri(uriBuilder -> uriBuilder.path(PROJECTS).queryParam("search", code).queryParam("size", 200)
+                            .queryParam("sort", "code,asc").build())
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {
                     });
@@ -93,6 +106,18 @@ public class RestClientStockClient implements StockClient {
                     .filter(project -> code.equalsIgnoreCase(project.code()))
                     .map(ProjectPayload::id)
                     .findFirst();
+        });
+    }
+
+    @Override
+    public Optional<StockReservation> findReservation(UUID reservationId) {
+        return call("read reservation " + reservationId, () -> {
+            try {
+                ReservationPayload payload = restClient.get().uri(RESERVATIONS + "/{id}", reservationId).retrieve().body(ReservationPayload.class);
+                return Optional.ofNullable(payload).map(ReservationPayload::toReservation);
+            } catch (HttpClientErrorException.NotFound notFound) {
+                return Optional.empty();
+            }
         });
     }
 
@@ -122,24 +147,10 @@ public class RestClientStockClient implements StockClient {
 
     @Override
     public void release(UUID reservationId) {
-        try {
-            call("release reservation " + reservationId, () -> {
-                restClient.post().uri(RESERVATIONS + "/{id}/release", reservationId).retrieve().toBodilessEntity();
-                return null;
-            });
-        } catch (StockUnavailableException exception) {
-            if (isNoLongerActive(exception)) {
-                throw new StockReservationNotActiveException("Reservation " + reservationId + " is no longer active in mto-stock: "
-                        + exception.getMessage(), exception);
-            }
-            throw exception;
-        }
-    }
-
-    /** 404: la reserva no existe; 422: existe, pero ya no esta activa (RES-001 de mto-stock). */
-    private static boolean isNoLongerActive(StockUnavailableException exception) {
-        return exception.getCause() instanceof RestClientResponseException response
-                && (response.getStatusCode().value() == 404 || response.getStatusCode().value() == 422);
+        call("release reservation " + reservationId, () -> {
+            restClient.post().uri(RESERVATIONS + "/{id}/release", reservationId).retrieve().toBodilessEntity();
+            return null;
+        });
     }
 
     @Override
@@ -158,31 +169,64 @@ public class RestClientStockClient implements StockClient {
         });
     }
 
+    /**
+     * Si el fallo es un rechazo de stock y no una caida: una respuesta 4xx salvo 401, 403, 408 y 429.
+     * Es tambien el predicado con el que el circuito 'stock' ignora los rechazos
+     * ({@code StockClientConfiguration}): sin el, cinco lineas sin existencias al planificar abrian el
+     * circuito y dejaban a stock por caido durante medio minuto.
+     */
+    public static boolean isRejection(Throwable throwable) {
+        if (!(throwable instanceof RestClientResponseException response)) {
+            return false;
+        }
+        int status = response.getStatusCode().value();
+        return status >= 400 && status < 500 && !NOT_REJECTIONS.contains(status);
+    }
+
     private <T> T call(String operation, Supplier<T> action) {
         try {
             return circuitBreaker.run(action, throwable -> {
                 throw translate(operation, throwable);
             });
-        } catch (StockUnavailableException exception) {
+        } catch (StockUnavailableException | StockRejectedException exception) {
             throw exception;
         } catch (RuntimeException exception) {
             throw translate(operation, exception);
         }
     }
 
-    private static StockUnavailableException translate(String operation, Throwable throwable) {
-        if (throwable instanceof StockUnavailableException unavailable) {
-            return unavailable;
+    private static RuntimeException translate(String operation, Throwable throwable) {
+        if (throwable instanceof StockUnavailableException || throwable instanceof StockRejectedException) {
+            return (RuntimeException) throwable;
         }
         if (throwable instanceof RestClientResponseException response) {
-            HttpStatus status = HttpStatus.resolve(response.getStatusCode().value());
+            int status = response.getStatusCode().value();
             String body = response.getResponseBodyAsString();
-            LOGGER.warn("mto-stock rejected '{}': status={}, body={}", operation, response.getStatusCode(), body);
-            return new StockUnavailableException("mto-stock answered " + (status == null ? response.getStatusCode() : status)
+            if (isRejection(response)) {
+                ErrorPayload error = errorOf(response);
+                String code = error == null ? null : error.errorCode();
+                String reason = error == null || error.message() == null || error.message().isBlank() ? body : error.message();
+                String message = "mto-stock rejected '" + operation + "' with " + status + (code == null ? "" : " " + code)
+                        + (reason == null || reason.isBlank() ? "" : ": " + reason);
+                LOGGER.warn("{}", message);
+                return new StockRejectedException(message, status, code, response);
+            }
+            HttpStatus resolved = HttpStatus.resolve(status);
+            LOGGER.warn("mto-stock failed '{}': status={}, body={}", operation, status, body);
+            return new StockUnavailableException("mto-stock answered " + (resolved == null ? response.getStatusCode() : resolved)
                     + " to '" + operation + "'" + (body == null || body.isBlank() ? "" : ": " + body), response);
         }
         LOGGER.warn("mto-stock call '{}' failed: {}", operation, throwable.toString());
         return new StockUnavailableException("mto-stock is unavailable for '" + operation + "': " + throwable.getMessage(), throwable);
+    }
+
+    /** El cuerpo de error de mto-stock, o null si no se puede leer (un proxy, un cuerpo vacio...). */
+    private static ErrorPayload errorOf(RestClientResponseException response) {
+        try {
+            return response.getResponseBodyAs(ErrorPayload.class);
+        } catch (RuntimeException unreadable) {
+            return null;
+        }
     }
 
     record MaterialPayload(UUID id, String code, String name, String unitOfMeasure, Boolean active) {
@@ -202,6 +246,10 @@ public class RestClientStockClient implements StockClient {
     }
 
     record Reference(UUID id, String code) {
+    }
+
+    /** Lo que se lee del JSON de error de mto-stock: su codigo estable y su mensaje. */
+    record ErrorPayload(String errorCode, String message) {
     }
 
     record PagePayload<T>(List<T> content) {

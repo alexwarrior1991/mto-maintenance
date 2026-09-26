@@ -11,7 +11,7 @@ import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRespon
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.order.PlanOrderRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
-import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
+import com.alejandro.mtomaintenance.application.exception.UnsyncedMaterialsException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceOrderMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
@@ -34,7 +34,6 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
-import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryDefectRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
@@ -51,7 +50,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
 
@@ -212,10 +210,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
         transition(order, MaintenanceOrderStatus.PLANNED, request.comment());
 
         // Planificar es el momento de bloquear existencias: en DRAFT no se reserva nada.
-        if (order.getStockProjectId() == null) {
-            stock.resolveProjectId(order).ifPresent(order::setStockProjectId);
-        }
-        order.getMaterials().forEach(stock::reserve);
+        stock.reserveAll(order);
 
         return toResponse(repository.save(order));
     }
@@ -249,17 +244,19 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
         if (order.getActualStartDate() == null) {
             order.setActualStartDate(Instant.now());
         }
-        if (order.getStatus() == MaintenanceOrderStatus.DRAFT && order.getStockProjectId() == null) {
-            // URGENT arranca sin planificar: se resuelve el proyecto de stock aqui.
-            stock.resolveProjectId(order).ifPresent(order::setStockProjectId);
-        }
+        // URGENT arranca sin planificar: sus materiales se reservan aqui.
         transition(order, MaintenanceOrderStatus.IN_PROGRESS, comment);
-        order.getMaterials().forEach(stock::reserve);
+        stock.reserveAll(order);
         return toResponse(repository.save(order));
     }
 
+    /**
+     * {@code noRollbackFor}: cuando se rechaza por materiales sin sincronizar, stock ya ha consumido o
+     * liberado las otras lineas, y lo que cada una guarda de eso tiene que quedar. Hasta ese punto no
+     * se toca nada mas de la orden, asi que el rechazo no deja nada a medias en ella.
+     */
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = UnsyncedMaterialsException.class)
     public MaintenanceOrderResponse complete(UUID id, CompleteOrderRequest request) {
         MaintenanceOrder order = lookups.order(id);
         requireTransition(OrderStateMachine.canComplete(order.getStatus()), order, "completed");
@@ -271,11 +268,11 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
         if (tasks.stream().anyMatch(MaintenanceTask::isOpen)) {
             throw new InvalidTransitionException("Order " + order.getCode() + " still has pending or in-progress tasks");
         }
-        if (request.closingNotes() != null && !request.closingNotes().isBlank()) {
-            order.setClosingNotes(request.closingNotes().trim());
-        }
+        // Las notas se aplican al final: un rechazo por materiales no deshace la transaccion.
+        String closingNotes = request.closingNotes() != null && !request.closingNotes().isBlank()
+                ? request.closingNotes().trim() : order.getClosingNotes();
         boolean anyCompletedTask = tasks.stream().anyMatch(task -> task.getStatus() == MaintenanceTaskStatus.COMPLETED);
-        if (!anyCompletedTask && (order.getClosingNotes() == null || order.getClosingNotes().isBlank())) {
+        if (!anyCompletedTask && (closingNotes == null || closingNotes.isBlank())) {
             throw new InvalidTransitionException("Order " + order.getCode()
                     + " needs at least one completed task or closing notes to be completed");
         }
@@ -283,18 +280,20 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
             throw new InvalidTransitionException("Inspection order " + order.getCode() + " has no inspection recorded yet");
         }
 
-        // Consumo de materiales contra stock. Una linea que sigue FAILED tras intentarlo bloquea el
-        // cierre salvo force (supervision), que lo deja escrito en las notas de cierre.
+        // Consumo de materiales contra stock. Una linea que sigue FAILED o REJECTED tras intentarlo
+        // bloquea el cierre salvo force (supervision), que lo deja escrito en las notas de cierre. Lo
+        // que stock hizo con las demas queda aunque se rechace: repetir no lo vuelve a consumir.
         order.getMaterials().forEach(stock::consume);
-        List<MaintenanceMaterialUsage> failed = order.getMaterials().stream().filter(MaintenanceMaterialUsage::isSyncFailed).toList();
-        if (!failed.isEmpty()) {
+        List<MaintenanceMaterialUsage> unsynced = order.getMaterials().stream().filter(MaintenanceMaterialUsage::isSyncFailed).toList();
+        if (!unsynced.isEmpty()) {
             if (!request.isForced()) {
-                throw new MaterialUsageException("Order " + order.getCode() + " has " + failed.size()
+                throw new UnsyncedMaterialsException("Order " + order.getCode() + " has " + unsynced.size()
                         + " material line(s) not synchronized with stock; retry /sync or complete with force");
             }
-            String note = "Completed with " + failed.size() + " material line(s) pending stock synchronization";
-            order.setClosingNotes(order.getClosingNotes() == null ? note : order.getClosingNotes() + "\n" + note);
+            String note = "Completed with " + unsynced.size() + " material line(s) pending stock synchronization";
+            closingNotes = closingNotes == null ? note : closingNotes + "\n" + note;
         }
+        order.setClosingNotes(closingNotes);
 
         if (order.getActualEndDate() == null) {
             order.setActualEndDate(Instant.now());
@@ -371,6 +370,4 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
         WorkloadEstimate estimate = workloadEstimator.estimate(order);
         return mapper.toResponse(order, tasks.size(), completed, estimate.estimatedMinutes(), estimate.estimatedShifts());
     }
-
-    static final EnumSet<StockSyncStatus> PENDING_STOCK = EnumSet.of(StockSyncStatus.FAILED);
 }

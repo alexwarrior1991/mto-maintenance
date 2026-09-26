@@ -263,9 +263,6 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
                 // para que el cierre de la orden lo consuma contra stock.
                 line.setConsumedQuantity(material.quantity());
                 MaintenanceMaterialUsage saved = lineFactory.saveLine(line);
-                if (order.getStockProjectId() == null) {
-                    stock.resolveProjectId(order).ifPresent(order::setStockProjectId);
-                }
                 stock.reserve(saved);
             }
         }

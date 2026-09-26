@@ -58,7 +58,7 @@ Rules that keep the layers honest:
   `/api/v1/maintenance/**`; `@PreAuthorize` adds `maintenance-supervise` on the supervision actions.
 - **Errors**: `GlobalExceptionHandler` → `ApiErrorResponse` with a stable `errorCode`
   (`BusinessErrorCodeResolver`): `ORD-404`, `TRN-001`, `AST-001`, `MAT-001`, `INS-001`, `SHF-001`,
-  `STK-503`, `VAL-001`, `REQ-VALIDATION`, `AUTH-401/403`.
+  `STK-001`, `STK-422`, `STK-503`, `VAL-001`, `REQ-VALIDATION`, `AUTH-401/403`.
 - **Pagination**: `PageResponse<T>` with `PageMetadataResponse`.
 - **Observability**: Actuator health/info public; metrics and prometheus behind `ops-metrics`;
   traces exported by OTLP, including the trace propagated in the RabbitMQ headers.

@@ -1,0 +1,18 @@
+-- Un estado mas para la conversacion con mto-stock: REJECTED.
+--
+-- Hasta ahora cualquier respuesta 4xx de stock dejaba la linea FAILED, igual que una caida: sin
+-- existencias (409 STK-001), un material o almacen retirado, un proyecto que no existe... Pero
+-- repetir la llamada no arregla nada de eso, y ademas esos 4xx abrian el circuito 'stock' como si
+-- stock estuviera caido. Ahora se separan:
+--
+--   FAILED    stock no respondio (red, tiempo agotado, 5xx, 401/403, circuito abierto). Reintentar
+--             con /sync tiene sentido en cuanto vuelva.
+--   REJECTED  stock respondio y dijo que no. El motivo (su codigo y su mensaje) queda en
+--             stock_sync_error; hay que cambiar algo -la cantidad, el almacen, dar de alta
+--             existencias- antes de reintentar.
+--
+-- Las dos bloquean completar la orden salvo force, como bloqueaba FAILED.
+--
+-- La gemela _aud usa el mismo tipo (V4), asi que el valor nuevo vale para las dos. ADD VALUE no se
+-- puede usar en la misma transaccion en que se anade; esta migracion no lo usa.
+ALTER TYPE stock_sync_status ADD VALUE 'REJECTED';
