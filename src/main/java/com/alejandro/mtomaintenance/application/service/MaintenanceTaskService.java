@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service;
 
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.inspection.CheckItemUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.task.CancelTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.CompleteTaskRequest;
@@ -24,6 +25,9 @@ public interface MaintenanceTaskService {
 
     MaintenanceTaskResponse update(UUID orderId, UUID taskId, MaintenanceTaskUpdateRequest request);
 
+    /** Como {@link #update}, y ademas vacia lo que el parche pone a null. */
+    MaintenanceTaskResponse patch(UUID orderId, UUID taskId, MergePatch<MaintenanceTaskUpdateRequest> patch);
+
     /** Preventivo perfil a perfil: una tarea por PROFILE del tramo, ordenadas por kp. Idempotente. */
     GeneratePreventiveTasksResponse generatePreventiveTasks(UUID orderId, GeneratePreventiveTasksRequest request);
 
@@ -34,6 +38,8 @@ public interface MaintenanceTaskService {
     MaintenanceTaskResponse cancel(UUID orderId, UUID taskId, CancelTaskRequest request);
 
     MaintenanceTaskResponse updateCheckItem(UUID orderId, UUID taskId, UUID itemId, CheckItemUpdateRequest request);
+
+    MaintenanceTaskResponse patchCheckItem(UUID orderId, UUID taskId, UUID itemId, MergePatch<CheckItemUpdateRequest> patch);
 
     /** Asigna una tarea a un turno comprobando via y ventana de posesion. */
     MaintenanceTaskResponse assignToShift(UUID shiftId, UUID taskId);

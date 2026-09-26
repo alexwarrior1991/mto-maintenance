@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.application.service;
 
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageRequest;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageResponse;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageUpdateRequest;
@@ -14,6 +15,9 @@ public interface MaintenanceMaterialUsageService {
     MaterialUsageResponse register(UUID orderId, MaterialUsageRequest request);
 
     MaterialUsageResponse update(UUID orderId, UUID usageId, MaterialUsageUpdateRequest request);
+
+    /** Como {@link #update}: una linea no tiene nada que se pueda vaciar, pero el parche lleva la version. */
+    MaterialUsageResponse patch(UUID orderId, UUID usageId, MergePatch<MaterialUsageUpdateRequest> patch);
 
     /** Reintenta la conversacion pendiente con stock. Solo aqui un stock caido responde 503. */
     MaterialUsageResponse sync(UUID orderId, UUID usageId);

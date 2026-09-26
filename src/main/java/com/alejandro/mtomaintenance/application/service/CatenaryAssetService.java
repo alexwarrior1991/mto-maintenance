@@ -4,6 +4,7 @@ import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetResponse;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,9 @@ public interface CatenaryAssetService {
     CatenaryAssetResponse createTrackSection(CatenaryAssetRequest request);
 
     CatenaryAssetResponse update(UUID id, CatenaryAssetUpdateRequest request);
+
+    /** Como {@link #update}, y ademas vacia lo que el parche pone a null (en un activo sincronizado, solo lo suyo). */
+    CatenaryAssetResponse patch(UUID id, MergePatch<CatenaryAssetUpdateRequest> patch);
 
     CatenaryAssetResponse findById(UUID id);
 

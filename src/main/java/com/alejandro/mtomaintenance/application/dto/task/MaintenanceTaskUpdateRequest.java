@@ -10,6 +10,7 @@ public record MaintenanceTaskUpdateRequest(
         List<String> taskTypeCodes,
         String notes,
         String defectsFound,
-        List<String> photoRefs
+        List<String> photoRefs,
+        Long version
 ) {
 }

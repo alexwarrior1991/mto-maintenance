@@ -22,7 +22,8 @@ public record MaintenanceOrderUpdateRequest(
         Long stationId,
         @Digits(integer = 9, fraction = 3) BigDecimal startKp,
         @Digits(integer = 9, fraction = 3) BigDecimal endKp,
-        UUID stockProjectId
+        UUID stockProjectId,
+        Long version
 ) {
     public boolean touchesRestrictedFields() {
         return title != null || plannedDate != null || teamId != null || assignedUser != null

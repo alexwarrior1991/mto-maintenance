@@ -1,7 +1,11 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
 import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
+import static com.alejandro.mtomaintenance.application.service.impl.PatchRules.requireClearable;
+import static com.alejandro.mtomaintenance.application.service.impl.PatchRules.requireText;
+import static com.alejandro.mtomaintenance.application.service.impl.PatchRules.set;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.order.AssignOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.CancelOrderRequest;
@@ -11,6 +15,7 @@ import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRespon
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.order.PlanOrderRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.UnsyncedMaterialsException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceOrderMapper;
@@ -51,6 +56,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -63,6 +69,14 @@ import java.util.UUID;
 class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MaintenanceOrderServiceImpl.class);
+
+    /** Lo que un PATCH puede vaciar; titulo y prioridad son obligatorios. */
+    private static final Set<String> CLEARABLE = Set.of("description", "plannedDate", "teamId", "assignedUser", "closingNotes",
+            "executionPackageId", "trackId", "stationId", "startKp", "endKp", "stockProjectId");
+
+    /** Lo que solo se toca en DRAFT o PLANNED, tambien para vaciarlo. */
+    private static final Set<String> RESTRICTED = Set.of("plannedDate", "teamId", "assignedUser", "executionPackageId", "trackId",
+            "stationId", "startKp", "endKp", "stockProjectId");
 
     private final MaintenanceOrderRepository repository;
     private final CatenaryAssetRepository assetRepository;
@@ -104,10 +118,19 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     @Override
     @Transactional
     public MaintenanceOrderResponse update(UUID id, MaintenanceOrderUpdateRequest request) {
+        return patch(id, MergePatch.of(request));
+    }
+
+    @Override
+    @Transactional
+    public MaintenanceOrderResponse patch(UUID id, MergePatch<MaintenanceOrderUpdateRequest> patch) {
         MaintenanceOrder order = lookups.order(id);
+        MaintenanceOrderUpdateRequest request = patch.values();
+        StaleVersionException.check("Order " + order.getCode(), order.getVersion(), request.version());
+        requireClearable(patch, CLEARABLE);
         boolean full = OrderStateMachine.allowsFullUpdate(order.getStatus());
 
-        if (!full && request.touchesRestrictedFields()) {
+        if (!full && (request.touchesRestrictedFields() || patch.cleared().stream().anyMatch(RESTRICTED::contains))) {
             throw new InvalidTransitionException("Order " + order.getCode() + " is " + order.getStatus()
                     + ": only description, priority and closingNotes can be changed now");
         }
@@ -115,46 +138,28 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
             throw new InvalidTransitionException("Order " + order.getCode() + " is " + order.getStatus() + " and cannot be changed");
         }
 
-        if (request.description() != null) {
-            order.setDescription(request.description());
-        }
+        set(patch, "description", request.description(), order::setDescription);
         if (request.priority() != null) {
             order.setPriority(priorityFor(order.getType(), request.priority()));
         }
-        if (request.closingNotes() != null) {
-            order.setClosingNotes(request.closingNotes());
-        }
+        set(patch, "closingNotes", request.closingNotes(), order::setClosingNotes);
         if (full) {
             if (request.title() != null) {
-                order.setTitle(request.title().trim());
+                order.setTitle(requireText(request.title(), "title"));
             }
-            if (request.plannedDate() != null) {
-                order.setPlannedDate(request.plannedDate());
-            }
-            if (request.teamId() != null) {
+            set(patch, "plannedDate", request.plannedDate(), order::setPlannedDate);
+            if (patch.clears("teamId")) {
+                order.setTeam(null);
+            } else if (request.teamId() != null) {
                 order.setTeam(lookups.team(request.teamId()));
             }
-            if (request.assignedUser() != null) {
-                order.setAssignedUser(request.assignedUser());
-            }
-            if (request.executionPackageId() != null) {
-                order.setExecutionPackageId(request.executionPackageId());
-            }
-            if (request.trackId() != null) {
-                order.setTrackId(request.trackId());
-            }
-            if (request.stationId() != null) {
-                order.setStationId(request.stationId());
-            }
-            if (request.startKp() != null) {
-                order.setStartKp(request.startKp());
-            }
-            if (request.endKp() != null) {
-                order.setEndKp(request.endKp());
-            }
-            if (request.stockProjectId() != null) {
-                order.setStockProjectId(request.stockProjectId());
-            }
+            set(patch, "assignedUser", request.assignedUser(), order::setAssignedUser);
+            set(patch, "executionPackageId", request.executionPackageId(), order::setExecutionPackageId);
+            set(patch, "trackId", request.trackId(), order::setTrackId);
+            set(patch, "stationId", request.stationId(), order::setStationId);
+            set(patch, "startKp", request.startKp(), order::setStartKp);
+            set(patch, "endKp", request.endKp(), order::setEndKp);
+            set(patch, "stockProjectId", request.stockProjectId(), order::setStockProjectId);
             if (order.getStartKp() != null && order.getEndKp() != null) {
                 domain(() -> new KilometricRange(order.getStartKp(), order.getEndKp()));
             }

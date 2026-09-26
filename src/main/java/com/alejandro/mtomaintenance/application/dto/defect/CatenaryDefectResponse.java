@@ -36,6 +36,7 @@ public record CatenaryDefectResponse(
         LocalDate repairPlannedDate,
         UUID foundInTaskId,
         List<String> photoRefs,
+        Long version,
         AuditMetadataResponse audit
 ) {
 }

@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.application.exception.InvalidTransitionExcep
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.UnsyncedMaterialsException;
@@ -21,7 +22,9 @@ import jakarta.validation.Validation;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.core.PropertyReferenceException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.data.core.TypeInformation;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -97,6 +100,20 @@ class GlobalExceptionHandlerTest {
                 "A rejection whose body could not be read");
         assertEquals("MAT-001", codeOf(handler.handleStateConflict(new UnsyncedMaterialsException("pending lines"), request), HttpStatus.CONFLICT),
                 "Completing with lines not synchronized is still MAT-001");
+    }
+
+    @Test
+    void aStaleVersionAndACrossedWriteAnswer409Con001AndAnEscapedConstraintA409InsteadOf500() {
+        MockHttpServletRequest request = request("PATCH", "/api/v1/maintenance/orders/1");
+
+        assertEquals("CON-001", codeOf(handler.handleStaleVersion(new StaleVersionException("Order MO-1 was changed by someone else"), request),
+                HttpStatus.CONFLICT));
+        assertEquals("CON-001", codeOf(handler.handleOptimisticLock(new ObjectOptimisticLockingFailureException(MaintenanceOrder.class, UUID.randomUUID()),
+                request), HttpStatus.CONFLICT));
+        ResponseEntity<ApiErrorResponse> integrity = handler.handleDataIntegrity(
+                new DataIntegrityViolationException("chk_maintenance_material_usage_over_consumption"), request);
+        assertEquals("APP-409", codeOf(integrity, HttpStatus.CONFLICT));
+        assertEquals("The change conflicts with the stored data.", integrity.getBody().message(), "The constraint name does not leak");
     }
 
     @Test

@@ -126,6 +126,15 @@ index read, and `chk_catenary_asset_enabled` keeps it equal to
 `enabled_at_source` and recomputes `enabled` without touching `disabled_locally`. Existing rows:
 synchronized ones got `enabled_at_source = enabled`, own ones `disabled_locally = not enabled`.
 
+## Optimistic locking (`V11`)
+
+`version bigint not null default 0` on `catenary_asset`, `maintenance_order`, `maintenance_task`,
+`maintenance_task_check_item`, `maintenance_shift`, `maintenance_inspection`,
+`maintenance_inspection_item`, `catenary_defect` and `maintenance_material_usage`, mapped with
+`@Version` in `VersionedEntity`. Hibernate bumps it on every write; the native master-data SQL of
+`CatenaryAssetRepository` bumps it by hand. Not in the `_aud` twins: a row's version is not history,
+and Envers does not audit it.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`

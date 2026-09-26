@@ -249,6 +249,25 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
     }
 
     @Test
+    void theVersionGoesUpWithEveryWriteIncludingTheNativeMasterDataOnes() {
+        CatenaryAsset section = assetRepository.saveAndFlush(section("SEC-VER-" + UUID.randomUUID().toString().substring(0, 8), 1L));
+        assertEquals(0L, section.getVersion());
+        section.setDescription("Edited");
+        assetRepository.saveAndFlush(section);
+        assertEquals(1L, section.getVersion());
+
+        String sourceId = "prf-" + UUID.randomUUID();
+        upsert(sourceId, "12-2.27", 1L);
+        CatenaryAsset synced = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+        assertEquals(0L, synced.getVersion());
+        upsert(sourceId, "12-2.27 renamed", 2L);
+        assetRepository.deactivateFromMasterData("mto-configuration", sourceId, 3L);
+        entityManager.clear();
+        assertEquals(2L, assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getVersion(),
+                "Native SQL bumps it by hand: a PUT that read before the event must not overwrite it unnoticed");
+    }
+
+    @Test
     void aTrackSectionWithoutTrackKindIsRejectedByTheDatabase() {
         CatenaryAsset section = section("SEC-BAD-" + UUID.randomUUID().toString().substring(0, 8), 1L);
         section.setTrackKind(null);

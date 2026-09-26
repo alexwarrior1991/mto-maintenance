@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.application.service;
 
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectResponse;
 import com.alejandro.mtomaintenance.application.dto.inspection.CheckItemUpdateRequest;
@@ -23,7 +24,12 @@ public interface MaintenanceInspectionService {
 
     MaintenanceInspectionResponse update(UUID id, MaintenanceInspectionUpdateRequest request);
 
+    /** Como {@link #update}, y ademas vacia lo que el parche pone a null. */
+    MaintenanceInspectionResponse patch(UUID id, MergePatch<MaintenanceInspectionUpdateRequest> patch);
+
     MaintenanceInspectionResponse updateItem(UUID id, UUID itemId, CheckItemUpdateRequest request);
+
+    MaintenanceInspectionResponse patchItem(UUID id, UUID itemId, MergePatch<CheckItemUpdateRequest> patch);
 
     MaintenanceInspectionResponse findById(UUID id);
 

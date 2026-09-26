@@ -1,11 +1,13 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
 import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageRequest;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageResponse;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageUpdateRequest;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.mapper.MaterialUsageMapper;
@@ -22,7 +24,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -68,7 +72,17 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
     @Override
     @Transactional
     public MaterialUsageResponse update(UUID orderId, UUID usageId, MaterialUsageUpdateRequest request) {
+        return patch(orderId, usageId, MergePatch.of(request));
+    }
+
+    @Override
+    @Transactional
+    public MaterialUsageResponse patch(UUID orderId, UUID usageId, MergePatch<MaterialUsageUpdateRequest> patch) {
         MaintenanceMaterialUsage usage = line(orderId, usageId);
+        MaterialUsageUpdateRequest request = patch.values();
+        StaleVersionException.check("Material line " + usage.getMaterialCode(), usage.getVersion(), request.version());
+        // Cantidades y permiso son siempre un valor: una linea no tiene nada que vaciar.
+        PatchRules.requireClearable(patch, Set.of());
         MaintenanceOrder order = usage.getOrder();
         if (order.isTerminal()) {
             throw new MaterialUsageException("Order " + order.getCode() + " is " + order.getStatus() + " and its materials are frozen");
@@ -84,7 +98,13 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
             if (usage.getStockReservationId() != null) {
                 throw new MaterialUsageException("The planned quantity of a reserved line cannot change; remove it and register it again");
             }
-            usage.setPlannedQuantity(domain(() -> new Quantity(request.plannedQuantity(), usage.getUnit())).amount());
+            BigDecimal planned = domain(() -> new Quantity(request.plannedQuantity(), usage.getUnit())).amount();
+            if (planned.compareTo(usage.getConsumedQuantity()) < 0 && !usage.getAllowOverConsumption()) {
+                // La misma regla que al subir lo consumido; sin esto la rompia el CHECK de la base, con un 500.
+                throw new MaterialUsageException("Planned quantity " + planned + " is below the " + usage.getConsumedQuantity() + " "
+                        + usage.getUnit() + " already consumed, and over-consumption is not allowed for this line");
+            }
+            usage.setPlannedQuantity(planned);
         }
         if (request.consumedQuantity() != null) {
             Quantity consumed = domain(() -> new Quantity(request.consumedQuantity(), usage.getUnit()));

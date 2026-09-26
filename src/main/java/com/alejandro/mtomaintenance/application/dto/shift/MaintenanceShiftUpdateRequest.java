@@ -27,6 +27,7 @@ public record MaintenanceShiftUpdateRequest(
         @Digits(integer = 9, fraction = 3) BigDecimal endKp,
         String personnel,
         @Size(max = 500) String measurementEquipment,
-        String observations
+        String observations,
+        Long version
 ) {
 }

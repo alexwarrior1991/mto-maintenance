@@ -16,6 +16,7 @@ public record MaintenanceInspectionUpdateRequest(
         String description,
         String detectedDefects,
         String recommendedActions,
-        @Digits(integer = 9, fraction = 3) BigDecimal kp
+        @Digits(integer = 9, fraction = 3) BigDecimal kp,
+        Long version
 ) {
 }

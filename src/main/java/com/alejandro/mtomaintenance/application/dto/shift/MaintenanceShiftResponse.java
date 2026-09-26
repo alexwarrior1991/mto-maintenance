@@ -37,6 +37,7 @@ public record MaintenanceShiftResponse(
         String measurementEquipment,
         ShiftStatus status,
         String observations,
+        Long version,
         AuditMetadataResponse audit
 ) {
 }

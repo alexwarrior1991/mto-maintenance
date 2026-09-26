@@ -47,6 +47,9 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
      *
      * <p>{@code enabled} del evento va a {@code enabled_at_source}; el efectivo se recalcula sin tocar
      * {@code disabled_locally}, asi que una desactivacion hecha aqui sobrevive a cualquier evento.</p>
+     *
+     * <p>Todas las escrituras nativas de esta interfaz suben {@code version}: Hibernate no las ve, y
+     * sin eso un PUT que leyo antes del evento lo pisaria sin que nadie se enterase.</p>
      */
     @Modifying
     @Query(value = """
@@ -76,6 +79,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                    enabled = excluded.enabled_at_source and not catenary_asset.disabled_locally,
                    source_sequence_number = coalesce(
                        excluded.source_sequence_number, catenary_asset.source_sequence_number),
+                   version = catenary_asset.version + 1,
                    updated_at = now()
              where catenary_asset.source_sequence_number is null
                 or excluded.source_sequence_number is null
@@ -107,6 +111,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                set enabled_at_source = false,
                    enabled = false,
                    source_sequence_number = coalesce(:sourceSequenceNumber, source_sequence_number),
+                   version = version + 1,
                    updated_at = now()
              where source_service = :sourceService
                and source_entity_id = :sourceEntityId
@@ -131,6 +136,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             update catenary_asset disconnector
                set track_id = profile.track_id,
                    execution_package_id = profile.execution_package_id,
+                   version = disconnector.version + 1,
                    updated_at = now()
               from catenary_asset profile
              where disconnector.source_service = :sourceService
@@ -161,6 +167,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                           and profile.execution_package_id is not null
                         order by profile.updated_at desc, profile.id
                         limit 1),
+                   version = insulator.version + 1,
                    updated_at = now()
              where insulator.source_service = :sourceService
                and insulator.source_entity_id = :sourceEntityId
@@ -178,6 +185,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             update catenary_asset disconnector
                set track_id = profile.track_id,
                    execution_package_id = profile.execution_package_id,
+                   version = disconnector.version + 1,
                    updated_at = now()
               from catenary_asset profile
              where profile.source_service = :sourceService
@@ -197,6 +205,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     @Query(value = """
             update catenary_asset insulator
                set execution_package_id = profile.execution_package_id,
+                   version = insulator.version + 1,
                    updated_at = now()
               from catenary_asset profile
              where profile.source_service = :sourceService
@@ -226,6 +235,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                    enabled = false,
                    source_sequence_number = case when source_service is null then source_sequence_number
                                                  else greatest(source_sequence_number, cast(:sequenceNumber as bigint)) end,
+                   version = version + 1,
                    updated_at = now()
              where track_id = :trackId
                and (source_service is null

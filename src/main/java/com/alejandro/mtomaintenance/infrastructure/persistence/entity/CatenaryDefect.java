@@ -52,7 +52,7 @@ import java.util.List;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
-public class CatenaryDefect extends AuditableEntity {
+public class CatenaryDefect extends VersionedEntity {
 
     @NotBlank
     @Size(max = 32)

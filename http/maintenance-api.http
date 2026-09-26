@@ -110,6 +110,17 @@ Content-Type: application/json
   "plannedDate": "2026-01-27"
 }
 
+### Orders - move the planned date and empty the team (merge patch: null empties, a key left out is not touched)
+# With "version" (the one read), 409 CON-001 if someone changed the order in between.
+PATCH {{baseUrl}}/orders/{{orderId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/merge-patch+json
+
+{
+  "plannedDate": "2026-01-28",
+  "teamId": null
+}
+
 ### Shifts - create the night shift of team A (partial possession, main track).
 # blockingDisconnectorIds: every DISCONNECTOR asset opened to isolate the zone (ids from GET /assets?type=DISCONNECTOR)
 POST {{baseUrl}}/shifts

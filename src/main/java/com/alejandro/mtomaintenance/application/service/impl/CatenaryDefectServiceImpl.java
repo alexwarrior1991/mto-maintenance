@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.application.service.impl;
 
 import static com.alejandro.mtomaintenance.application.service.impl.DomainGuard.domain;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectRequest;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectResponse;
@@ -10,6 +11,7 @@ import com.alejandro.mtomaintenance.application.dto.defect.DefectCommentRequest;
 import com.alejandro.mtomaintenance.application.dto.defect.ResolveDefectRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryDefectMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
 import com.alejandro.mtomaintenance.application.service.CatenaryDefectService;
@@ -37,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -44,6 +47,9 @@ import java.util.UUID;
 class CatenaryDefectServiceImpl implements CatenaryDefectService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CatenaryDefectServiceImpl.class);
+
+    /** Lo que un PATCH puede vaciar de un defecto; gravedad y descripcion son obligatorias. */
+    private static final Set<String> CLEARABLE = Set.of("technicalNotes", "correctionType", "partsReplaced", "repairPlannedDate", "photoRefs");
 
     private final CatenaryDefectRepository repository;
     private final MaintenanceInspectionRepository inspectionRepository;
@@ -95,7 +101,16 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
     @Override
     @Transactional
     public CatenaryDefectResponse update(UUID id, CatenaryDefectUpdateRequest request) {
+        return patch(id, MergePatch.of(request));
+    }
+
+    @Override
+    @Transactional
+    public CatenaryDefectResponse patch(UUID id, MergePatch<CatenaryDefectUpdateRequest> patch) {
         CatenaryDefect defect = defect(id);
+        CatenaryDefectUpdateRequest request = patch.values();
+        StaleVersionException.check("Defect " + defect.getCode(), defect.getVersion(), request.version());
+        PatchRules.requireClearable(patch, CLEARABLE);
         if (DefectStateMachine.isTerminal(defect.getStatus())) {
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is " + defect.getStatus() + " and cannot be changed");
         }
@@ -103,22 +118,14 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
             defect.setSeverity(request.severity());
         }
         if (request.description() != null) {
-            defect.setDescription(request.description().trim());
+            defect.setDescription(PatchRules.requireText(request.description(), "description"));
         }
-        if (request.technicalNotes() != null) {
-            defect.setTechnicalNotes(request.technicalNotes());
-        }
-        if (request.correctionType() != null) {
-            defect.setCorrectionType(request.correctionType());
-        }
-        if (request.partsReplaced() != null) {
-            defect.setPartsReplaced(request.partsReplaced());
-        }
-        if (request.repairPlannedDate() != null) {
-            defect.setRepairPlannedDate(request.repairPlannedDate());
-        }
-        if (request.photoRefs() != null) {
-            defect.setPhotoRefs(new ArrayList<>(request.photoRefs()));
+        PatchRules.set(patch, "technicalNotes", request.technicalNotes(), defect::setTechnicalNotes);
+        PatchRules.set(patch, "correctionType", request.correctionType(), defect::setCorrectionType);
+        PatchRules.set(patch, "partsReplaced", request.partsReplaced(), defect::setPartsReplaced);
+        PatchRules.set(patch, "repairPlannedDate", request.repairPlannedDate(), defect::setRepairPlannedDate);
+        if (request.photoRefs() != null || patch.clears("photoRefs")) {
+            defect.setPhotoRefs(request.photoRefs() == null ? new ArrayList<>() : new ArrayList<>(request.photoRefs()));
         }
         return mapper.toResponse(repository.save(defect));
     }

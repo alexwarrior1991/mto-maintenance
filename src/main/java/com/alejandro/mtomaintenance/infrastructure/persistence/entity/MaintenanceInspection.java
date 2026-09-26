@@ -55,7 +55,7 @@ import java.util.List;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
-public class MaintenanceInspection extends AuditableEntity {
+public class MaintenanceInspection extends VersionedEntity {
 
     @NotBlank
     @Size(max = 32)

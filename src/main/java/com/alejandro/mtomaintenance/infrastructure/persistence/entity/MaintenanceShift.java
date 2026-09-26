@@ -59,7 +59,7 @@ import java.util.Set;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
-public class MaintenanceShift extends AuditableEntity {
+public class MaintenanceShift extends VersionedEntity {
 
     @NotBlank
     @Size(max = 32)

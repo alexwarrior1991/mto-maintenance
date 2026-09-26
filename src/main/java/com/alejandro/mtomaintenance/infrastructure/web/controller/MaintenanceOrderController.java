@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.history.StatusHistoryResponse;
 import com.alejandro.mtomaintenance.application.dto.inspection.CheckItemUpdateRequest;
@@ -33,6 +34,9 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
@@ -44,6 +48,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -90,6 +95,15 @@ public class MaintenanceOrderController {
     @PutMapping("/{id}")
     public ResponseEntity<MaintenanceOrderResponse> update(@PathVariable UUID id, @Valid @RequestBody MaintenanceOrderUpdateRequest request) {
         return ResponseEntity.ok(orderService.update(id, request));
+    }
+
+    @Operation(summary = "Patch order", description = "application/merge-patch+json: a key left out is not touched, null empties it (only the optional fields: emptying a required one is 400), a value changes it as in PUT. After PLANNED only description and closingNotes can be emptied. With version, 409 CON-001 if it changed since it was read.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = MergePatch.MEDIA_TYPE,
+                    schema = @Schema(implementation = MaintenanceOrderUpdateRequest.class))))
+    @PatchMapping(value = "/{id}", consumes = MergePatch.MEDIA_TYPE)
+    public ResponseEntity<MaintenanceOrderResponse> patch(@PathVariable UUID id,
+            @Parameter(hidden = true) @Valid MergePatch<MaintenanceOrderUpdateRequest> patch) {
+        return ResponseEntity.ok(orderService.patch(id, patch));
     }
 
     @Operation(summary = "Get order")
@@ -202,6 +216,15 @@ public class MaintenanceOrderController {
         return ResponseEntity.ok(taskService.update(id, taskId, request));
     }
 
+    @Operation(summary = "Patch task", tags = "Tasks", description = "application/merge-patch+json: a key left out is not touched, null empties it (only the optional fields: emptying a required one is 400), a value changes it as in PUT. With version, 409 CON-001 if it changed since it was read.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = MergePatch.MEDIA_TYPE,
+                    schema = @Schema(implementation = MaintenanceTaskUpdateRequest.class))))
+    @PatchMapping(value = "/{id}/tasks/{taskId}", consumes = MergePatch.MEDIA_TYPE)
+    public ResponseEntity<MaintenanceTaskResponse> patchTask(@PathVariable UUID id, @PathVariable UUID taskId,
+            @Parameter(hidden = true) @Valid MergePatch<MaintenanceTaskUpdateRequest> patch) {
+        return ResponseEntity.ok(taskService.patch(id, taskId, patch));
+    }
+
     @Operation(summary = "Start task", tags = "Tasks", description = "Needs the order IN_PROGRESS and a shift IN_PROGRESS on the same track with a compatible possession.")
     @PostMapping("/{id}/tasks/{taskId}/start")
     public ResponseEntity<MaintenanceTaskResponse> startTask(@PathVariable UUID id, @PathVariable UUID taskId,
@@ -230,6 +253,15 @@ public class MaintenanceOrderController {
         return ResponseEntity.ok(taskService.updateCheckItem(id, taskId, itemId, request));
     }
 
+    @Operation(summary = "Patch a check item of the task", tags = "Tasks", description = "application/merge-patch+json: a key left out is not touched, null empties it (only the optional fields: emptying a required one is 400), a value changes it as in PUT. With version, 409 CON-001 if it changed since it was read.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = MergePatch.MEDIA_TYPE,
+                    schema = @Schema(implementation = CheckItemUpdateRequest.class))))
+    @PatchMapping(value = "/{id}/tasks/{taskId}/check-items/{itemId}", consumes = MergePatch.MEDIA_TYPE)
+    public ResponseEntity<MaintenanceTaskResponse> patchCheckItem(@PathVariable UUID id, @PathVariable UUID taskId, @PathVariable UUID itemId,
+            @Parameter(hidden = true) @Valid MergePatch<CheckItemUpdateRequest> patch) {
+        return ResponseEntity.ok(taskService.patchCheckItem(id, taskId, itemId, patch));
+    }
+
     // ------------------------------------------------------------- materials
 
     @Operation(summary = "Materials of the order", tags = "Materials")
@@ -250,6 +282,15 @@ public class MaintenanceOrderController {
     public ResponseEntity<MaterialUsageResponse> updateMaterial(@PathVariable UUID id, @PathVariable UUID usageId,
                                                                 @Valid @RequestBody MaterialUsageUpdateRequest request) {
         return ResponseEntity.ok(materialService.update(id, usageId, request));
+    }
+
+    @Operation(summary = "Patch material line", tags = "Materials", description = "application/merge-patch+json: a key left out is not touched, null empties it (only the optional fields: emptying a required one is 400), a value changes it as in PUT. Nothing of a line can be emptied: the patch carries the version. With version, 409 CON-001 if it changed since it was read.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = MergePatch.MEDIA_TYPE,
+                    schema = @Schema(implementation = MaterialUsageUpdateRequest.class))))
+    @PatchMapping(value = "/{id}/materials/{usageId}", consumes = MergePatch.MEDIA_TYPE)
+    public ResponseEntity<MaterialUsageResponse> patchMaterial(@PathVariable UUID id, @PathVariable UUID usageId,
+            @Parameter(hidden = true) @Valid MergePatch<MaterialUsageUpdateRequest> patch) {
+        return ResponseEntity.ok(materialService.patch(id, usageId, patch));
     }
 
     @Operation(summary = "Retry stock synchronization of a material line", tags = "Materials", description = "Redoes the step the order status calls for, "

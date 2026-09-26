@@ -4,6 +4,7 @@ import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetResponse;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.audit.EntityRevisionResponse;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderResponse;
 import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
@@ -12,6 +13,8 @@ import com.alejandro.mtomaintenance.configuration.security.SecurityRoles;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
@@ -23,6 +26,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -64,6 +68,16 @@ public class CatenaryAssetController {
     @PutMapping("/{id}")
     public ResponseEntity<CatenaryAssetResponse> update(@PathVariable UUID id, @Valid @RequestBody CatenaryAssetUpdateRequest request) {
         return ResponseEntity.ok(assetService.update(id, request));
+    }
+
+    @Operation(summary = "Patch asset", description = "application/merge-patch+json: a key left out is not touched, null empties it (only the optional fields: emptying a required one is 400), a value changes it as in PUT. A synchronized asset only empties description and preventiveIntervalDays; enabled=false needs the delete role too. With version, 409 CON-001 if it changed since it was read.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = MergePatch.MEDIA_TYPE,
+                    schema = @Schema(implementation = CatenaryAssetUpdateRequest.class))))
+    @PreAuthorize("!#patch.values().disabling or hasRole('" + SecurityRoles.MAINTENANCE_DELETE + "')")
+    @PatchMapping(value = "/{id}", consumes = MergePatch.MEDIA_TYPE)
+    public ResponseEntity<CatenaryAssetResponse> patch(@PathVariable UUID id,
+            @Parameter(hidden = true) @Valid MergePatch<CatenaryAssetUpdateRequest> patch) {
+        return ResponseEntity.ok(assetService.patch(id, patch));
     }
 
     @Operation(summary = "Get asset")

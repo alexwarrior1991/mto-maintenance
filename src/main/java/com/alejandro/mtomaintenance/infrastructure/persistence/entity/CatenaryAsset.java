@@ -60,7 +60,7 @@ import java.util.List;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
-public class CatenaryAsset extends AuditableEntity {
+public class CatenaryAsset extends VersionedEntity {
 
     @NotBlank
     @Size(max = 64)
