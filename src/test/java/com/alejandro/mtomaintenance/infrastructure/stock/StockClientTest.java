@@ -11,10 +11,27 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.timelimiter.TimeLimiterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientAutoConfiguration;
+import org.springframework.boot.security.oauth2.client.autoconfigure.servlet.OAuth2ClientWebSecurityAutoConfiguration;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
+import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
+import org.springframework.security.oauth2.client.registration.ClientRegistration;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.core.OAuth2AccessToken;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.HttpClientErrorException;
@@ -24,6 +41,7 @@ import org.springframework.web.client.RestClient;
 import java.math.BigDecimal;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -246,6 +264,65 @@ class StockClientTest {
         assertInstanceOf(StockUnavailableException.class, assertThrows(RuntimeException.class, () -> client.release(reservationId)));
         assertEquals(CircuitBreaker.State.OPEN, circuit());
         server.verify();
+    }
+
+    /**
+     * Las llamadas a stock salen del hilo del circuito o del reintento programado, nunca de una peticion
+     * HTTP. El contexto real trae el gestor OAuth2 que registra Spring Security por defecto, que exige
+     * una ({@code servletRequest cannot be null}): la cuenta de servicio tiene que autorizarse con el
+     * suyo propio, y aqui se comprueba con ese contexto, no con el cliente montado a mano.
+     */
+    @Test
+    void theServiceAccountTokenGoesOutWithoutAnHttpRequestInCourse() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer stock = MockRestServiceServer.bindTo(builder).build();
+        UUID materialId = UUID.randomUUID();
+        stock.expect(requestTo("http://stock/api/v1/inventory/materials/" + materialId))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer service-account-token"))
+                .andRespond(withSuccess("""
+                        {"id":"%s","code":"GA70","name":"Ga70 dropper","unitOfMeasure":"ud","active":true}"""
+                        .formatted(materialId), MediaType.APPLICATION_JSON));
+
+        new WebApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OAuth2ClientAutoConfiguration.class,
+                        OAuth2ClientWebSecurityAutoConfiguration.class))
+                .withUserConfiguration(StockClientConfiguration.class, ResourceServerSecurity.class)
+                .withBean(RestClient.Builder.class, () -> builder)
+                .withBean(CircuitBreakerFactory.class, () -> new Resilience4JCircuitBreakerFactory(
+                        CircuitBreakerRegistry.ofDefaults(), TimeLimiterRegistry.ofDefaults(), null))
+                .withPropertyValues(
+                        "app.stock.enabled=true",
+                        "app.stock.base-url=http://stock",
+                        "app.stock.client-registration-id=mto-services",
+                        "spring.security.oauth2.client.registration.mto-services.client-id=mto-maintenance-svc",
+                        "spring.security.oauth2.client.registration.mto-services.client-secret=secret",
+                        "spring.security.oauth2.client.registration.mto-services.authorization-grant-type=client_credentials",
+                        "spring.security.oauth2.client.registration.mto-services.provider=keycloak",
+                        "spring.security.oauth2.client.provider.keycloak.token-uri=http://auth/token")
+                .run(context -> {
+                    // Un token vigente de la cuenta de servicio, para no tener que pedirlo a Keycloak.
+                    ClientRegistration registration = context.getBean(ClientRegistrationRepository.class)
+                            .findByRegistrationId("mto-services");
+                    OAuth2AccessToken token = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,
+                            "service-account-token", Instant.now(), Instant.now().plus(Duration.ofHours(1)));
+                    context.getBean(OAuth2AuthorizedClientService.class).saveAuthorizedClient(
+                            new OAuth2AuthorizedClient(registration, "mto-maintenance", token),
+                            new TestingAuthenticationToken("mto-maintenance", null));
+
+                    assertTrue(context.getBean(RestClientStockClient.class).findMaterialById(materialId).isPresent());
+                    stock.verify();
+                });
+    }
+
+    /** Como la del servicio: {@code @EnableWebSecurity} y su propia cadena, que es lo que trae el gestor por defecto. */
+    @Configuration(proxyBeanMethods = false)
+    @EnableWebSecurity
+    static class ResourceServerSecurity {
+
+        @Bean
+        SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+            return http.authorizeHttpRequests(requests -> requests.anyRequest().authenticated()).build();
+        }
     }
 
     @Test
