@@ -6,8 +6,6 @@ import io.github.resilience4j.timelimiter.TimeLimiterConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
@@ -48,18 +46,17 @@ public class StockClientConfiguration {
     static final String SERVICE_PRINCIPAL = "mto-maintenance";
 
     @Bean
-    @ConditionalOnBean(ClientRegistrationRepository.class)
-    @ConditionalOnMissingBean(OAuth2AuthorizedClientManager.class)
-    public OAuth2AuthorizedClientManager stockAuthorizedClientManager(ClientRegistrationRepository clientRegistrations,
-                                                                      OAuth2AuthorizedClientService authorizedClients) {
-        return new AuthorizedClientServiceOAuth2AuthorizedClientManager(clientRegistrations, authorizedClients);
-    }
-
-    @Bean
     public RestClient stockRestClient(RestClient.Builder builder, StockProperties properties,
-                                      ObjectProvider<OAuth2AuthorizedClientManager> authorizedClientManager) {
+                                      ObjectProvider<ClientRegistrationRepository> clientRegistrations,
+                                      ObjectProvider<OAuth2AuthorizedClientService> authorizedClients) {
         RestClient.Builder stockBuilder = builder.clone().baseUrl(properties.baseUrl());
-        OAuth2AuthorizedClientManager manager = authorizedClientManager.getIfAvailable();
+        ClientRegistrationRepository registrations = clientRegistrations.getIfAvailable();
+        OAuth2AuthorizedClientService clients = authorizedClients.getIfAvailable();
+        // El gestor se construye aqui y no se pide al contexto: el que registra Spring Security por
+        // defecto esta ligado a la peticion HTTP, y estas llamadas corren en el hilo del circuito o
+        // del reintento programado, sin peticion (servletRequest cannot be null).
+        OAuth2AuthorizedClientManager manager = registrations == null || clients == null ? null
+                : new AuthorizedClientServiceOAuth2AuthorizedClientManager(registrations, clients);
         if (manager == null) {
             LOGGER.warn("No OAuth2 client registration is configured: calls to mto-stock will go out without a bearer token");
         } else {

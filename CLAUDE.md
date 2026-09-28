@@ -140,7 +140,10 @@ The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before 
 `StockClient` (interface in `application/service`) is the only door to `mto-stock`.
 `RestClientStockClient` authenticates with the Keycloak service account `mto-maintenance-svc`
 (`client_credentials`, audience `mto-stock-api`) and runs every call inside the Spring Cloud
-circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`). A failure is one
+circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`). Its token manager
+is built by `StockClientConfiguration` itself, never taken from the context: the one Spring Security
+registers by default needs an HTTP request in course, and these calls run on the breaker's thread or
+the scheduled retry (`servletRequest cannot be null`, every line `FAILED`). A failure is one
 of two exceptions. `StockRejectedException` means stock answered no: a 4xx other than
 401/403/408/429, carrying stock's `errorCode` (409 `STK-001` is no stock). `RestClientStockClient.isRejection`
 is also the predicate the breaker ignores, so rejections never open it. Everything else (network,
