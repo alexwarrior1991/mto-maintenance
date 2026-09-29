@@ -17,6 +17,38 @@ import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterData
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataMessageHeaders;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataRabbitMqNames;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.RabbitListenerContainerFactoryNames;
+import com.alejandro.mtomaintenance.application.dto.messaging.AsynchronousMessage;
+import com.alejandro.mtomaintenance.application.dto.messaging.DomainEvent;
+import com.alejandro.mtomaintenance.application.dto.messaging.MessageActor;
+import com.alejandro.mtomaintenance.application.dto.messaging.MessageActorKind;
+import com.alejandro.mtomaintenance.configuration.messaging.MessagePayloadSignature;
+import com.alejandro.mtomaintenance.configuration.rabbitmq.MaintenanceEventsProperties;
+import com.alejandro.mtomaintenance.configuration.security.CurrentUserService;
+import com.alejandro.mtomaintenance.configuration.security.JwtClaimNames;
+import com.alejandro.mtomaintenance.infrastructure.messaging.outbox.AsynchronousMessageFactory;
+import com.alejandro.mtomaintenance.infrastructure.messaging.outbox.AsynchronousMessageHashService;
+import com.alejandro.mtomaintenance.infrastructure.messaging.outbox.MessageContextResolver;
+import com.alejandro.mtomaintenance.infrastructure.messaging.outbox.OutboxDomainEventPublisher;
+import com.alejandro.mtomaintenance.infrastructure.messaging.outbox.OutboxService;
+import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MaintenanceRabbitMqNames;
+import com.alejandro.mtomaintenance.infrastructure.persistence.audit.MessagingAuditContext;
+import org.junit.jupiter.api.AfterEach;
+import org.mockito.ArgumentCaptor;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import tools.jackson.databind.ObjectMapper;
+import java.util.LinkedHashMap;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.core.AmqpAdmin;
@@ -519,7 +551,7 @@ class MessagingLayerTest {
     @Test
     void topologyDeclaresTheConfigurationExchangeAndAQueueBoundToIt() {
         contextRunner.run(context -> {
-            TopicExchange exchange = context.getBean(TopicExchange.class);
+            TopicExchange exchange = context.getBean("masterDataExchange", TopicExchange.class);
             assertEquals(MasterDataRabbitMqNames.MASTER_DATA_EXCHANGE, exchange.getName());
             assertTrue(exchange.isDurable());
             assertFalse(exchange.isAutoDelete());
@@ -615,8 +647,233 @@ class MessagingLayerTest {
                     assertFalse(context.containsBean("masterDataEventConsumer"));
                     assertFalse(context.containsBean("masterDataQueue"));
                     assertFalse(context.containsBean("masterDataExchange"));
+                    assertFalse(context.containsBean("maintenanceExchange"));
                     assertFalse(context.containsBean(RabbitListenerContainerFactoryNames.MASTER_DATA));
                 });
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Eventos propios: exchange, nombres, sobre, contexto, firma y outbox (docs/06-messaging.md)
+    // ---------------------------------------------------------------------------------------
+
+    private static final String SUBJECT = "6f1b1c8e-0000-4000-8000-000000000031";
+
+    private static final AsynchronousMessageHashService HASH_SERVICE = new AsynchronousMessageHashService(new ObjectMapper());
+
+    private static final MessageContextResolver RESOLVER = new MessageContextResolver(new CurrentUserService());
+
+    @AfterEach
+    void clearTheContexts() {
+        SecurityContextHolder.clearContext();
+        RequestContextHolder.resetRequestAttributes();
+        MessagingAuditContext.clear();
+    }
+
+    /** El exchange propio se declara junto al de datos maestros; la cola que lo escucha es de mto-notification. */
+    @Test
+    void theOwnExchangeIsDeclaredAndNoQueueIsBoundToIt() {
+        contextRunner.run(context -> {
+            TopicExchange own = context.getBean("maintenanceExchange", TopicExchange.class);
+            assertEquals(MaintenanceRabbitMqNames.MAINTENANCE_EXCHANGE, own.getName());
+            assertTrue(own.isDurable());
+            assertFalse(own.isAutoDelete());
+            assertTrue(context.getBeansOfType(Binding.class).values().stream()
+                            .noneMatch(binding -> own.getName().equals(binding.getExchange())),
+                    "A queue belongs to whoever consumes it: this service binds nothing to its own exchange");
+        });
+    }
+
+    @Test
+    void theOwnExchangeNameCanBeOverriddenAndABlankOneFallsBackToTheContract() {
+        contextRunner
+                .withPropertyValues("app.rabbitmq.events.exchange=mto.maintenance.staging.exchange")
+                .run(context -> assertEquals("mto.maintenance.staging.exchange",
+                        context.getBean("maintenanceExchange", TopicExchange.class).getName()));
+
+        assertEquals(MaintenanceRabbitMqNames.MAINTENANCE_EXCHANGE, new MaintenanceEventsProperties("  ").exchange());
+    }
+
+    /** mto-notification deriva el tipo de actividad de la clave: el formato no es cosmetico. */
+    @Test
+    void routingKeysAndEventTypesFollowTheContract() {
+        assertEquals("mto.maintenance.order.status-changed", MaintenanceRabbitMqNames.routingKey("order", "status-changed"));
+        assertEquals("MAINTENANCE_ORDER_STATUS_CHANGED", MaintenanceRabbitMqNames.eventType("order", "status-changed"));
+        assertEquals("mto.maintenance.section-insulator.item-failed", MaintenanceRabbitMqNames.routingKey("Section Insulator", "Item_Failed"));
+        assertEquals("MAINTENANCE_SECTION_INSULATOR_ITEM_FAILED", MaintenanceRabbitMqNames.eventType("Section Insulator", "Item_Failed"));
+        assertTrue(MaintenanceRabbitMqNames.routingKey("order", "created").startsWith(MaintenanceRabbitMqNames.MAINTENANCE_ROUTING_PREFIX + "."));
+        assertFalse(MaintenanceRabbitMqNames.routingKey("order", "created").startsWith("mto.master-data"));
+        assertEquals("mto.maintenance.#", MaintenanceRabbitMqNames.MAINTENANCE_ROUTING_PATTERN);
+    }
+
+    @Test
+    void theEnvelopeCarriesTheOriginTheActorAndTheCorrelationOfTheContextItIsCreatedIn() {
+        MessageContextResolver resolver = mock(MessageContextResolver.class);
+        MessageActor actor = MessageActor.of(SUBJECT, "mantenimiento.tecnico");
+        when(resolver.currentActor()).thenReturn(actor);
+        when(resolver.currentCorrelationId()).thenReturn("8c3b8c1a-1111-4222-8333-444444444444");
+        AsynchronousMessageFactory factory = new AsynchronousMessageFactory(HASH_SERVICE, resolver, "mto-maintenance");
+
+        AsynchronousMessage<Map<String, Object>> message = factory.create("order-1", "MAINTENANCE_ORDER_CREATED", Map.of("code", "MO-000001"));
+
+        assertEquals("mto-maintenance", message.origin());
+        assertEquals(actor, message.actor());
+        assertEquals("8c3b8c1a-1111-4222-8333-444444444444", message.correlationId());
+        assertNotNull(message.operationId());
+        assertTrue(message.messageHash().matches("[0-9a-f]{64}"));
+
+        UUID given = UUID.fromString("00000000-0000-4000-8000-000000000042");
+        assertEquals(given, factory.create(given, "preventive-2026-09-29", "MAINTENANCE_PREVENTIVE_DUE_SOON", Map.of()).operationId(),
+                "A given operationId is kept: it is the idempotency key at the consumer");
+    }
+
+    /** Un consumidor que ya calculaba la huella sobre las siete claves sigue obteniendo la misma. */
+    @Test
+    void theHashCoversTheSevenOriginalKeysOnlyAndIgnoresActorAndCorrelation() {
+        MessageContextResolver resolver = mock(MessageContextResolver.class);
+        when(resolver.currentActor()).thenReturn(MessageActor.of(SUBJECT, "ana.perez"));
+        when(resolver.currentCorrelationId()).thenReturn("corr");
+        AsynchronousMessage<Map<String, Object>> withContext = new AsynchronousMessageFactory(HASH_SERVICE, resolver, "mto-maintenance")
+                .create("order-1", "MAINTENANCE_ORDER_CREATED", Map.of("code", "MO-000001"));
+        AsynchronousMessage<Map<String, Object>> withoutContext = new AsynchronousMessage<>(withContext.operationId(), withContext.referenceId(),
+                withContext.origin(), withContext.creationDate(), withContext.eventType(), withContext.data(), "PENDING", null, null);
+
+        assertEquals(withContext.messageHash(), HASH_SERVICE.calculate(withoutContext));
+    }
+
+    @Test
+    void withoutAnAuthenticatedUserTheActorIsTheSystemSaidExplicitly() {
+        assertEquals(MessageActor.system(), RESOLVER.currentActor());
+        assertEquals(MessageActorKind.SYSTEM, RESOLVER.currentActor().kind());
+        assertNull(RESOLVER.currentActor().username());
+    }
+
+    /** Lo clasifica el emisor porque solo el tiene el token delante: Keycloak nombra service-account-<cliente> a las cuentas de servicio. */
+    @Test
+    void aPersonWithAJwtIsAPersonAndAServiceAccountIsAService() {
+        authenticateWithJwt("mantenimiento.tecnico");
+        assertEquals(new MessageActor(SUBJECT, "mantenimiento.tecnico", MessageActorKind.PERSON), RESOLVER.currentActor());
+
+        authenticateWithJwt("service-account-mto-backoffice-svc");
+        assertEquals(new MessageActor(SUBJECT, "service-account-mto-backoffice-svc", MessageActorKind.SERVICE), RESOLVER.currentActor());
+    }
+
+    @Test
+    void anAuthenticationThatIsNotAJwtIsAPersonWithTheirNameAndNoId() {
+        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
+        securityContext.setAuthentication(new UsernamePasswordAuthenticationToken(
+                "ana.perez", "n/a", AuthorityUtils.createAuthorityList("ROLE_MAINTENANCE_READ")));
+        SecurityContextHolder.setContext(securityContext);
+
+        assertEquals(new MessageActor(null, "ana.perez", MessageActorKind.PERSON), RESOLVER.currentActor());
+    }
+
+    /** El mismo valor que guarda la revision de Envers: la cabecera de la peticion, o el mensaje de datos maestros en curso. */
+    @Test
+    void theCorrelationIdIsTheRequestHeaderFirstThenTheMasterDataMessageBeingProcessed() {
+        assertNull(RESOLVER.currentCorrelationId(), "Outside a request and a message there is none, and it is said with null");
+
+        MessagingAuditContext.set(new MessagingAuditContext.Context("0f8b1f4c-3f6a-4a6d-9a2a-1c9f5f6f2b10", "mto-configuration"));
+        assertEquals("0f8b1f4c-3f6a-4a6d-9a2a-1c9f5f6f2b10", RESOLVER.currentCorrelationId());
+
+        withRequestHeader("8c3b8c1a-1111-4222-8333-444444444444");
+        assertEquals("8c3b8c1a-1111-4222-8333-444444444444", RESOLVER.currentCorrelationId(),
+                "A request in course is the strongest evidence, even if a reused thread still carries a messaging context");
+    }
+
+    @Test
+    void aCorrelationHeaderThatIsBlankTooLongOrNotPrintableCountsAsAbsent() {
+        withRequestHeader("   ");
+        assertNull(RESOLVER.currentCorrelationId());
+        withRequestHeader("x".repeat(201));
+        assertNull(RESOLVER.currentCorrelationId());
+        withRequestHeader("con espacios");
+        assertNull(RESOLVER.currentCorrelationId());
+        withRequestHeader("  req-42  ");
+        assertEquals("req-42", RESOLVER.currentCorrelationId(), "Trimmed, as the audit stores it");
+    }
+
+    /** Lo que este servicio firma lo acepta su propio verificador, que es el que corre en mto-notification con el mismo secreto. */
+    @Test
+    void whatThisServiceSignsIsWhatTheVerifierAccepts() {
+        byte[] payload = "{\"data\":{\"values\":{\"startKp\":12847.990}}}".getBytes(StandardCharsets.UTF_8);
+        MessageSignatureProperties withSecret = new MessageSignatureProperties(SECRET, MessageSignatureMode.REQUIRED);
+        MessagePayloadSignature signer = new MessagePayloadSignature(withSecret);
+
+        assertEquals("HMAC-SHA256", signer.algorithm());
+        assertEquals(Optional.empty(), new MessagePayloadSignatureVerifier(withSecret)
+                .rejectionReason(payload, signer.sign(payload), signer.algorithm()));
+        assertTrue(new MessagePayloadSignatureVerifier(withSecret)
+                .rejectionReason("{\"data\":{}}".getBytes(StandardCharsets.UTF_8), signer.sign(payload), signer.algorithm()).isPresent());
+
+        MessagePayloadSignature plain = new MessagePayloadSignature(new MessageSignatureProperties("", MessageSignatureMode.REQUIRED));
+        assertEquals("SHA-256", plain.algorithm());
+        assertEquals(sha256(payload), plain.sign(payload));
+        assertTrue(plain.verify(payload, plain.sign(payload)));
+        assertFalse(signer.verify(payload, plain.sign(payload)), "Another secret, another signature");
+        assertThrows(IllegalArgumentException.class, () -> signer.sign((byte[]) null));
+    }
+
+    /** Ojo con lo que traen los eventos: una clave que huela a credencial no llega al outbox. */
+    @Test
+    void aDomainEventNeverCarriesAnythingThatSmellsLikeASecretAndKeepsItsKeysInOrder() {
+        Map<String, Object> nested = new LinkedHashMap<>();
+        nested.put("apiKey", "x");
+        assertThrows(IllegalArgumentException.class, () -> new DomainEvent("order", "1", "created", Map.of("password", "x")));
+        assertThrows(IllegalArgumentException.class, () -> new DomainEvent("order", "1", "created", Map.of("team", nested)));
+        assertThrows(IllegalArgumentException.class, () -> new DomainEvent("order", "1", "created", Map.of("items", List.of(Map.of("secretCode", "x")))));
+        assertThrows(IllegalArgumentException.class, () -> new DomainEvent(" ", "1", "created", Map.of()));
+        assertThrows(IllegalArgumentException.class, () -> new DomainEvent("order", null, "created", Map.of()));
+
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("teamId", null);
+        values.put("code", "MO-1");
+        DomainEvent event = new DomainEvent("order", "1", "created", values);
+
+        assertEquals(List.of("teamId", "code"), List.copyOf(event.values().keySet()), "Nulls travel and the order of the keys is kept");
+        assertThrows(UnsupportedOperationException.class, () -> event.values().put("x", 1));
+        assertEquals(Map.of(), new DomainEvent("order", "1", "created", null).values());
+    }
+
+    @Test
+    void theOutboxPublisherWritesTheEnvelopeUnderTheContractNames() {
+        MessageContextResolver resolver = mock(MessageContextResolver.class);
+        when(resolver.currentActor()).thenReturn(MessageActor.system());
+        OutboxService outboxService = mock(OutboxService.class);
+        OutboxDomainEventPublisher publisher = new OutboxDomainEventPublisher(
+                new AsynchronousMessageFactory(HASH_SERVICE, resolver, "mto-maintenance"), outboxService, new MaintenanceEventsProperties(null));
+        DomainEvent event = new DomainEvent("order", "7", "status-changed", Map.of("from", "DRAFT", "to", "PLANNED"));
+        UUID operationId = UUID.fromString("00000000-0000-4000-8000-000000000007");
+
+        publisher.publish(operationId, event);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<AsynchronousMessage<DomainEvent>> captor = ArgumentCaptor.forClass(AsynchronousMessage.class);
+        verify(outboxService).save(eq("order"), eq("7"), eq("MAINTENANCE_ORDER_STATUS_CHANGED"),
+                eq("mto.maintenance.exchange"), eq("mto.maintenance.order.status-changed"), captor.capture());
+        AsynchronousMessage<DomainEvent> message = captor.getValue();
+        assertEquals(operationId, message.operationId());
+        assertEquals("order-7", message.referenceId(), "The aggregate of the outbox: created before status-changed of the same order");
+        assertEquals("MAINTENANCE_ORDER_STATUS_CHANGED", message.eventType());
+        assertSame(event, message.data());
+        assertEquals(MessageActorKind.SYSTEM, message.actor().kind());
+        assertTrue(publisher.isEnabled());
+    }
+
+    private static void authenticateWithJwt(String username) {
+        Jwt jwt = Jwt.withTokenValue("token")
+                .header("alg", "RS256")
+                .subject(SUBJECT)
+                .claim(JwtClaimNames.PREFERRED_USERNAME, username)
+                .build();
+        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
+        securityContext.setAuthentication(new JwtAuthenticationToken(jwt, AuthorityUtils.createAuthorityList("ROLE_MAINTENANCE_READ"), username));
+        SecurityContextHolder.setContext(securityContext);
+    }
+
+    private static void withRequestHeader(String value) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Correlation-Id", value);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -628,7 +885,7 @@ class MessagingLayerTest {
      */
     private static MasterDataChangedMessage convert(String json) {
         MessageConverter converter = new RabbitMqConfiguration(
-                new MasterDataRabbitProperties(null, null, null, null, null, null))
+                new MasterDataRabbitProperties(null, null, null, null, null, null), new MaintenanceEventsProperties(null))
                 .masterDataMessageConverter(JsonMapper.builder().build());
 
         MessageProperties properties = new MessageProperties();

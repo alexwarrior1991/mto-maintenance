@@ -40,6 +40,15 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     );
 
     /**
+     * Un cerrojo de aviso de PostgreSQL ligado a la transaccion en curso: {@code true} si esta
+     * transaccion lo tiene, {@code false} si otra lo tenia ya (no se espera). Se suelta solo al
+     * terminar la transaccion. Es lo que reparte un trabajo diario entre varias instancias sin una
+     * tabla de arrendamientos: la que lo consigue trabaja, las demas no hacen nada.
+     */
+    @Query(value = "select pg_try_advisory_xact_lock(:key)", nativeQuery = true)
+    boolean tryAdvisoryTransactionLock(@Param("key") long key);
+
+    /**
      * Alta o actualizacion desde un evento de datos maestros. La marca de agua se compara DENTRO del
      * where: un evento mas antiguo que lo aplicado no toca la fila (devuelve 0), y dos entregas
      * concurrentes no pueden pisarse. Sin numero de secuencia se aplica y se conserva la marca.

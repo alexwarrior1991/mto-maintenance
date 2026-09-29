@@ -3,6 +3,15 @@ package com.alejandro.mtomaintenance.application.service.impl;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetUpdateRequest;
+import com.alejandro.mtomaintenance.application.dto.asset.PreventiveDueSoonReport;
+import com.alejandro.mtomaintenance.application.dto.messaging.DomainEvent;
+import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
+import com.alejandro.mtomaintenance.configuration.events.PreventiveDueSoonProperties;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import static org.mockito.ArgumentMatchers.anyLong;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectRequest;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.defect.DefectCommentRequest;
@@ -420,7 +429,7 @@ class BusinessLayerTest {
     void stockOutagesLeaveTheLineFailedAndSyncRetriesIt() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
         order.setStockProjectId(UUID.randomUUID());
         MaintenanceMaterialUsage line = line(order);
@@ -446,7 +455,7 @@ class BusinessLayerTest {
     void withoutAStockProjectTheConsumptionIsADirectOutput() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         MaintenanceMaterialUsage line = line(order);
         line.setConsumedQuantity(new BigDecimal("2"));
@@ -1740,7 +1749,7 @@ class BusinessLayerTest {
     void statusHistoryRowsCarryTheActorAndAreReadInChronologicalOrder() {
         MaintenanceStatusHistoryRepository repository = mock(MaintenanceStatusHistoryRepository.class);
         StatusHistoryMapper mapper = mock(StatusHistoryMapper.class);
-        StatusHistoryServiceImpl service = new StatusHistoryServiceImpl(repository, mapper);
+        StatusHistoryServiceImpl service = new StatusHistoryServiceImpl(repository, mapper, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
         CatenaryDefect defect = defect(DefectStatus.OPEN);
 
@@ -1839,7 +1848,7 @@ class BusinessLayerTest {
     void consumingAReservedLineReleasesConsumesOrOutputsAccordingToTheQuantityUsed() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         UUID project = UUID.randomUUID();
         order.setStockProjectId(project);
@@ -1885,7 +1894,7 @@ class BusinessLayerTest {
     void settlingALineAsksStockFirstSoThatRetryingNeverConsumesTwice() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.COMPLETED);
         UUID project = UUID.randomUUID();
         order.setStockProjectId(project);
@@ -1949,7 +1958,7 @@ class BusinessLayerTest {
     void cancellingReleasesOnlyWhatStockStillHoldsAndClosesEveryPendingLine() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.CANCELLED);
 
         MaintenanceMaterialUsage held = reservedLine(order, "0");
@@ -1982,7 +1991,7 @@ class BusinessLayerTest {
     void aReservationRetriedAfterAnOutageSendsTheSameIdempotencyKey() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
         order.setStockProjectId(UUID.randomUUID());
         MaintenanceMaterialUsage line = line(order);
@@ -2015,7 +2024,7 @@ class BusinessLayerTest {
     void anOutputRetriedAfterAnOutageSendsTheSameBodyAndKeyWhicheverWayItComesBack() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.COMPLETED);
         UUID project = UUID.randomUUID();
         order.setStockProjectId(project);
@@ -2079,7 +2088,7 @@ class BusinessLayerTest {
     void completingAnOrderConfirmsAReservationInDoubtBeforeConsumingIt() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         order.setStockProjectId(UUID.randomUUID());
         MaintenanceMaterialUsage line = line(order);
@@ -2111,7 +2120,7 @@ class BusinessLayerTest {
     void cancellingAnOrderReleasesWhatAReservationInDoubtLeftInStock() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.CANCELLED);
         order.setStockProjectId(UUID.randomUUID());
         MaintenanceMaterialUsage landed = inDoubt(line(order), StockRequestType.RESERVATION);
@@ -2143,7 +2152,7 @@ class BusinessLayerTest {
     void removingALineReleasesItsReservationInDoubtButNotWhileAnOutputIsInDoubt() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         order.setStockProjectId(UUID.randomUUID());
         MaintenanceMaterialUsage reserving = inDoubt(line(order), StockRequestType.RESERVATION);
@@ -2171,7 +2180,7 @@ class BusinessLayerTest {
     void syncingAnOpenOrderFinishesAnOutputInDoubtInsteadOfReservingAgain() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         order.setStockProjectId(UUID.randomUUID());
         MaintenanceMaterialUsage partial = reservedLine(order, "0.5");
@@ -2317,7 +2326,7 @@ class BusinessLayerTest {
     void syncInAnOrderInProgressKeepsTheReservationOfTheLineAndReplacesOneReleasedFromTheWarehouse() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         UUID project = UUID.randomUUID();
         order.setStockProjectId(project);
@@ -2360,7 +2369,7 @@ class BusinessLayerTest {
     void aRejectionFromStockLeavesTheLineRejectedWithItsReasonAndAnExplicitSyncSaysWhy() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
         order.setStockProjectId(UUID.randomUUID());
         MaintenanceMaterialUsage line = line(order);
@@ -2382,7 +2391,7 @@ class BusinessLayerTest {
     void reservingResolvesTheProjectOfThePackageOnceAndAnOutageThereLeavesTheLinesFailed() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         UUID project = UUID.randomUUID();
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
         MaintenanceMaterialUsage first = line(order);
@@ -2511,7 +2520,7 @@ class BusinessLayerTest {
     void removingALineAsksStockHowItsReservationIsBeforeReleasingIt() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
-        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient);
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher());
         MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
 
         MaintenanceMaterialUsage held = reservedLine(order, "0");
@@ -2842,6 +2851,273 @@ class BusinessLayerTest {
                 List.of(new MonthlyMaterialLineResponse(UUID.randomUUID(), "GA70", "ud", new BigDecimal("48.000"))));
     }
 
+    // ---------------------------------------------------------------- events
+
+    @Test
+    void orderAndDefectTransitionsPublishTheirEvents() {
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        StatusHistoryServiceImpl service = new StatusHistoryServiceImpl(mock(MaintenanceStatusHistoryRepository.class),
+                mock(StatusHistoryMapper.class), events);
+        MaintenanceOrder order = order(MaintenanceOrderType.URGENT, MaintenanceOrderStatus.DRAFT);
+        order.setAssignedUser("yossi");
+        CatenaryDefect defect = defect(DefectStatus.OPEN);
+
+        service.recordOrderChange(order, null, "DRAFT", "Order created");
+        service.recordOrderChange(order, "PLANNED", "ASSIGNED", "week 4");
+        service.recordOrderChange(order, "IN_PROGRESS", "IN_PROGRESS", "Reassigned");
+        service.recordDefectChange(defect, null, "OPEN", "found");
+        service.recordDefectChange(defect, "OPEN", "IN_PROGRESS", "Linked to order MO-1");
+        service.recordDefectChange(defect, "IN_PROGRESS", "IN_PROGRESS", "Re-linked to order MO-2");
+
+        assertEquals(List.of("order.created", "order.status-changed", "order.reassigned", "defect.created", "defect.status-changed"),
+                events.names(), "A defect re-linked without changing state stays in the history only");
+        DomainEvent created = events.published.get(0);
+        assertEquals(order.getId().toString(), created.entityId());
+        assertEquals("MO-DRAFT", created.values().get("code"));
+        assertEquals("URGENT", created.values().get("type"));
+        assertEquals("CRITICAL", created.values().get("priority"));
+        assertEquals("SEC-T2", created.values().get("assetCode"));
+        assertEquals(2L, created.values().get("trackId"));
+        assertEquals("Order created", created.values().get("comment"));
+        DomainEvent assigned = events.published.get(1);
+        assertEquals("PLANNED", assigned.values().get("from"));
+        assertEquals("ASSIGNED", assigned.values().get("to"));
+        assertEquals("yossi", assigned.values().get("assignedUser"), "With to=ASSIGNED it is whom to notify");
+        assertEquals("Reassigned", events.published.get(2).values().get("comment"));
+        DomainEvent defectCreated = events.published.get(3);
+        assertEquals(defect.getId().toString(), defectCreated.entityId());
+        assertEquals("MEDIUM", defectCreated.values().get("severity"));
+        assertEquals("PRF-13-2.10", defectCreated.values().get("assetCode"));
+        assertEquals("IN_PROGRESS", events.published.get(4).values().get("to"));
+    }
+
+    @Test
+    void startingAndClosingAShiftPublishTheirEvents() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(2L, PossessionType.PARTIAL, ShiftStatus.PLANNED);
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        Instant actualStart = Instant.parse("2026-01-27T21:10:00Z");
+
+        fixture.service.start(shift.getId(), new StartShiftRequest(actualStart, null));
+        fixture.service.close(shift.getId(), new CloseShiftRequest(Instant.parse("2026-01-28T04:30:00Z"), null, null, "smooth night"));
+
+        assertEquals(List.of("shift.started", "shift.closed"), fixture.events.names());
+        DomainEvent started = fixture.events.published.get(0);
+        assertEquals(shift.getId().toString(), started.entityId());
+        assertEquals(shift.getCode(), started.values().get("code"));
+        assertEquals("IN_PROGRESS", started.values().get("status"));
+        assertEquals("PARTIAL", started.values().get("possessionType"));
+        assertEquals(actualStart, started.values().get("actualStart"));
+        assertEquals(List.of(2L), started.values().get("trackIds"));
+        DomainEvent closed = fixture.events.published.get(1);
+        assertEquals("CLOSED", closed.values().get("status"));
+        assertEquals(Instant.parse("2026-01-28T04:30:00Z"), closed.values().get("actualEnd"));
+        assertEquals(440, closed.values().get("netWorkMinutes"), "From 21:10 to 04:30 without a voltage cut-off");
+    }
+
+    @Test
+    void materialLinesTellWhatStockAnswered() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, events);
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        order.setStockProjectId(UUID.randomUUID());
+
+        MaintenanceMaterialUsage rejected = line(order);
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenThrow(new StockRejectedException("Insufficient stock", 409, "STK-001", null));
+        synchronizer.reserve(rejected);
+
+        MaintenanceMaterialUsage inDoubt = line(order);
+        org.mockito.Mockito.reset(stockClient);
+        when(stockClient.isEnabled()).thenReturn(true);
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenThrow(new StockUnavailableException("Read timed out"));
+        synchronizer.reserve(inDoubt);
+
+        MaintenanceOrder withoutProject = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        MaintenanceMaterialUsage failed = line(withoutProject);
+        when(stockClient.findProjectIdByCode("EP-6")).thenThrow(new StockUnavailableException("stock down"));
+        synchronizer.reserve(failed);
+
+        assertEquals(List.of("material.rejected", "material.in-doubt", "material.failed"), events.names());
+        DomainEvent first = events.published.get(0);
+        assertEquals(rejected.getId().toString(), first.entityId());
+        assertEquals("STK-001", first.values().get("stockErrorCode"));
+        assertEquals(409, first.values().get("stockHttpStatus"));
+        assertEquals("reserve", first.values().get("step"));
+        assertEquals("Insufficient stock", first.values().get("reason"));
+        assertEquals(order.getCode(), first.values().get("orderCode"));
+        assertEquals("GA70", first.values().get("materialCode"));
+        assertEquals("REJECTED", first.values().get("stockSyncStatus"));
+        assertNull(first.values().get("request"), "Stock said no, so nothing is in doubt");
+        DomainEvent second = events.published.get(1);
+        assertEquals(inDoubt.getId().toString(), second.entityId());
+        assertEquals("RESERVATION", second.values().get("request"), "The reservation was sent and got no answer");
+        assertEquals("FAILED", second.values().get("stockSyncStatus"));
+        assertEquals("Read timed out", second.values().get("reason"));
+        DomainEvent third = events.published.get(2);
+        assertEquals(failed.getId().toString(), third.entityId());
+        assertNull(third.values().get("request"), "Nothing was sent: the project could not be resolved");
+        assertEquals("resolve project", third.values().get("step"));
+    }
+
+    @Test
+    void disablingAnAssetHerePublishesOnceAndOnlyWhenItWasNotDisabledYet() {
+        AssetFixture fixture = new AssetFixture();
+        CatenaryAsset asset = profile("12-2.27", "12847.990");
+        when(fixture.lookups.asset(asset.getId())).thenReturn(asset);
+
+        fixture.service.disable(asset.getId());
+        fixture.service.disable(asset.getId());
+        fixture.service.update(asset.getId(), new CatenaryAssetUpdateRequest(null, null, true, null, null, null, null, null, null, null, null, null, null));
+        fixture.service.update(asset.getId(), new CatenaryAssetUpdateRequest(null, null, false, null, null, null, null, null, null, null, null, null, null));
+
+        assertEquals(List.of("asset.disabled", "asset.disabled"), fixture.events.names(),
+                "Once per DELETE and once per PUT enabled=false; repeating a disable and re-enabling publish nothing");
+        DomainEvent event = fixture.events.published.get(0);
+        assertEquals(asset.getId().toString(), event.entityId());
+        assertEquals("PRF-12-2.27", event.values().get("code"));
+        assertEquals("PROFILE", event.values().get("type"));
+        assertEquals(2L, event.values().get("trackId"));
+        assertEquals(true, event.values().get("disabledLocally"));
+    }
+
+    @Test
+    void inspectionsPublishTheirCreationTheirFailedItemsAndWhatTheyGenerate() {
+        InspectionFixture fixture = new InspectionFixture();
+        CatenaryAsset asset = profile("13-2.10", "13499.290");
+        when(fixture.lookups.enabledAsset(asset.getId())).thenReturn(asset);
+        when(fixture.codeGenerator.nextInspectionCode()).thenReturn("INS-000031");
+        fixture.service.create(new MaintenanceInspectionRequest(asset.getId(), LocalDate.of(2026, 1, 28), "dana", null,
+                InspectionResult.MAJOR_DEFECT, null, "Cracked insulator", "Replace it", null, null, null));
+
+        MaintenanceInspection inspection = inspection(InspectionResult.MAJOR_DEFECT);
+        MaintenanceInspectionItem height = MaintenanceInspectionItem.fromTemplate(inspection, InspectionTemplateItem.builder()
+                .code("CW_HEIGHT").label("Contact wire height").unit("mm").minValue(new BigDecimal("5000")).maxValue(new BigDecimal("5500"))
+                .requiresMeasure(true).build());
+        ReflectionTestUtils.setField(height, "id", UUID.randomUUID());
+        inspection.getItems().add(height);
+        when(fixture.repository.findById(inspection.getId())).thenReturn(Optional.of(inspection));
+        when(fixture.defectRepository.save(any())).thenAnswer(invocation -> withId(invocation.getArgument(0)));
+        fixture.service.updateItem(inspection.getId(), height.getId(),
+                new CheckItemUpdateRequest(new BigDecimal("5620"), null, null, CheckItemResult.DEFECT, "Above tolerance", null));
+        fixture.service.updateItem(inspection.getId(), height.getId(),
+                new CheckItemUpdateRequest(null, null, null, null, "Still above tolerance", null));
+
+        when(fixture.codeGenerator.nextDefectCode()).thenReturn("DEF-000045");
+        fixture.service.createDefect(inspection.getId(), new CreateDefectFromInspectionRequest(null, null, null, null));
+
+        MaintenanceOrder created = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
+        MaintenanceOrderResponse response = mock(MaintenanceOrderResponse.class);
+        when(response.id()).thenReturn(created.getId());
+        when(fixture.orderService.create(any())).thenReturn(response);
+        when(fixture.orderRepository.findById(created.getId())).thenReturn(Optional.of(created));
+        fixture.service.createCorrectiveOrder(inspection.getId(), new CreateCorrectiveOrderRequest(null, null, null, null, null));
+
+        assertEquals(List.of("inspection.created", "inspection.item-failed", "inspection.defect-created", "inspection.corrective-order-created"),
+                fixture.events.names(), "An item that stays DEFECT does not fail twice");
+        DomainEvent createdEvent = fixture.events.published.get(0);
+        assertEquals("INS-000031", createdEvent.values().get("code"));
+        assertEquals("MAJOR_DEFECT", createdEvent.values().get("result"));
+        assertEquals("PRF-13-2.10", createdEvent.values().get("assetCode"));
+        assertEquals(0, createdEvent.values().get("itemCount"));
+        DomainEvent itemFailed = fixture.events.published.get(1);
+        assertEquals(inspection.getId().toString(), itemFailed.entityId());
+        assertEquals("CW_HEIGHT", itemFailed.values().get("itemCode"));
+        assertEquals(new BigDecimal("5620"), itemFailed.values().get("measuredValue"));
+        assertEquals("DEFECT", itemFailed.values().get("itemResult"));
+        DomainEvent defectCreated = fixture.events.published.get(2);
+        assertEquals("DEF-000045", defectCreated.values().get("defectCode"));
+        assertEquals("HIGH", defectCreated.values().get("severity"));
+        DomainEvent correctiveCreated = fixture.events.published.get(3);
+        assertEquals(created.getId(), correctiveCreated.values().get("orderId"));
+        assertEquals("MO-DRAFT", correctiveCreated.values().get("orderCode"));
+        assertEquals("DEF-000045", correctiveCreated.values().get("defectCode"));
+    }
+
+    @Test
+    void theDailyPreventiveCheckPublishesOneEventPerDayWithADeterministicOperationId() {
+        CatenaryAssetRepository repository = mock(CatenaryAssetRepository.class);
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        PreventiveDueSoonServiceImpl service = new PreventiveDueSoonServiceImpl(repository, events, new PreventiveDueSoonProperties(7, 1));
+        Instant now = Instant.parse("2026-09-29T06:07:00Z");
+        CatenaryAsset overdue = profile("12-2.27", "12847.990");
+        overdue.setPreventiveIntervalDays(365);
+        overdue.setLastPreventiveCompletedAt(Instant.parse("2025-09-01T00:00:00Z"));
+        CatenaryAsset soon = profile("12-2.28", "12899.290");
+        soon.setPreventiveIntervalDays(365);
+        soon.setLastPreventiveCompletedAt(Instant.parse("2025-10-02T00:00:00Z"));
+        CatenaryAsset never = profile("12-2.29", "12950.000");
+        never.setPreventiveIntervalDays(180);
+        when(repository.tryAdvisoryTransactionLock(anyLong())).thenReturn(true);
+        when(repository.findAll(any(Specification.class), any(Sort.class))).thenReturn(List.of(soon, overdue, never));
+
+        PreventiveDueSoonReport report = service.publishDueSoon(now);
+
+        assertEquals(LocalDate.of(2026, 9, 29), report.date());
+        assertEquals(3, report.dueCount());
+        assertEquals(2, report.overdueCount());
+        assertTrue(report.published());
+        assertEquals(List.of("preventive.due-soon"), events.names());
+        DomainEvent event = events.published.getFirst();
+        assertEquals("2026-09-29", event.entityId());
+        assertEquals(UUID.nameUUIDFromBytes("preventive-due-soon:2026-09-29".getBytes(StandardCharsets.UTF_8)), events.operationIds.getFirst(),
+                "The same day publishes the same operationId from any instance: a duplicate for the consumer's inbox");
+        assertEquals(3, event.values().get("count"));
+        assertEquals(2, event.values().get("overdueCount"));
+        assertEquals(7, event.values().get("horizonDays"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> assets = (List<Map<String, Object>>) event.values().get("assets");
+        assertEquals(1, assets.size(), "Only sample-size assets travel; the count is the whole");
+        assertEquals("PRF-12-2.29", assets.getFirst().get("assetCode"), "Never checked comes first, then the earliest due");
+        assertEquals(true, assets.getFirst().get("overdue"));
+        assertNull(assets.getFirst().get("dueAt"));
+
+        events.published.clear();
+        when(repository.tryAdvisoryTransactionLock(anyLong())).thenReturn(false);
+        assertFalse(service.publishDueSoon(now).published(), "Another instance holds the lock of the day");
+        assertTrue(events.published.isEmpty());
+
+        when(repository.tryAdvisoryTransactionLock(anyLong())).thenReturn(true);
+        when(repository.findAll(any(Specification.class), any(Sort.class))).thenReturn(List.of());
+        assertFalse(service.publishDueSoon(now).published(), "Nothing due, nothing said");
+        assertTrue(events.published.isEmpty());
+    }
+
+    /** Lo que los ganchos publican, tal cual, para leerlo en el test; los eventos con nombre entidad.evento. */
+    static final class RecordingEventPublisher implements DomainEventPublisher {
+        final List<DomainEvent> published = new ArrayList<>();
+        final List<UUID> operationIds = new ArrayList<>();
+
+        @Override
+        public void publish(DomainEvent event) {
+            publish(UUID.randomUUID(), event);
+        }
+
+        @Override
+        public void publish(UUID operationId, DomainEvent event) {
+            operationIds.add(operationId);
+            published.add(event);
+        }
+
+        @Override
+        public boolean isEnabled() {
+            return true;
+        }
+
+        List<String> names() {
+            return published.stream().map(event -> event.entityName() + "." + event.eventName()).toList();
+        }
+    }
+
+    /** Como hace JPA al guardar: la entidad sale con id si no lo tenia. */
+    private static <T> T withId(T entity) {
+        if (ReflectionTestUtils.getField(entity, "id") == null) {
+            ReflectionTestUtils.setField(entity, "id", UUID.randomUUID());
+        }
+        return entity;
+    }
+
     // -------------------------------------------------------------- fixtures
 
     private static final class ShiftFixture {
@@ -2851,6 +3127,7 @@ class BusinessLayerTest {
         final MaintenanceMaterialUsageRepository materialRepository = mock(MaintenanceMaterialUsageRepository.class);
         final MaintenanceLookups lookups = mock(MaintenanceLookups.class);
         final MaintenanceCodeGenerator codeGenerator = mock(MaintenanceCodeGenerator.class);
+        final RecordingEventPublisher events = new RecordingEventPublisher();
         final MaintenanceShiftServiceImpl service;
 
         ShiftFixture() {
@@ -2862,7 +3139,7 @@ class BusinessLayerTest {
                         asset.getStartKp(), asset.getEndKp(), asset.getSectioning(), asset.getEnabled());
             });
             service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository,
-                    mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class));
+                    mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events);
         }
 
         MaintenanceShift savedShift() {
@@ -2902,11 +3179,12 @@ class BusinessLayerTest {
     private static final class AssetFixture {
         final CatenaryAssetRepository repository = mock(CatenaryAssetRepository.class);
         final MaintenanceLookups lookups = mock(MaintenanceLookups.class);
+        final RecordingEventPublisher events = new RecordingEventPublisher();
         final CatenaryAssetServiceImpl service;
 
         AssetFixture() {
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-            service = new CatenaryAssetServiceImpl(repository, mock(CatenaryAssetMapper.class), lookups, mock(EntityAuditService.class));
+            service = new CatenaryAssetServiceImpl(repository, mock(CatenaryAssetMapper.class), lookups, mock(EntityAuditService.class), events);
         }
     }
 
@@ -2997,12 +3275,14 @@ class BusinessLayerTest {
         final MaintenanceCodeGenerator codeGenerator = mock(MaintenanceCodeGenerator.class);
         final StatusHistoryService history = mock(StatusHistoryService.class);
         final MaintenanceOrderService orderService = mock(MaintenanceOrderService.class);
+        final RecordingEventPublisher events = new RecordingEventPublisher();
         final MaintenanceInspectionServiceImpl service;
 
         InspectionFixture() {
-            when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+            // Como JPA: lo guardado sale con id, que es lo que el evento de la inspeccion lleva como entityId.
+            when(repository.save(any())).thenAnswer(invocation -> withId(invocation.getArgument(0)));
             service = new MaintenanceInspectionServiceImpl(repository, defectRepository, orderRepository, mock(MaintenanceInspectionMapper.class),
-                    mock(CatenaryDefectMapper.class), lookups, codeGenerator, history, orderService, mock(EntityAuditService.class));
+                    mock(CatenaryDefectMapper.class), lookups, codeGenerator, history, orderService, mock(EntityAuditService.class), events);
         }
     }
 

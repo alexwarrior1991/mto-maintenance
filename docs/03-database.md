@@ -145,6 +145,21 @@ the same idempotency key and body, and it is cleared as soon as stock answers, y
 failed. No index: the automatic retry looks for `FAILED` lines, which
 `idx_maintenance_material_usage_sync_status` already covers.
 
+## Outbox (`V13`)
+
+`outbox_message`: the outbox of the events this service publishes (`06-messaging.md`), the
+`mto-configuration` table in its final shape. `id` (uuid), `aggregate_type`/`aggregate_id` (the
+entity and its id), `event_type`, `exchange_name`, `routing_key`, `payload` (`text`: the envelope
+as sent; not a large object, which would not be deleted with the row), `status` (`varchar` with a
+`CHECK` for `PENDING`/`IN_PROGRESS`/`PUBLISHED`/`FAILED`: `ddl-auto: validate` does not check
+constraints, so the entity's enum and the `CHECK` are kept in step by hand), `attempts`,
+`max_attempts`, `sequence_number` (`bigint` from `outbox_message_sequence`, assigned by the
+database: the order of the relay and the "something earlier of this aggregate still unpublished"
+rule), `created_at`, `next_attempt_at`, `published_at`, `last_error` (1000, truncated), and the
+W3C trace context `trace_parent`/`trace_state`. Partial indexes for the relay's claim
+(`sequence_number` where pending/in progress), the aggregate retention, the purge (`published_at`
+where published) and the failed count. Written only by the outbox; no `_aud` twin.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`

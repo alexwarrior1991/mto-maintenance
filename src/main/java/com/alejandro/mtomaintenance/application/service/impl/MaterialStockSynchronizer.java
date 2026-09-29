@@ -4,6 +4,7 @@ import com.alejandro.mtomaintenance.application.dto.stock.StockReservation;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
+import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.application.service.StockClient;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
@@ -44,6 +45,11 @@ import java.util.UUID;
  * devuelve lo que ya hizo, o lo hace ahora, y solo entonces se sigue. Hasta que stock contesta no
  * cambia lo que viaja en ella: ni lo previsto ni lo consumido de la linea, ni el proyecto de stock de
  * la orden (lo rechazan los servicios que los modifican).</p>
+ *
+ * <p>Cada linea que se queda a medias lo cuenta ademas fuera: {@code maintenance.material.rejected}
+ * (stock dijo que no, con su codigo), {@code maintenance.material.in-doubt} (una reserva o una
+ * salida enviadas sin respuesta) o {@code maintenance.material.failed} (stock no respondio y no hay
+ * nada en duda), en la misma transaccion en la que la linea queda marcada.</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -54,6 +60,7 @@ class MaterialStockSynchronizer {
     static final String PROJECT_CODE_PREFIX = "EP-";
 
     private final StockClient stockClient;
+    private final DomainEventPublisher events;
 
     boolean isEnabled() {
         return stockClient.isEnabled();
@@ -417,7 +424,7 @@ class MaterialStockSynchronizer {
     }
 
     /** Ejecuta un paso contra stock; si falla, la linea lo dice y se devuelve el fallo. */
-    private static RuntimeException attempt(MaintenanceMaterialUsage usage, String step, Runnable action) {
+    private RuntimeException attempt(MaintenanceMaterialUsage usage, String step, Runnable action) {
         try {
             action.run();
             return null;
@@ -427,15 +434,20 @@ class MaterialStockSynchronizer {
         }
     }
 
-    private static void record(MaintenanceMaterialUsage usage, String step, RuntimeException exception) {
-        if (exception instanceof StockRejectedException) {
+    private void record(MaintenanceMaterialUsage usage, String step, RuntimeException exception) {
+        if (exception instanceof StockRejectedException rejection) {
             usage.markRejected(step + ": " + exception.getMessage());
             LOGGER.warn("Stock rejected the {} of a material line, left as REJECTED: order={}, material={}, cause={}",
                     step, usage.getOrder().getCode(), usage.getMaterialCode(), exception.getMessage());
-        } else {
-            usage.markFailed(step + ": " + exception.getMessage());
-            LOGGER.warn("Stock {} failed, material line left as FAILED: order={}, material={}, cause={}",
-                    step, usage.getOrder().getCode(), usage.getMaterialCode(), exception.getMessage());
+            events.publish(MaintenanceEvents.materialRejected(usage, step, rejection));
+            return;
         }
+        usage.markFailed(step + ": " + exception.getMessage());
+        LOGGER.warn("Stock {} failed, material line left as FAILED: order={}, material={}, cause={}",
+                step, usage.getOrder().getCode(), usage.getMaterialCode(), exception.getMessage());
+        // markFailed conserva la peticion en duda: si la hay, lo que no se sabe es si stock la aplico.
+        events.publish(usage.isInDoubt()
+                ? MaintenanceEvents.materialInDoubt(usage, step, exception)
+                : MaintenanceEvents.materialFailed(usage, step, exception));
     }
 }

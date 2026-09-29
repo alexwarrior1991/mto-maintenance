@@ -19,6 +19,7 @@ import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapper;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceShiftMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
+import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.application.service.EntityAuditService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator;
 import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
@@ -84,6 +85,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     private final MaintenanceLookups lookups;
     private final MaintenanceCodeGenerator codeGenerator;
     private final EntityAuditService auditService;
+    private final DomainEventPublisher events;
 
     @Override
     @Transactional
@@ -214,7 +216,9 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         }
         shift.setStatus(ShiftStatus.IN_PROGRESS);
         LOGGER.info("Shift {} started at {}", shift.getCode(), shift.getActualStart());
-        return mapper.toResponse(repository.save(shift));
+        MaintenanceShift saved = repository.save(shift);
+        events.publish(MaintenanceEvents.shiftStarted(saved));
+        return mapper.toResponse(saved);
     }
 
     @Override
@@ -246,7 +250,9 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         releaseOpenTasks(shift);
         shift.setStatus(ShiftStatus.CLOSED);
         LOGGER.info("Shift {} closed: net minutes={}", shift.getCode(), shift.getNetWorkMinutes());
-        return mapper.toResponse(repository.save(shift));
+        MaintenanceShift saved = repository.save(shift);
+        events.publish(MaintenanceEvents.shiftClosed(saved));
+        return mapper.toResponse(saved);
     }
 
     @Override

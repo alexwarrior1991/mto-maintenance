@@ -19,6 +19,7 @@ import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryDefectMapper;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceInspectionMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
+import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.application.service.EntityAuditService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator;
 import com.alejandro.mtomaintenance.application.service.MaintenanceInspectionService;
@@ -73,6 +74,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
     private final StatusHistoryService history;
     private final MaintenanceOrderService orderService;
     private final EntityAuditService auditService;
+    private final DomainEventPublisher events;
 
     @Override
     @Transactional
@@ -109,6 +111,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
         });
 
         MaintenanceInspection saved = repository.save(inspection);
+        events.publish(MaintenanceEvents.inspectionCreated(saved));
         LOGGER.info("Inspection created: code={}, asset={}, result={}", saved.getCode(), asset.getCode(), saved.getResult());
         return mapper.toResponse(saved);
     }
@@ -158,9 +161,14 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
                 .filter(candidate -> candidate.getId().equals(itemId))
                 .findFirst()
                 .orElseThrow(() -> new NotFoundException("Inspection item", itemId));
+        boolean wasDefective = item.getItemResult() == CheckItemResult.DEFECT;
         ChecklistRules.apply(item, patch);
         validateResult(inspection);
-        return mapper.toResponse(repository.save(inspection));
+        MaintenanceInspection saved = repository.save(inspection);
+        if (item.getItemResult() == CheckItemResult.DEFECT && !wasDefective) {
+            events.publish(MaintenanceEvents.inspectionItemFailed(saved, item));
+        }
+        return mapper.toResponse(saved);
     }
 
     @Override
@@ -221,6 +229,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
 
         inspection.setGeneratedDefect(saved);
         repository.save(inspection);
+        events.publish(MaintenanceEvents.inspectionDefectCreated(inspection, saved));
         LOGGER.info("Defect {} created from inspection {}", saved.getCode(), inspection.getCode());
         return defectMapper.toResponse(saved);
     }
@@ -264,6 +273,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
         orderRepository.save(order);
         inspection.setGeneratedOrder(order);
         repository.save(inspection);
+        events.publish(MaintenanceEvents.inspectionCorrectiveOrderCreated(inspection, order));
         LOGGER.info("Corrective order {} created from inspection {}", order.getCode(), inspection.getCode());
         return orderService.findById(order.getId());
     }

@@ -23,10 +23,11 @@ com.alejandro.mtomaintenance
 ├── infrastructure
 │   ├── persistence.entity | .repository | .specification | .audit
 │   ├── web.controller | web.exception
-│   ├── messaging.rabbitmq  consumer of the master-data channel
+│   ├── messaging.rabbitmq  consumer of the master-data channel; names of the own exchange
+│   ├── messaging.outbox    the outbox that publishes the own events (copy of mto-configuration's)
 │   ├── export              XlsxReportExporter (POI) and PdfReportExporter (OpenPDF)
 │   └── stock               RestClientStockClient
-└── configuration           security, rabbitmq, messaging signature, stock client, JPA auditing, OpenAPI
+└── configuration           security, rabbitmq, messaging signature, outbox, events (the daily preventive check), stock client, JPA auditing, OpenAPI
 ```
 
 Rules that keep the layers honest:

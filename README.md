@@ -33,7 +33,9 @@ The ones without a default:
 | `MTO_STOCK_URL` | Base URL of `mto-stock` (`http://localhost:8080` from the IDE) |
 | `APP_CORS_ALLOWED_ORIGIN` | Browser origin allowed by CORS |
 
-Switches worth knowing: `APP_RABBITMQ_ENABLED=false` starts without a broker,
+Switches worth knowing: `APP_RABBITMQ_ENABLED=false` starts without a broker (no master data in,
+no events out), `APP_OUTBOX_ENABLED=false` keeps writing the events and stops publishing them,
+`APP_EVENTS_PREVENTIVE_DUE_SOON_ENABLED=false` switches the daily preventive check off,
 `APP_STOCK_ENABLED=false` starts without `mto-stock` (material lines stay `NOT_REQUESTED`),
 `APP_STOCK_SYNC_RETRY_ENABLED=false` stops retrying the material lines stock did not answer (`FAILED`)
 every `APP_STOCK_SYNC_RETRY_INTERVAL` (`PT5M`), `APP_SECURITY_EXPOSE_API_DOCS=true` publishes Swagger
@@ -86,6 +88,19 @@ the service consumes the master-data events of `mto-configuration` through an id
 sections (`TRACK_SECTION`) are created through the API. See
 [`docs/06-messaging.md`](docs/06-messaging.md).
 
+## Events for `mto-notification`
+
+What happens here that deserves a notice — an order created or moved on, a defect opened or
+resolved, an inspection with a failed item, a shift started or closed, a material line the warehouse
+rejected or did not answer, an asset disabled here, the preventives about to fall due — is
+published as an event on the service's own exchange, `mto.maintenance.exchange`
+(`mto.maintenance.<entity>.<event>`), with who did it and under which `X-Correlation-Id`. The
+event is written in the same transaction as the change, into an outbox (`outbox_message`), and a
+relay publishes it afterwards waiting for the broker's confirmation, so nothing is announced that
+did not happen and nothing is lost while RabbitMQ is down. `GET/POST /actuator/outbox` shows and
+redrives what is stuck. The contract and one JSON example per event are in
+[`docs/06-messaging.md`](docs/06-messaging.md) and `docs/messaging/examples/`.
+
 ## Materials and `mto-stock`
 
 A material line references a material and a warehouse of `mto-stock` by id. Planning an order
@@ -129,7 +144,9 @@ preventive shift.
 
 ## Actuator and tracing
 
-`/actuator/health` and `/actuator/info` are public; `metrics` and `prometheus` need `ops-metrics`.
+`/actuator/health` and `/actuator/info` are public; `metrics`, `prometheus` and `outbox` (the state
+of the outbox) need `ops-metrics`, and `POST /actuator/outbox` (redrive of the `FAILED` events)
+`ops-write`.
 Traces go to the OTLP collector of `mto-platform` (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`), including
 the trace that arrives in the RabbitMQ headers.
 

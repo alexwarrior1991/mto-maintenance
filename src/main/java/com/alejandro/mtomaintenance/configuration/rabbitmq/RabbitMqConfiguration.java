@@ -29,9 +29,12 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * Declares the master data channel and wires its consumer.
  *
- * <p>{@code mto-maintenance} solo consume: no publica nada, así que aquí no hay {@code RabbitTemplate} ni
- * publisher confirms. Lo que sí declara es su propia cola, su DLX, su DLQ y el binding contra el
- * exchange de {@code mto-configuration}, porque una cola pertenece a quien la consume.</p>
+ * <p>Como consumidor, {@code mto-maintenance} declara su propia cola, su DLX, su DLQ y el binding
+ * contra el exchange de {@code mto-configuration}, porque una cola pertenece a quien la consume.
+ * Como productor declara solo su exchange, {@code mto.maintenance.exchange}: lo que cuenta de sí
+ * mismo lo publica el outbox ({@code configuration/outbox}) con la plantilla que autoconfigura Spring
+ * Boot, con publisher confirms y returns ({@code spring.rabbitmq.*}), y la cola que lo escucha es de
+ * {@code mto-notification}.</p>
  *
  * <p>El exchange se redeclara con exactamente los mismos atributos que usa el emisor (topic,
  * durable, sin auto-delete). La redeclaración es idempotente solo si coinciden: cualquier
@@ -45,13 +48,26 @@ import tools.jackson.databind.json.JsonMapper;
  */
 @Configuration
 @RequiredArgsConstructor
-@EnableConfigurationProperties(MasterDataRabbitProperties.class)
+@EnableConfigurationProperties({MasterDataRabbitProperties.class, MaintenanceEventsProperties.class})
 @ConditionalOnProperty(prefix = "app.rabbitmq", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class RabbitMqConfiguration {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RabbitMqConfiguration.class);
 
     private final MasterDataRabbitProperties properties;
+    private final MaintenanceEventsProperties eventsProperties;
+
+    /**
+     * Exchange propio: lo que este servicio cuenta de sí mismo, con la clave
+     * {@code mto.maintenance.<entidad>.<evento>} (ver {@code MaintenanceRabbitMqNames}). Aquí solo
+     * el exchange, topic y durable como el de datos maestros; ninguna cola ni binding, que son de
+     * quien consume. Se declara aunque nadie escuche todavía: sin exchange, el relay del outbox no
+     * tendría a dónde publicar y cada mensaje fallaría hasta agotar sus intentos.
+     */
+    @Bean
+    public TopicExchange maintenanceExchange() {
+        return new TopicExchange(eventsProperties.exchange(), true, false);
+    }
 
     /** Exchange del emisor. Se replica tal cual; ver el javadoc de la clase. */
     @Bean

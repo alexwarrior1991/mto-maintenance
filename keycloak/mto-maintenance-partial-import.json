@@ -43,6 +43,9 @@
             ],
             "mto-stock-api": [
               "stock-read"
+            ],
+            "mto-notification-api": [
+              "notification-inbox"
             ]
           }
         }
@@ -62,6 +65,9 @@
             ],
             "mto-stock-api": [
               "stock-read"
+            ],
+            "mto-notification-api": [
+              "notification-inbox"
             ]
           }
         }
@@ -83,6 +89,10 @@
             ],
             "mto-stock-api": [
               "stock-read"
+            ],
+            "mto-notification-api": [
+              "notification-inbox",
+              "notification-activity-read"
             ]
           }
         }

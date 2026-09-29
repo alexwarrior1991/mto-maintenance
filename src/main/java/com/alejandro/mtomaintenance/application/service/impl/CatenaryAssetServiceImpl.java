@@ -14,6 +14,7 @@ import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
 import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
+import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.application.service.EntityAuditService;
 import com.alejandro.mtomaintenance.domain.model.KilometricRange;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
@@ -50,6 +51,7 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     private final CatenaryAssetMapper mapper;
     private final MaintenanceLookups lookups;
     private final EntityAuditService auditService;
+    private final DomainEventPublisher events;
 
     @Override
     @Transactional
@@ -105,7 +107,11 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
         }
         PatchRules.set(patch, "description", request.description(), asset::setDescription);
         if (request.isDisabling()) {
+            boolean alreadyDisabledHere = Boolean.TRUE.equals(asset.getDisabledLocally());
             asset.disableLocally();
+            if (!alreadyDisabledHere) {
+                events.publish(MaintenanceEvents.assetDisabled(asset));
+            }
         } else if (Boolean.TRUE.equals(request.enabled())) {
             if (asset.isDisabledAtSource()) {
                 // Reactivarlo aqui no serviria: el siguiente evento de datos maestros diria otra vez que no.
@@ -177,6 +183,7 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
         }
         asset.disableLocally();
         repository.save(asset);
+        events.publish(MaintenanceEvents.assetDisabled(asset));
         LOGGER.info("Catenary asset disabled: code={}", asset.getCode());
     }
 
