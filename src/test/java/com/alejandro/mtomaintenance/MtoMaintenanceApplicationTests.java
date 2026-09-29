@@ -3,6 +3,7 @@ package com.alejandro.mtomaintenance;
 import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataEntityNames;
 import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
 import com.alejandro.mtomaintenance.application.service.CatenaryDefectService;
+import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.application.service.EntityAuditService;
 import com.alejandro.mtomaintenance.application.service.InboxMessageService;
 import com.alejandro.mtomaintenance.application.service.InspectionTemplateService;
@@ -18,6 +19,7 @@ import com.alejandro.mtomaintenance.application.service.MaintenanceTeamService;
 import com.alejandro.mtomaintenance.application.service.MasterDataEntityHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor;
+import com.alejandro.mtomaintenance.application.service.PreventiveDueSoonService;
 import com.alejandro.mtomaintenance.application.service.ReportExportService;
 import com.alejandro.mtomaintenance.application.service.StatusHistoryService;
 import com.alejandro.mtomaintenance.application.service.StockClient;
@@ -65,6 +67,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Possession
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
+import com.alejandro.mtomaintenance.infrastructure.messaging.outbox.OutboxMessageRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import org.springframework.data.domain.PageRequest;
 import java.math.BigDecimal;
@@ -76,6 +79,7 @@ import java.time.Duration;
 import java.util.Set;
 import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
@@ -152,6 +156,12 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
     @Autowired
     private MaintenanceReportService reportService;
 
+    @Autowired
+    private DomainEventPublisher domainEventPublisher;
+
+    @Autowired
+    private OutboxMessageRepository outboxMessageRepository;
+
     @Test
     void contextLoads() {
         assertNotNull(masterDataEventHandler);
@@ -184,6 +194,27 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
     @Test
     void theTracingBridgeIsInTheContext() {
         assertNotNull(tracer);
+    }
+
+    /**
+     * Con el broker apagado el publicador de eventos es el NoOp y no queda ninguna pieza del outbox,
+     * pero la tabla si existe (V13) y la entidad valida contra ella: es lo que hace que los flujos de
+     * abajo, que pasan por todos los ganchos, no escriban nada y arranquen sin RabbitMQ. Se compara
+     * antes y despues porque la base es la misma que usa OutboxRelayDataJpaTest, que deja filas.
+     */
+    @Test
+    void withTheBrokerOffTheEventsAreNotPublishedAndTheOutboxStaysUntouched() {
+        assertFalse(domainEventPublisher.isEnabled());
+        assertFalse(context.containsBean("outboxRabbitPublisher"));
+        assertFalse(context.containsBean("outboxPublisherScheduler"));
+        assertFalse(context.containsBean("outboxEndpoint"));
+
+        long before = outboxMessageRepository.count();
+        CatenaryAsset profile = assetRepository.save(profile("14-1.01-" + UUID.randomUUID().toString().substring(0, 8), System.nanoTime(), "14100.000"));
+        orderService.create(new MaintenanceOrderRequest("Created without a broker", null, MaintenanceOrderType.CORRECTIVE, null,
+                profile.getId(), null, null, null, null));
+
+        assertEquals(before, outboxMessageRepository.count(), "order.created went through the NoOp publisher: nothing written");
     }
 
     /**
@@ -310,6 +341,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         static final List<Class<?>> ALL = List.of(
                 CatenaryAssetService.class,
                 CatenaryDefectService.class,
+                DomainEventPublisher.class,
                 EntityAuditService.class,
                 InboxMessageService.class,
                 InspectionTemplateService.class,
@@ -323,6 +355,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
                 MaintenanceTaskTypeService.class,
                 MaintenanceTeamService.class,
                 MasterDataEventProcessor.class,
+                PreventiveDueSoonService.class,
                 ReportExportService.class,
                 StatusHistoryService.class,
                 StockClient.class,

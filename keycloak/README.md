@@ -57,9 +57,13 @@ asigna a las personas.
 |---|---|
 | `mto-maintenance-viewer` | `maintenance-read` |
 | `mto-maintenance-technician` | `maintenance-read`, `maintenance-write` |
-| `mto-maintenance-manager` | los del técnico + `maintenance-delete`, `maintenance-supervise` |
+| `mto-maintenance-manager` | los del técnico + `maintenance-delete`, `maintenance-supervise`, y `notification-activity-read` |
 
-Los tres perfiles llevan además `config-read` de `mto-configuration-api` y `stock-read` de
+Los tres perfiles llevan además `notification-inbox` de `mto-notification-api` (la bandeja de avisos:
+lo que este servicio publica —una orden urgente, un defecto grave, un material que el almacén
+rechaza, los preventivos a vencer— llega a estas personas como notificación), y el responsable también
+`notification-activity-read`, el registro de actividad del dominio. Los tres llevan también
+`config-read` de `mto-configuration-api` y `stock-read` de
 `mto-stock-api`. Este servicio guarda las vías, estaciones y paquetes de ejecución, y los materiales,
 almacenes y proyectos, solo como ids. Una pantalla (el backoffice, o el front de React) los nombra y
 ofrece desplegables leyéndolos de su servicio con el token de la persona, y sin esa lectura
@@ -68,7 +72,7 @@ almacén. Como consecuencia, estas personas ven también Infraestructura, Catál
 modo lectura.
 
 Estos composites nombran roles de otros clientes, así que la parcial necesita que las de
-`mto-configuration` y `mto-stock` estén aplicadas antes. `mto-platform/keycloak/apply-partials.sh`
+`mto-notification`, `mto-configuration` y `mto-stock` estén aplicadas antes. `mto-platform/keycloak/apply-partials.sh`
 las aplica en ese orden, y `scripts/check_realm_consistency.py` lo comprueba. El realm de los tests
 (`src/test/resources/keycloak/mto-maintenance-test-realm.json`) no tiene esos clientes ni los
 necesita: aquí no se comprueba ninguno de sus roles.
@@ -118,6 +122,9 @@ reejecutar.
 - `mto-platform/keycloak/mto-realm.json` da a `mto-frontend` un *audience mapper*
   `audiencia-mto-maintenance-api`. Sin él, un token del navegador puede llegar aquí sin
   `mto-maintenance-api` en `aud` y la API lo rechaza con 401.
+- `mto-notification/keycloak/mto-notification-partial-import.json` crea `mto-notification-api` y sus
+  roles `notification-*`, que los perfiles de aquí nombran; se aplica la primera. Lo que este servicio
+  publica hacia allí está en `docs/06-messaging.md`.
 - `mto-platform/keycloak/mto-ops-cross-service.json` redefine `mto-ops` con los `ops-*` de las
   cuatro APIs. Se aplica **después** de esta parcial, cuando `mto-maintenance-api` ya existe: un
   compuesto solo puede nombrar roles de clientes que existan en el realm.

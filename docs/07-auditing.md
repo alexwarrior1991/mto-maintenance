@@ -18,7 +18,8 @@ source `HTTP`/`MESSAGING`/`SYSTEM`). Audited: `CatenaryAsset`, `MaintenanceOrder
 
 Not audited, on purpose: `MaintenanceStatusHistory` (append-only, a twin would duplicate it),
 `InboxMessage` and `CatenaryAssetSwitch` (written only from master data, the twin would sit empty
-and read as "never changed"; the switches' history lives in `mto-configuration`), `MaintenanceTeam`,
+and read as "never changed"; the switches' history lives in `mto-configuration`), `OutboxMessage`
+(written only by the outbox; its history is itself), `MaintenanceTeam`,
 `MaintenanceTaskType`, `InspectionTemplate`/`Item` (catalogues managed by migrations).
 `@Audited` goes on each entity, never on `AuditableEntity`; `JpaEntityModelTest` guards the
 partition and `EnversAuditDataJpaTest` checks the revisions end to end (it disables the test

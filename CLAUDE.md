@@ -63,10 +63,14 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
   MapStruct cannot call the protected constructors), `exception`.
 - `infrastructure` — `persistence.entity` (JPA), `persistence.repository` (Spring Data + native
   upserts), `persistence.specification`, `persistence.audit` (Envers), `web.controller`,
-  `web.exception`, `messaging.rabbitmq`, `stock` (the `RestClientStockClient`), `export` (the POI and
-  OpenPDF writers).
-- `configuration` — security (Keycloak resource server), `rabbitmq`, `messaging` (signature),
-  `stock` (`StockProperties`, `StockClientConfiguration`), JPA auditing, OpenAPI.
+  `web.exception`, `messaging.rabbitmq` (the consumer and `MaintenanceRabbitMqNames`),
+  `messaging.outbox` (the outbox of the own events: a copy of `mto-configuration`'s `core/outbox`
+  plus the envelope factory, `MessageContextResolver` and `OutboxDomainEventPublisher`), `stock`
+  (the `RestClientStockClient`), `export` (the POI and OpenPDF writers).
+- `configuration` — security (Keycloak resource server), `rabbitmq`, `messaging` (signature and
+  signer), `outbox` (every outbox piece as a `@Bean`, gone with `app.rabbitmq.enabled=false`),
+  `events` (the daily `PreventiveDueSoonService` scheduler), `stock` (`StockProperties`,
+  `StockClientConfiguration`), JPA auditing, OpenAPI.
 
 ### Domain in one paragraph
 
@@ -134,6 +138,27 @@ Consumer of the master-data channel of `mto-configuration` (`mto.master-data.exc
 only, deactivates every asset on the track). The other four entity names are logged and ignored.
 The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before touching
 `application/dto/messaging`.
+
+Producer of its own events for `mto-notification` (`mto.maintenance.exchange`, routing key
+`mto.maintenance.<entity>.<event>`, no queue here). **`DomainEventPublisher.publish` is the only
+door, and it is called inside the business transaction**: the event goes to `outbox_message`
+(`V13`) with the change and the relay publishes it afterwards with publisher confirms
+(`OutboxRabbitPublisher` refuses to start without them). The hooks: `StatusHistoryServiceImpl`
+(`order.created`/`status-changed`/`reassigned`, `defect.created`/`status-changed`: every order and
+defect transition passes through it), `MaintenanceShiftServiceImpl.start/close`,
+`MaterialStockSynchronizer.record` (`material.rejected`/`in-doubt`/`failed`),
+`CatenaryAssetServiceImpl.disable/patch` (`asset.disabled`, once), `MaintenanceInspectionServiceImpl`
+(`inspection.created`/`item-failed`/`defect-created`/`corrective-order-created`) and the daily
+`PreventiveDueSoonService` (`preventive.due-soon`, advisory lock, `operationId` from the date). The
+names and `values` of every event live in `MaintenanceEvents` and nowhere else; the envelope is the
+`AsynchronousMessage` of `mto-configuration` plus `actor` (`PERSON`/`SERVICE`/`SYSTEM`, from the
+token) and `correlationId` (`X-Correlation-Id` of the request, else the master-data message id, as
+Envers stores it), both read by `MessageContextResolver` when the event is created. **Keys are only
+added**; a new key or event changes its example in `docs/messaging/examples/` in the same commit
+(`MessagingContractExamplesTest` compares them with the real factory;
+`MESSAGING_EXAMPLES_WRITE=true` regenerates them). `DomainEvent` rejects any key that smells like a
+secret. With `app.rabbitmq.enabled=false` the publisher is the `NoOpDomainEventPublisher` and no
+outbox bean exists.
 
 ### Stock integration
 
@@ -205,5 +230,9 @@ Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-typ
   `InboxMessageRepositoryDataJpaTest` + `MasterDataAssetSyncDataJpaTest`, `EnversAuditDataJpaTest`
   (disables the test transaction on purpose), `MapperLayerTest`, `MessagingLayerTest`,
   `StockClientTest`, `DomainModelTest`, `JpaEntityModelTest`, `DtoValidationTest`,
-  `GlobalExceptionHandlerTest`, `SecurityLayerTest`, `ApiAuthorizationRulesTest`. Add a method to the
-  matching class instead of a new class.
+  `GlobalExceptionHandlerTest`, `SecurityLayerTest`, `ApiAuthorizationRulesTest`,
+  `MessagingContractExamplesTest` (one JSON per published event) and, for the outbox copied from
+  `mto-configuration`, its own tests under `infrastructure/messaging/outbox` (`OutboxRelayDataJpaTest`
+  against PostgreSQL, `OutboxWiringTest`, `OutboxRabbitPublisherTest`...). Add a method to the
+  matching class instead of a new class; the events of each hook are methods of `BusinessLayerTest`
+  (`RecordingEventPublisher`) and the envelope, the actor and the correlation of `MessagingLayerTest`.

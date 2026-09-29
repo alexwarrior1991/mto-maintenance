@@ -39,6 +39,13 @@ app:
     master-data:
       listener-enabled: ${APP_RABBITMQ_MASTER_DATA_LISTENER_ENABLED:false}
 
+  # Con el broker apagado tampoco hay outbox: el publicador de eventos es el NoOp, y el outbox se
+  # prueba aparte (OutboxRelayDataJpaTest, OutboxWiringTest) montando lo que necesita. El aviso diario
+  # de preventivos lo llama BusinessLayerTest.
+  events:
+    preventive-due-soon:
+      enabled: ${APP_EVENTS_PREVENTIVE_DUE_SOON_ENABLED:false}
+
   # Tampoco dependen de un mto-stock real: el cliente NoOp deja las lineas NOT_REQUESTED. El cliente
   # HTTP se prueba aparte en StockClientTest con un servidor simulado.
   stock:

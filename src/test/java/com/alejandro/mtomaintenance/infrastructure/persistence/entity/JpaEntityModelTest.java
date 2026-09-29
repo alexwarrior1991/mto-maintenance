@@ -29,9 +29,11 @@ class JpaEntityModelTest {
         // CatenaryAssetSwitch se queda fuera por lo mismo que InboxMessage: sus filas las escribe
         // UNICAMENTE el manejador de datos maestros, asi que una gemela _aud se quedaria vacia y se
         // leeria como "nunca cambio". El historial del aislador vive en mto-configuration.
+        // OutboxMessage tampoco: la escribe solo el relay y su historia es ella misma (V13).
         List<Class<?>> notAudited = List.of(MaintenanceStatusHistory.class, InboxMessage.class, MaintenanceTeam.class,
                 MaintenanceTaskType.class, InspectionTemplate.class, InspectionTemplateItem.class,
-                CatenaryAssetSwitch.class, AuditableEntity.class);
+                CatenaryAssetSwitch.class, AuditableEntity.class,
+                com.alejandro.mtomaintenance.infrastructure.messaging.outbox.OutboxMessage.class);
 
         audited.forEach(type -> assertTrue(type.isAnnotationPresent(Audited.class), type.getSimpleName() + " must be @Audited"));
         notAudited.forEach(type -> assertFalse(type.isAnnotationPresent(Audited.class), type.getSimpleName() + " must not be @Audited"));
