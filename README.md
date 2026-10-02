@@ -31,7 +31,6 @@ The ones without a default:
 | `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_AUDIENCE` | `mto-maintenance-api` |
 | `KEYCLOAK_SERVICE_CLIENT_SECRET` | Secret of the service account `mto-maintenance-svc` used to call `mto-stock` |
 | `MTO_STOCK_URL` | Base URL of `mto-stock` (`http://localhost:8080` from the IDE) |
-| `APP_CORS_ALLOWED_ORIGIN` | Browser origin allowed by CORS |
 
 Switches worth knowing: `APP_RABBITMQ_ENABLED=false` starts without a broker (no master data in,
 no events out), `APP_OUTBOX_ENABLED=false` keeps writing the events and stops publishing them,
@@ -127,6 +126,10 @@ this service only stores as ids; see [`keycloak/README.md`](keycloak/README.md).
 | `DELETE /assets/{id}`, `PUT /assets/{id}` with `enabled=false`, `DELETE /orders/{id}/materials/{usageId}` | `maintenance-delete` |
 | `cancel` of an order, `complete` of an order with `force`, `resolve`/`close`/`discard` of a defect | `maintenance-supervise` (on top of `maintenance-write`) |
 | `/actuator/**` (except health/info) | `ops-metrics` / `ops-write` |
+
+No CORS of its own: every browser comes in through `mto-gateway`, which handles CORS and strips
+`Origin` before calling this service. There is no `.cors()` and no open `OPTIONS` here, so a preflight
+that reached the service directly needs a token like any other request (`ApiAuthorizationRulesTest`).
 
 ```bash
 TOKEN=$(curl -s -X POST http://auth.mto.local:8082/realms/mto/protocol/openid-connect/token \
