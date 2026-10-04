@@ -89,7 +89,12 @@ public class MaintenanceTask extends VersionedEntity {
     @Column(name = "assigned_user", length = 100)
     private String assignedUser;
 
-    /** Perfil (u otro activo) concreto sobre el que se trabaja. Nulo en tareas genericas. */
+    /**
+     * Perfil (u otro activo) concreto sobre el que se trabaja. Nulo en tareas genericas. Una revision
+     * lo lee como esta ahora: uno que solo ha llegado por datos maestros no tiene revisiones (SQL
+     * nativo), y buscarlo en catenary_asset_aud era un 500. Nadie le cambia el activo.
+     */
+    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "asset_id", foreignKey = @ForeignKey(name = "fk_maintenance_task_asset"))
     private CatenaryAsset asset;

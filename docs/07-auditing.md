@@ -31,7 +31,14 @@ migration (nullable, no constraints).
 Deleting a row keeps its last state (`store_data_at_delete`): a material line removed from an
 order leaves a DELETED revision with the author, the source and the correlation id.
 
-Known gap: master-data upserts are native SQL and leave no revision.
+Known gap: master-data upserts are native SQL and leave no revision, and there is no baseline
+revision either. An asset that only arrived by master data therefore has no history of its own
+(`/assets/{id}/revisions` answers 404 `AST-404`), and what hangs from it cannot look it up in
+`catenary_asset_aud`: the `asset` of an order, a task, an inspection and a defect is
+`@Audited(targetAuditMode = NOT_AUDITED)`, like the blocking disconnectors of a shift, so a
+revision reads the asset as it is now. No request changes the asset of any of them. Before that,
+the history of an order, an inspection or a defect on a profile, a disconnector or a section
+insulator answered 500.
 
 History is read at `GET /<resource>/{id}/revisions` (`assets`, `orders`, `shifts`, `inspections`,
 `defects`), paged, each entry with the revision metadata and the entity as it was.

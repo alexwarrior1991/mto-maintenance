@@ -13,14 +13,14 @@ import java.util.UUID;
  */
 public record CompleteTaskRequest(
         @NotNull UUID shiftId,
-        List<String> taskTypeCodes,
+        List<@NotNull String> taskTypeCodes,
         String notes,
         String defectsFound,
         Boolean workComplete,
         LocalDate repairPlannedDate,
-        @Valid List<InlineDefectRequest> inlineDefects,
-        @Valid List<TaskMaterialRequest> materials,
-        List<String> photoRefs
+        @Valid List<@NotNull InlineDefectRequest> inlineDefects,
+        @Valid List<@NotNull TaskMaterialRequest> materials,
+        List<@NotNull String> photoRefs
 ) {
     public boolean isWorkComplete() {
         return workComplete == null || workComplete;

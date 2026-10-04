@@ -25,6 +25,8 @@ import com.alejandro.mtomaintenance.application.dto.order.CompleteOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
+import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksRequest;
+import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.task.TaskMaterialRequest;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamRequest;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
@@ -33,7 +35,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -163,7 +169,44 @@ class DtoValidationTest {
                 SectionInsulatorInstallation.TRACK_CONNECTION, null).touchesIdentity());
     }
 
+    @Test
+    void aNullInsideAListIsRejectedOnItsListInsteadOfReachingTheService() {
+        // Llegaban al servicio: un codigo de tipo de tarea nulo era un NPE al resolverlo (un 500), un
+        // defecto o un material nulos otro NPE al completar, una via o un paquete nulos un 409 de la
+        // base, y una foto nula se guardaba como el texto "null".
+        List<String> codes = Arrays.asList("RG-01", null);
+        CompleteTaskRequest complete = new CompleteTaskRequest(UUID.randomUUID(), codes, null, null, true, null,
+                Arrays.asList((InlineDefectRequest) null), Arrays.asList((TaskMaterialRequest) null), codes);
+        assertEquals(Set.of("taskTypeCodes", "inlineDefects", "materials", "photoRefs"), lists(validator.validate(complete)));
+        assertEquals(Set.of("taskTypeCodes"), lists(validator.validate(new GeneratePreventiveTasksRequest(codes, null))));
+        assertEquals(Set.of("taskTypeCodes", "photoRefs"), lists(validator.validate(new MaintenanceTaskUpdateRequest(null, null, codes, null, null, codes, 0L))));
+
+        Set<Long> tracks = new HashSet<>(Arrays.asList(2L, null));
+        Set<UUID> disconnectors = new HashSet<>(Arrays.asList(UUID.randomUUID(), null));
+        assertEquals(Set.of("trackIds", "blockingDisconnectorIds"), lists(validator.validate(new MaintenanceShiftRequest(LocalDate.of(2026, 1, 27), null, null,
+                null, PossessionType.PARTIAL, null, null, disconnectors, null, null, null, tracks, null, null, null, null, null))));
+        assertEquals(Set.of("executionPackageIds"), lists(validator.validate(new MaintenanceTeamRequest("A", "Team A", null, null, null, tracks))));
+        assertEquals(Set.of("photoRefs"), lists(validator.validate(new CatenaryDefectRequest(UUID.randomUUID(), DefectSeverity.HIGH, "kink", null, null,
+                null, null, null, null, null, null, null, codes))));
+    }
+
+    @Test
+    void aDefectCannotBeDetectedInTheFuture() {
+        // Resolverlo despues pondria resolvedAt antes que detectedAt, y el CHECK de la base lo rechazaba
+        // con un 409 generico.
+        assertEquals(Set.of("detectedAt"), fields(validator.validate(new CatenaryDefectRequest(UUID.randomUUID(), DefectSeverity.HIGH, "kink", null,
+                Instant.now().plus(Duration.ofHours(2)), null, null, null, null, null, null, null, null))));
+        assertTrue(validator.validate(new CatenaryDefectRequest(UUID.randomUUID(), DefectSeverity.HIGH, "kink", null,
+                Instant.now().minus(Duration.ofMinutes(5)), null, null, null, null, null, null, null, null)).isEmpty());
+    }
+
     private static Set<String> fields(Set<? extends ConstraintViolation<?>> violations) {
         return violations.stream().map(violation -> violation.getPropertyPath().toString()).collect(java.util.stream.Collectors.toSet());
+    }
+
+    /** La lista de cada violacion: la de un elemento nulo lleva su indice detras ({@code taskTypeCodes[1]}). */
+    private static Set<String> lists(Set<? extends ConstraintViolation<?>> violations) {
+        return violations.stream().map(violation -> violation.getPropertyPath().iterator().next().getName())
+                .collect(java.util.stream.Collectors.toSet());
     }
 }

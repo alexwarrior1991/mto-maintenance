@@ -50,6 +50,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
@@ -217,7 +218,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
                 .severity(request.severity() != null ? request.severity() : severityFor(inspection.getResult()))
                 .description(descriptionFor(inspection, request.description()))
                 .technicalNotes(request.technicalNotes() != null ? request.technicalNotes() : inspection.getRecommendedActions())
-                .detectedAt(inspection.getInspectionDate().atStartOfDay(ZoneOffset.UTC).toInstant())
+                .detectedAt(detectedAt(inspection))
                 .build();
         defect.locateAt(asset);
         if (inspection.getKp() != null) {
@@ -328,5 +329,16 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
             return first.trim() + "\n\nRecommended actions: " + second.trim();
         }
         return hasFirst ? first.trim() : hasSecond ? second.trim() : null;
+    }
+
+    /**
+     * El inicio del dia de la inspeccion en UTC, pero nunca despues de ahora: en las primeras horas de
+     * una noche de Madrid la fecha local ya es la de manana y ese inicio aun no ha llegado, y resolver
+     * el defecto en el mismo turno chocaba con el CHECK que pide resolverlo despues de detectarlo.
+     */
+    private static Instant detectedAt(MaintenanceInspection inspection) {
+        Instant startOfDay = inspection.getInspectionDate().atStartOfDay(ZoneOffset.UTC).toInstant();
+        Instant now = Instant.now();
+        return startOfDay.isAfter(now) ? now : startOfDay;
     }
 }

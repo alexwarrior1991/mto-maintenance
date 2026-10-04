@@ -214,7 +214,10 @@ Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-typ
 `MaintenanceMaterialUsage`. Not audited on purpose: `MaintenanceStatusHistory`
 (append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `MaintenanceTeam`, `MaintenanceTaskType`,
 `InspectionTemplate`/`Item` (catalogues). `JpaEntityModelTest` guards the split. History at
-`GET /<resource>/{id}/revisions`.
+`GET /<resource>/{id}/revisions`. The `asset` of an order, a task, an inspection and a defect is
+`@Audited(targetAuditMode = NOT_AUDITED)`, like a shift's disconnectors: an asset that only arrived
+by master data has no revision (native SQL), so a revision reads it as it is now instead of looking
+for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`).
 
 ### Testing
 

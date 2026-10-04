@@ -166,6 +166,10 @@ class GlobalExceptionHandlerTest {
         assertEquals("TEA-409", codeOf(handler.handleDuplicateCode(new DuplicateCodeException("Maintenance team", "A"), request), HttpStatus.CONFLICT));
         assertEquals("SHF-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance shift", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
         assertEquals("TSK-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance task", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
+        // Un tipo de tarea se busca por codigo y su 404 no lleva agregado: Map.of no admite get(null), y
+        // el NPE dentro del manejador acababa en un 500.
+        assertEquals("APP-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance task type 'RG-99' was not found"), request),
+                HttpStatus.NOT_FOUND));
     }
 
     @Test

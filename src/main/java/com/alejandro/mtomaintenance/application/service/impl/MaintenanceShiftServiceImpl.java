@@ -232,9 +232,12 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         if (shift.getActualStart() == null || end.isBefore(shift.getActualStart())) {
             throw new ValidationException("actualEnd must be after the actual start of the shift");
         }
-        if (request.voltageCutoffAt() != null) {
-            shift.setVoltageCutoffAt(request.voltageCutoffAt());
+        Instant cutoff = request.voltageCutoffAt() != null ? request.voltageCutoffAt() : shift.getVoltageCutoffAt();
+        if (cutoff != null && cutoff.isAfter(end)) {
+            // Sin esto el tiempo neto salia negativo y lo rechazaba @PositiveOrZero al confirmar, con un 500.
+            throw new ValidationException("voltageCutoffAt must not be after the actual end of the shift");
         }
+        shift.setVoltageCutoffAt(cutoff);
         shift.setActualEnd(end);
         // Tiempo neto: desde el corte de tension (o el inicio real si no consta) hasta el final.
         Instant workStart = shift.getVoltageCutoffAt() != null && !shift.getVoltageCutoffAt().isBefore(shift.getActualStart())
