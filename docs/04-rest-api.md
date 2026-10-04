@@ -122,8 +122,25 @@ version of the asset it changes, so an edit read before the event does not overw
 
 A text that is required and arrives blank (`"title": " "`) is 400 `VAL-001`, and lowering the planned
 quantity of a line below what was consumed without `allowOverConsumption` is 409 `MAT-001`: both used
-to reach a database constraint at commit and answer 500. Anything else a constraint catches is 409
-`APP-409` rather than 500.
+to reach a database constraint at commit and answer 500. So did these, which now answer for
+themselves:
+
+- Taking `allowOverConsumption` off a line that already consumed more than planned is 409 `MAT-001`
+  (it was 409 `APP-409`).
+- Closing a shift with a `voltageCutoffAt` after `actualEnd` (the one sent, or the one recorded at
+  `start`) is 400 `VAL-001`: the net time came out negative and the shift could not be saved. A
+  cut-off exactly at the end is a net time of zero.
+- A defect cannot be detected in the future: a `detectedAt` after now is 400 `REQ-VALIDATION` on
+  `POST /defects`, the defect `create-defect` makes is detected at the start of the inspection date
+  in UTC but never later than now (on a night shift in Madrid the local date is already the next
+  UTC day for an hour or two), and resolving one that was still dated in the future is 400 `VAL-001`
+  (it was 409 `APP-409`).
+- A `null` inside a list (`taskTypeCodes`, `inlineDefects`, `materials`, `photoRefs`, `trackIds`,
+  `blockingDisconnectorIds`, a team's `executionPackageIds`) is 400 `REQ-VALIDATION` on that list. It
+  was a 500 for task types, defects and materials, a 409 `APP-409` for tracks and packages, and a
+  photo stored as the text `null`.
+
+Anything else a constraint catches is 409 `APP-409` rather than 500.
 
 A material line answers, besides `stockSyncStatus` and `stockSyncError`, `stockRequestInDoubt`:
 `RESERVATION` or `OUTPUT` when the line sent that request to `mto-stock` and got no answer (it is
@@ -140,7 +157,7 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 201 + `Location` | Creation |
 | 200 | Reads, updates, transitions, idempotent `create-defect`/`create-corrective-order` |
 | 204 | `DELETE /assets/{id}` (disables the asset), `DELETE /orders/{id}/materials/{usageId}` (removes the line) |
-| 400 `REQ-VALIDATION` / `VAL-001` | Bean Validation / domain invariant (kp range, quantity, unknown task type, unknown export `format`, a blank required text, a `PATCH` that empties a required field or has an unknown key) |
+| 400 `REQ-VALIDATION` / `VAL-001` | Bean Validation / domain invariant (kp range, quantity, unknown task type, unknown export `format`, a blank required text, a `PATCH` that empties a required field or has an unknown key, a `null` inside a list, a defect detected in the future, a shift closed with its voltage cut-off after the end) |
 | 400 `REQ-400` | Malformed body, a parameter of the wrong type, a missing required parameter (`month` of the monthly report) or a `sort` on a property the entity does not have |
 | 401 `AUTH-401` / 403 `AUTH-403` | No token / missing role |
 | 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `INS`, `TPL`, `DEF`, `MAT`); a task type, a check item and an inspection item answer `APP-404` |
@@ -149,7 +166,7 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset; a field of a synchronized asset that only `mto-configuration` changes; `enabled=true` on an asset disabled at the source |
 | 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track) |
-| 409 `MAT-001` | Over-consumption, duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
+| 409 `MAT-001` | Over-consumption (also taking `allowOverConsumption` off a line consumed above plan), duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
 | 409 `<AGG>-409` | Duplicated code |
 | 409 `CON-001` | The `version` of the request is not the one stored, or two writes crossed: nothing was written |

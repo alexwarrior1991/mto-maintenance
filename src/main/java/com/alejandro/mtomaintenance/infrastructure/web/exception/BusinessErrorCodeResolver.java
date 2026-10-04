@@ -65,7 +65,9 @@ final class BusinessErrorCodeResolver {
     }
 
     private static String aggregateCode(String aggregate, String suffix, String fallback) {
-        String prefix = AGGREGATE_PREFIXES.get(aggregate);
+        // Sin agregado (un tipo de tarea se busca por codigo, no por id) es el codigo generico. Map.of
+        // no admite get(null): lanzaba un NPE dentro del manejador y la respuesta era un 500.
+        String prefix = aggregate == null ? null : AGGREGATE_PREFIXES.get(aggregate);
         return prefix == null ? fallback : "%s-%s".formatted(prefix, suffix);
     }
 }

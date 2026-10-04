@@ -123,6 +123,13 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
             }
             usage.setConsumedQuantity(consumed.amount());
         }
+        if (!usage.getAllowOverConsumption() && usage.getConsumedQuantity().compareTo(usage.getPlannedQuantity()) > 0) {
+            // Solo llega quitando el permiso a una linea que ya consumio de mas: las cantidades se comprueban
+            // arriba. Sin esto la rechazaba el CHECK de la base, con un 409 generico.
+            throw new MaterialUsageException("Material " + usage.getMaterialCode() + " already consumed " + usage.getConsumedQuantity()
+                    + " " + usage.getUnit() + ", more than the planned " + usage.getPlannedQuantity()
+                    + "; over-consumption cannot be disallowed unless the consumed quantity goes back within the plan");
+        }
         return mapper.toResponse(repository.save(usage));
     }
 

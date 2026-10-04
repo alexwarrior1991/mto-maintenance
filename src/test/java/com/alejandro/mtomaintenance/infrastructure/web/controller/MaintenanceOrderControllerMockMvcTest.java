@@ -23,6 +23,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.web.exception.GlobalExceptionHandler;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageResponse;
+import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
@@ -413,6 +414,25 @@ class MaintenanceOrderControllerMockMvcTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"shiftId\":\"" + shiftId + "\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("SHF-001"));
+
+        // Un elemento nulo en una lista es un 400 sobre ella, tambien al generar, que no validaba su
+        // cuerpo: el codigo nulo era un NPE en el servicio, con un 500.
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"taskTypeCodes\":[\"RG-01\",null]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("REQ-VALIDATION"))
+                .andExpect(jsonPath("$.validationErrors[0].field").value(org.hamcrest.Matchers.startsWith("taskTypeCodes")));
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/{taskId}/complete", orderId, taskId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"shiftId\":\"" + shiftId + "\",\"materials\":[null]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors[0].field").value(org.hamcrest.Matchers.startsWith("materials")));
+        verify(taskService, never()).generatePreventiveTasks(any(), any());
+
+        // Sin cuerpo genera con los tipos por defecto, como hasta ahora.
+        when(taskService.generatePreventiveTasks(eq(orderId), any())).thenReturn(new GeneratePreventiveTasksResponse(3, 0, 3, java.math.BigDecimal.TEN, 1));
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdTasks").value(3));
     }
 
     @Test

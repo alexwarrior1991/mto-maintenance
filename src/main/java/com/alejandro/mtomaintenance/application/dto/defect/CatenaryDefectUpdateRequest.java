@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance.application.dto.defect;
 
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;
@@ -13,7 +14,7 @@ public record CatenaryDefectUpdateRequest(
         @Size(max = 120) String correctionType,
         String partsReplaced,
         LocalDate repairPlannedDate,
-        List<String> photoRefs,
+        List<@NotNull String> photoRefs,
         Long version
 ) {
 }

@@ -158,6 +158,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -423,6 +424,29 @@ class BusinessLayerTest {
                 new MaterialUsageUpdateRequest(null, new BigDecimal("3"), null, null)));
         fixture.service.update(order.getId(), line.getId(), new MaterialUsageUpdateRequest(null, new BigDecimal("3"), true, null));
         assertEquals(0, new BigDecimal("3").compareTo(line.getConsumedQuantity()));
+    }
+
+    @Test
+    void takingTheOverConsumptionFlagOffALineThatAlreadyConsumedMoreIsAMaterialRuleNotAConstraintError() {
+        MaterialFixture fixture = new MaterialFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        MaintenanceMaterialUsage line = line(order);
+        line.setAllowOverConsumption(true);
+        line.setConsumedQuantity(new BigDecimal("3"));
+        when(fixture.repository.findByIdAndOrderId(line.getId(), order.getId())).thenReturn(Optional.of(line));
+
+        // Solo el permiso: no viaja ninguna cantidad y nada lo comprobaba; lo rechazaba el CHECK de la
+        // base al confirmar, con un 409 generico en vez del MAT-001 de una linea.
+        assertThrows(MaterialUsageException.class, () -> fixture.service.update(order.getId(), line.getId(),
+                new MaterialUsageUpdateRequest(null, null, false, null)));
+        verify(fixture.repository, never()).save(any());
+
+        // Con lo consumido de vuelta dentro de lo previsto, si.
+        line.setAllowOverConsumption(true);
+        fixture.service.update(order.getId(), line.getId(), new MaterialUsageUpdateRequest(null, new BigDecimal("2"), false, null));
+        assertFalse(line.getAllowOverConsumption());
+        assertEquals(0, new BigDecimal("2").compareTo(line.getConsumedQuantity()));
     }
 
     @Test
@@ -1151,6 +1175,39 @@ class BusinessLayerTest {
     }
 
     @Test
+    void aDefectIsNeverDetectedAfterNowSoItCanBeResolvedInTheSameShift() {
+        // Una inspeccion fechada hoy en las primeras horas de una noche de Madrid: en UTC su dia aun no ha
+        // empezado. El defecto que genera se detecta ahora, no a una hora que todavia no ha llegado.
+        InspectionFixture fixture = new InspectionFixture();
+        MaintenanceInspection tonight = inspection(InspectionResult.MAJOR_DEFECT);
+        tonight.setInspectionDate(LocalDate.now(ZoneOffset.UTC).plusDays(1));
+        MaintenanceInspection past = inspection(InspectionResult.MAJOR_DEFECT);
+        when(fixture.repository.findById(tonight.getId())).thenReturn(Optional.of(tonight));
+        when(fixture.repository.findById(past.getId())).thenReturn(Optional.of(past));
+        when(fixture.codeGenerator.nextDefectCode()).thenReturn("DEF-000001", "DEF-000002");
+        when(fixture.defectRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Instant before = Instant.now();
+        fixture.service.createDefect(tonight.getId(), new CreateDefectFromInspectionRequest(null, null, null, null));
+        fixture.service.createDefect(past.getId(), new CreateDefectFromInspectionRequest(null, null, null, null));
+
+        Instant detected = tonight.getGeneratedDefect().getDetectedAt();
+        assertFalse(detected.isBefore(before));
+        assertFalse(detected.isAfter(Instant.now()));
+        assertEquals(Instant.parse("2026-01-28T00:00:00Z"), past.getGeneratedDefect().getDetectedAt(), "A past day still starts at midnight UTC");
+
+        // Uno que ya estaba fechado en el futuro no se resuelve antes de detectarse: el CHECK de la base
+        // lo rechazaba con un 409 generico.
+        DefectFixture defects = new DefectFixture();
+        CatenaryDefect future = defect(DefectStatus.OPEN);
+        future.setDetectedAt(Instant.now().plus(Duration.ofHours(2)));
+        when(defects.repository.findById(future.getId())).thenReturn(Optional.of(future));
+        assertThrows(ValidationException.class, () -> defects.service.resolve(future.getId(), new ResolveDefectRequest("fixed", null, null, null)));
+        assertEquals(DefectStatus.OPEN, future.getStatus());
+        assertNull(future.getResolvedAt());
+    }
+
+    @Test
     void onlyOpenDefectsAreDiscardedAndLinkingAnOrderMovesThemInProgress() {
         DefectFixture fixture = new DefectFixture();
         CatenaryDefect open = defect(DefectStatus.OPEN);
@@ -1322,6 +1379,30 @@ class BusinessLayerTest {
         assertEquals("one hour lost", declared.getObservations());
         assertEquals(ShiftStatus.CLOSED, computed.getStatus());
         assertThrows(InvalidTransitionException.class, () -> fixture.service.close(computed.getId(), new CloseShiftRequest(null, null, null, null)));
+    }
+
+    @Test
+    void aVoltageCutOffAfterTheEndOfTheShiftIsRejectedAndTheShiftStaysInProgress() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(2L, PossessionType.PARTIAL, ShiftStatus.IN_PROGRESS);
+        shift.setActualStart(Instant.parse("2026-01-27T21:10:00Z"));
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+
+        // El del cierre y el que ya traia del inicio: el tiempo neto salia negativo, y @PositiveOrZero lo
+        // rechazaba al confirmar la transaccion, con un 500.
+        assertThrows(ValidationException.class, () -> fixture.service.close(shift.getId(),
+                new CloseShiftRequest(Instant.parse("2026-01-28T01:10:00Z"), Instant.parse("2026-01-28T01:20:00Z"), null, null)));
+        shift.setVoltageCutoffAt(Instant.parse("2026-01-28T02:00:00Z"));
+        assertThrows(ValidationException.class, () -> fixture.service.close(shift.getId(),
+                new CloseShiftRequest(Instant.parse("2026-01-28T01:10:00Z"), null, null, null)));
+
+        assertEquals(ShiftStatus.IN_PROGRESS, shift.getStatus());
+        assertNull(shift.getNetWorkMinutes());
+        verify(fixture.repository, never()).save(any());
+
+        // Un corte justo al final es un tiempo neto de cero, no un error.
+        fixture.service.close(shift.getId(), new CloseShiftRequest(Instant.parse("2026-01-28T02:00:00Z"), null, null, null));
+        assertEquals(0, shift.getNetWorkMinutes());
     }
 
     @Test

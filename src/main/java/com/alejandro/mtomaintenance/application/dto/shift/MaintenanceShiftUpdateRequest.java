@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.application.dto.shift;
 
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -18,11 +19,11 @@ public record MaintenanceShiftUpdateRequest(
         PossessionType possessionType,
         Instant plannedStart,
         Instant plannedEnd,
-        Set<UUID> blockingDisconnectorIds,
+        Set<@NotNull UUID> blockingDisconnectorIds,
         @Size(max = 500) String earthingPoints,
         @Size(max = 255) String parkingPlace,
         Long executionPackageId,
-        Set<Long> trackIds,
+        Set<@NotNull Long> trackIds,
         @Digits(integer = 9, fraction = 3) BigDecimal startKp,
         @Digits(integer = 9, fraction = 3) BigDecimal endKp,
         String personnel,

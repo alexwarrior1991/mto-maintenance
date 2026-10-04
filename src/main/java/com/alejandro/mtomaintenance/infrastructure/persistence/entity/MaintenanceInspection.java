@@ -63,6 +63,9 @@ public class MaintenanceInspection extends VersionedEntity {
     @ToString.Include
     private String code;
 
+    // El activo de una revision es el de ahora: uno que solo ha llegado por datos maestros no tiene
+    // revisiones (SQL nativo), y buscarlo en catenary_asset_aud era un 500. Nadie le cambia el activo.
+    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
     @NotNull
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "asset_id", nullable = false, foreignKey = @ForeignKey(name = "fk_maintenance_inspection_asset"))

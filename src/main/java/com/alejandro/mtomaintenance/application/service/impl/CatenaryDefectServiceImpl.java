@@ -12,6 +12,7 @@ import com.alejandro.mtomaintenance.application.dto.defect.ResolveDefectRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
+import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryDefectMapper;
 import com.alejandro.mtomaintenance.application.mapper.PageMapper;
 import com.alejandro.mtomaintenance.application.service.CatenaryDefectService;
@@ -166,7 +167,14 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is linked to order " + order.getCode()
                     + " which is " + order.getStatus() + "; complete the order or declare the shift where it was corrected");
         }
-        defect.setResolvedAt(Instant.now());
+        Instant now = Instant.now();
+        if (now.isBefore(defect.getDetectedAt())) {
+            // Ninguna entrada deja ya un defecto detectado en el futuro, pero uno anterior no se resuelve
+            // antes de detectarse: lo rechazaba el CHECK de la base, con un 409 generico.
+            throw new ValidationException("Defect " + defect.getCode() + " was detected at " + defect.getDetectedAt()
+                    + ", which is still in the future; it cannot be resolved before then");
+        }
+        defect.setResolvedAt(now);
         defect.setResolutionNotes(request.resolutionNotes().trim());
         if (request.resolvedInShiftId() != null) {
             defect.setResolvedInShift(lookups.shift(request.resolvedInShiftId()));

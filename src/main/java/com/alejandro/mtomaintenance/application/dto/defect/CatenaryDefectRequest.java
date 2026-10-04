@@ -4,6 +4,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeve
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.PastOrPresent;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -17,7 +18,7 @@ public record CatenaryDefectRequest(
         @NotNull DefectSeverity severity,
         @NotBlank String description,
         String technicalNotes,
-        Instant detectedAt,
+        @PastOrPresent Instant detectedAt,
         UUID inspectionId,
         UUID orderId,
         @Digits(integer = 9, fraction = 3) BigDecimal startKp,
@@ -25,6 +26,6 @@ public record CatenaryDefectRequest(
         @Size(max = 120) String correctionType,
         String partsReplaced,
         LocalDate repairPlannedDate,
-        List<String> photoRefs
+        List<@NotNull String> photoRefs
 ) {
 }

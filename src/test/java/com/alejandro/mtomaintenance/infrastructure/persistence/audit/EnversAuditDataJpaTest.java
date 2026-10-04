@@ -3,10 +3,15 @@ package com.alejandro.mtomaintenance.infrastructure.persistence.audit;
 import com.alejandro.mtomaintenance.configuration.JpaAuditingConfiguration;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionResult;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspection;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
@@ -34,6 +39,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Function;
@@ -168,6 +175,56 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         MaintenanceMaterialUsage lastState = (MaintenanceMaterialUsage) rows.get(1)[0];
         assertEquals("GA70", lastState.getMaterialCode(), "store_data_at_delete keeps what the line was when it was removed");
         assertEquals(0, new BigDecimal("2").compareTo(lastState.getPlannedQuantity()));
+    }
+
+    @Test
+    void theHistoryOfWhatHangsFromAMasterDataAssetReadsTheAssetAsItIsNow() {
+        // Un activo que solo ha llegado por datos maestros no tiene revisiones (es SQL nativo), asi que
+        // el historial de la orden, la tarea, la inspeccion o el defecto que cuelgan de el no puede ir a
+        // buscarlo a catenary_asset_aud: ahi no esta, y leer su codigo era un 500.
+        String sourceId = "prf-" + UUID.randomUUID();
+        inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27", "PROFILE",
+                6L, 2L, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 10L));
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UUID[] ids = inTransaction(em -> {
+            CatenaryAsset asset = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+            MaintenanceOrder order = MaintenanceOrder.builder().code("MO-MD-" + suffix).title("On a profile").type(MaintenanceOrderType.CORRECTIVE)
+                    .priority(MaintenancePriority.LOW).asset(asset).build();
+            em.persist(order);
+            MaintenanceTask task = MaintenanceTask.builder().order(order).sequence(1).description("Dropper check").asset(asset).build();
+            order.getTasks().add(task);
+            em.persist(task);
+            MaintenanceInspection inspection = MaintenanceInspection.builder().code("INS-MD-" + suffix).asset(asset)
+                    .inspectionDate(LocalDate.of(2026, 9, 1)).result(InspectionResult.MINOR_DEFECT).build();
+            em.persist(inspection);
+            CatenaryDefect defect = CatenaryDefect.builder().code("DEF-MD-" + suffix).asset(asset).severity(DefectSeverity.LOW)
+                    .description("Worn dropper").detectedAt(Instant.parse("2026-09-01T00:00:00Z")).build();
+            em.persist(defect);
+            return new UUID[] {order.getId(), task.getId(), inspection.getId(), defect.getId()};
+        });
+        assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, inTransaction(em ->
+                assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getId()))).isEmpty());
+
+        // Y el activo que se lee es el de ahora: el evento siguiente lo renombra.
+        inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27 renamed", "PROFILE",
+                6L, 2L, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 11L));
+
+        assertEquals("12-2.27 renamed", assetNameInFirstRevision(MaintenanceOrder.class, ids[0], MaintenanceOrder::getAsset));
+        assertEquals("12-2.27 renamed", assetNameInFirstRevision(MaintenanceTask.class, ids[1], MaintenanceTask::getAsset));
+        assertEquals("12-2.27 renamed", assetNameInFirstRevision(MaintenanceInspection.class, ids[2], MaintenanceInspection::getAsset));
+        assertEquals("12-2.27 renamed", assetNameInFirstRevision(CatenaryDefect.class, ids[3], CatenaryDefect::getAsset));
+        String orderCode = reading(reader -> {
+            MaintenanceOrder order = reader.find(MaintenanceOrder.class, ids[0], reader.getRevisions(MaintenanceOrder.class, ids[0]).getFirst());
+            return order.getTasks().getFirst().getAsset().getCode();
+        });
+        assertEquals("PRF-" + sourceId, orderCode, "The tasks of an order revision read their asset the same way");
+    }
+
+    private <E> String assetNameInFirstRevision(Class<E> entityType, UUID id, Function<E, CatenaryAsset> asset) {
+        return reading(reader -> {
+            Number first = reader.getRevisions(entityType, id).getFirst();
+            return asset.apply(reader.find(entityType, id, first)).getName();
+        });
     }
 
     @Test

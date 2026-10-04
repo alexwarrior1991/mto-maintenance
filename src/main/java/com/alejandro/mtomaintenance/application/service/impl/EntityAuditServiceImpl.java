@@ -52,9 +52,9 @@ class EntityAuditServiceImpl implements EntityAuditService {
         AuditReader auditReader = AuditReaderFactory.get(entityManager);
         long totalElements = countRevisions(auditReader, entityType, id);
 
-        // Cero revisiones significa que la entidad no existe ni existió: con la revisión de partida
-        // que dejó V7, hasta las filas anteriores a Envers tienen al menos una. Devolver una página
-        // vacía diría "no ha cambiado nunca", que no es lo mismo.
+        // Cero revisiones es un 404: la entidad no existe, o es un activo que solo ha llegado por datos
+        // maestros, que se escriben con SQL nativo y no dejan revisión (docs/07-auditing.md). Aquí no
+        // hay revisión de partida. Los clientes lo dicen como «sin historial todavía».
         if (totalElements == 0) {
             throw new NotFoundException(entityType.getSimpleName(), id);
         }
