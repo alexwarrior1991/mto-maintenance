@@ -44,7 +44,11 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
                 payload.string("name"),
                 null,
                 onAPole ? null : payload.nested("track").longValue("id"),
-                null,
+                // La otra via de uno que pone dos en paralelo (V27 de mto-configuration), con poste o
+                // sin el: es del seccionador, no de su perfil. En la misma columna que la del aislador,
+                // asi que los informes por via lo encuentran en las dos, y la busqueda de activos
+                // tambien por connectedTrackId.
+                payload.nested("connectedTrack").longValue("id"),
                 payload.nested("station").longValue("id"),
                 kp,
                 kp,
