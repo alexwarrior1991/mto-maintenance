@@ -43,7 +43,7 @@ transaction; `recordFailure` runs in its own after it. A message without `data`,
 | Entity | Handler | Effect |
 |---|---|---|
 | `profile` | `ProfileMasterDataHandler` | Upsert `PROFILE` (`PRF-<id>`, name = `profileId`, kp, `track.id`, `track.executionPackageId`, `sectionings[].code` joined), then passes its track and package on to its disconnectors and its package to the insulators of its track / deactivate on `DELETED` |
-| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id`; on a pole `profile.id` and `profile.kp`, without one its own `kp` and `track.id`; `connectedTrack.id` either way), then takes track and package from its profile, or without a pole the package of its track / deactivate |
+| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id` or none; on a pole `profile.id` and `profile.kp`, without one its own `kp` and `track.id`; `connectedTrack.id` either way), then takes track and package from its profile, or without a pole the package of its track / deactivate |
 | `section-insulator` | `SectionInsulatorMasterDataHandler` | Upsert `SECTION_INSULATOR` (`SIN-<id>`, `station.id`, `enabled`, `installationType`, `track.id`, `connectedTrack.id`, kp range) **plus its `switches[]` into `catenary_asset_switch`**, then takes the package of the profiles of its track / deactivate |
 | `track` | `TrackMasterDataHandler` | `DELETED` only: `deactivateByTrack(trackId)` |
 | `execution-package`, `station`, `cantilever`, `steady-arm` | none | logged and ignored |
@@ -72,7 +72,11 @@ The contract leaves two holes that maintenance fills from its own rows, without 
   `connected_track_id`, the column of the insulator's connected track, so the reports by track find
   it on both tracks and the asset search finds it with `connectedTrackId` too. Its profile never
   touches it, and an event without the key (from before `V27`, or because it no longer has one)
-  clears it;
+  clears it. Its **station is optional** at the source: one on open track, in a neutral section
+  or in a substation belongs to none and arrives with `station: null` (never together with no
+  `profile` and no `track`: the source requires one of the three). The asset is stored without a
+  station, one that had a station loses it, and nothing here takes the track or the package from
+  the station;
 - a **section insulator** event carries its track and the one it connects to, but not the package.
   It is the package of its track, which every profile of that track carries
   (`track.executionPackageId`).

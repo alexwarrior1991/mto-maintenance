@@ -423,6 +423,39 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
     }
 
     /**
+     * mto-configuration deja la estacion del seccionador opcional: uno en plena via, en una zona
+     * neutra o en una subestacion llega con {@code station} a null. El activo se queda sin estacion
+     * (uno que la tenia la pierde), y su via y su paquete siguen saliendo de su poste o de su via,
+     * nunca de la estacion.
+     */
+    @Test
+    void aDisconnectorWithoutAStationKeepsTheLocationOfItsPoleOrItsTrack() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long trackId = System.nanoTime();
+        long profileId = trackId + 7;
+        String onAPole = "d-nostation-" + trackId;
+        String poleLess = "d-nostation-free-" + trackId;
+
+        dispatcher.handle(trackProfileMessage(profileId, trackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        dispatcher.handle(disconnectorMessage(onAPole, profileId), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(9L, asset(onAPole).getStationId());
+
+        dispatcher.handle(withoutStation(disconnectorMessage(onAPole, profileId)), new MasterDataEventContext(2L));
+        dispatcher.handle(withoutStation(poleLessDisconnectorMessage(poleLess, trackId, "98375.500")),
+                new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertNull(asset(onAPole).getStationId(), "The one that had a station loses it");
+        assertEquals(trackId, asset(onAPole).getTrackId());
+        assertEquals(6L, asset(onAPole).getExecutionPackageId());
+        assertTrue(asset(onAPole).getEnabled());
+        assertNull(asset(poleLess).getStationId());
+        assertEquals(trackId, asset(poleLess).getTrackId());
+        assertEquals(6L, asset(poleLess).getExecutionPackageId());
+        assertTrue(asset(poleLess).getEnabled());
+    }
+
+    /**
      * Uno de puesta en paralelo trae desde la V27 de mto-configuration la otra via que une con la
      * suya: va a connected_track_id, la columna de la via conectada del aislador, y su perfil no la
      * toca al pasarle la suya. Un evento sin ella, de antes de la V27 o porque ya no la tiene, la quita.
@@ -581,6 +614,16 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                 "kp", new BigDecimal(kp), "track", Map.of("id", trackId, "name", "TRACK 1")));
         values.put("profile", null);
         return message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, disconnectorId, MasterDataOperation.UPDATED, values);
+    }
+
+    /** El mismo mensaje con {@code station} a null: un seccionador que no es de ninguna estacion. */
+    private static MasterDataChangedMessage withoutStation(MasterDataChangedMessage message) {
+        Map<String, Object> values = new HashMap<>(message.data().values());
+        values.put("station", null);
+        return new MasterDataChangedMessage(message.operationId(), message.referenceId(), message.origin(),
+                message.creationDate(), message.eventType(),
+                new MasterDataChangedEvent(message.data().entityName(), message.data().entityId(),
+                        message.data().operation(), values), message.messageHash());
     }
 
     /** El mismo mensaje con la otra via que el seccionador pone en paralelo, como desde la V27. */
