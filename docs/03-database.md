@@ -120,6 +120,10 @@ A disconnector without a pole (`profile_source_id` null) brings its own kp and t
 `mto-configuration`, and takes the package of its track like an insulator. No schema change either:
 it is the same `track_id`, `start_kp`/`end_kp` and `execution_package_id`.
 
+A disconnector that puts two tracks in parallel brings, since `V27` of `mto-configuration`, the other
+track it joins (on a pole or without one). It goes to `connected_track_id`, which `V7` added for the
+section insulator, so it is no longer meaningful only on a `SECTION_INSULATOR`: no schema change.
+
 ## Asset enabled at the source and locally (`V10`)
 
 `catenary_asset` gains `enabled_at_source` (nullable: what `mto-configuration` last said; `null` on

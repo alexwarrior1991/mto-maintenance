@@ -43,7 +43,7 @@ transaction; `recordFailure` runs in its own after it. A message without `data`,
 | Entity | Handler | Effect |
 |---|---|---|
 | `profile` | `ProfileMasterDataHandler` | Upsert `PROFILE` (`PRF-<id>`, name = `profileId`, kp, `track.id`, `track.executionPackageId`, `sectionings[].code` joined), then passes its track and package on to its disconnectors and its package to the insulators of its track / deactivate on `DELETED` |
-| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id`; on a pole `profile.id` and `profile.kp`, without one its own `kp` and `track.id`), then takes track and package from its profile, or without a pole the package of its track / deactivate |
+| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id`; on a pole `profile.id` and `profile.kp`, without one its own `kp` and `track.id`; `connectedTrack.id` either way), then takes track and package from its profile, or without a pole the package of its track / deactivate |
 | `section-insulator` | `SectionInsulatorMasterDataHandler` | Upsert `SECTION_INSULATOR` (`SIN-<id>`, `station.id`, `enabled`, `installationType`, `track.id`, `connectedTrack.id`, kp range) **plus its `switches[]` into `catenary_asset_switch`**, then takes the package of the profiles of its track / deactivate |
 | `track` | `TrackMasterDataHandler` | `DELETED` only: `deactivateByTrack(trackId)` |
 | `execution-package`, `station`, `cantilever`, `steady-arm` | none | logged and ignored |
@@ -66,7 +66,13 @@ The contract leaves two holes that maintenance fills from its own rows, without 
   A disconnector **without a pole** (on a substation portal, an earthing one) has `profile: null`,
   and since `V26` of `mto-configuration` its event carries its own `kp` and `track` (`{id, name}`):
   it is stored at that kp and on that track, and takes the package of its track like an insulator.
-  An event from before `V26` brings neither, and the asset keeps all three empty;
+  An event from before `V26` brings neither, and the asset keeps all three empty. One that puts two
+  tracks in parallel (`Disc/PP`, `LoadB/PP`) also carries, since `V27`, the **other** track it joins
+  to its own (`connectedTrack`, `{id, name}`), on a pole or without one: it goes to
+  `connected_track_id`, the column of the insulator's connected track, so the reports by track find
+  it on both tracks and the asset search finds it with `connectedTrackId` too. Its profile never
+  touches it, and an event without the key (from before `V27`, or because it no longer has one)
+  clears it;
 - a **section insulator** event carries its track and the one it connects to, but not the package.
   It is the package of its track, which every profile of that track carries
   (`track.executionPackageId`).

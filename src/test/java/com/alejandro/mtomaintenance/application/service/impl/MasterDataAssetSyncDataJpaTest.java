@@ -422,6 +422,41 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         assertNull(asset(moving).getExecutionPackageId());
     }
 
+    /**
+     * Uno de puesta en paralelo trae desde la V27 de mto-configuration la otra via que une con la
+     * suya: va a connected_track_id, la columna de la via conectada del aislador, y su perfil no la
+     * toca al pasarle la suya. Un evento sin ella, de antes de la V27 o porque ya no la tiene, la quita.
+     */
+    @Test
+    void aParallelingDisconnectorKeepsItsConnectedTrackOnAPoleOrWithoutOne() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long trackId = System.nanoTime();
+        long otherTrackId = trackId + 1;
+        long profileId = trackId + 7;
+        String onAPole = "d-pp-" + trackId;
+        String poleLess = "d-pp-free-" + trackId;
+
+        dispatcher.handle(trackProfileMessage(profileId, trackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        dispatcher.handle(parallel(disconnectorMessage(onAPole, profileId), otherTrackId), new MasterDataEventContext(1L));
+        dispatcher.handle(parallel(poleLessDisconnectorMessage(poleLess, trackId, "98375.500"), otherTrackId),
+                new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(trackId, asset(onAPole).getTrackId());
+        assertEquals(otherTrackId, asset(onAPole).getConnectedTrackId());
+        assertEquals(trackId, asset(poleLess).getTrackId());
+        assertEquals(otherTrackId, asset(poleLess).getConnectedTrackId());
+
+        // El perfil vuelve a pasar su via a su seccionador y no le quita la conectada.
+        dispatcher.handle(trackProfileMessage(profileId, trackId, 6L, MasterDataOperation.UPDATED), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertEquals(otherTrackId, asset(onAPole).getConnectedTrackId());
+
+        dispatcher.handle(disconnectorMessage(onAPole, profileId), new MasterDataEventContext(3L));
+        entityManager.clear();
+        assertNull(asset(onAPole).getConnectedTrackId());
+        assertEquals(trackId, asset(onAPole).getTrackId());
+    }
+
     @Test
     void aSectionInsulatorTakesThePackageOfTheProfilesOfItsTrackWhicheverArrivesFirst() {
         MasterDataEventHandler dispatcher = dispatcher();
@@ -546,6 +581,16 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                 "kp", new BigDecimal(kp), "track", Map.of("id", trackId, "name", "TRACK 1")));
         values.put("profile", null);
         return message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, disconnectorId, MasterDataOperation.UPDATED, values);
+    }
+
+    /** El mismo mensaje con la otra via que el seccionador pone en paralelo, como desde la V27. */
+    private static MasterDataChangedMessage parallel(MasterDataChangedMessage message, long connectedTrackId) {
+        Map<String, Object> values = new HashMap<>(message.data().values());
+        values.put("connectedTrack", Map.of("id", connectedTrackId, "name", "TRACK 2"));
+        return new MasterDataChangedMessage(message.operationId(), message.referenceId(), message.origin(),
+                message.creationDate(), message.eventType(),
+                new MasterDataChangedEvent(message.data().entityName(), message.data().entityId(),
+                        message.data().operation(), values), message.messageHash());
     }
 
     private static MasterDataChangedMessage trackProfileMessage(long profileId, long trackId, long executionPackageId, MasterDataOperation operation) {

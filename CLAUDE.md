@@ -83,7 +83,9 @@ write it; no event undoes it), kept together by a `CHECK`; `PUT enabled=false` n
 `maintenance-delete` like the `DELETE`. A disconnector on a pole takes its
 track and package from its profile, and an insulator or a disconnector without a pole (which brings
 its own kp and track since `V26` of `mto-configuration`) its package from the profiles of its track,
-because the source publishes no package for them (`docs/06-messaging.md`). A `SECTION_INSULATOR`
+because the source publishes no package for them (`docs/06-messaging.md`). A disconnector that puts
+two tracks in parallel also brings the other one (`connectedTrackId`, `V27` of `mto-configuration`),
+in the same column as an insulator's. A `SECTION_INSULATOR`
 carries besides its two tracks, its `installationType` (`TRACK_CONNECTION` / `IN_TRACK`) and its
 turnouts (`catenary_asset_switch`: `W31` at its kp with its `1:9` rate) — a turnout is part of the
 insulator, not an asset of its own, so there is no new `CatenaryAssetType`. A `MaintenanceOrder`
