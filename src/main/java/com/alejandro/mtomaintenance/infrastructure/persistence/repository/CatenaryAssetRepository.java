@@ -160,30 +160,33 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     int inheritLocationOfDisconnector(@Param("sourceService") String sourceService, @Param("sourceEntityId") String sourceEntityId);
 
     /**
-     * Un aislador de seccion esta en el paquete de su via, que mto-configuration tampoco publica para
-     * el. Todos los perfiles de una via traen el mismo (el de la via): se toma el del ultimo que
-     * llego. Sin perfiles de su via aun, lo pone {@link #propagatePackageToSectionInsulators}.
+     * Un aislador de seccion y un seccionador sin poste estan en el paquete de su via, que
+     * mto-configuration no publica para ellos (la via si: la del aislador siempre, la del seccionador
+     * sin poste desde su V26). Todos los perfiles de una via traen el mismo (el de la via): se toma el
+     * del ultimo que llego. Sin perfiles de su via aun, lo pone {@link #propagatePackageToAssetsOnTrack}.
+     * Un seccionador en un poste no entra: lo suyo es {@link #inheritLocationOfDisconnector}.
      */
     @Modifying
     @Query(value = """
-            update catenary_asset insulator
+            update catenary_asset asset
                set execution_package_id = (
                        select profile.execution_package_id
                          from catenary_asset profile
-                        where profile.source_service = insulator.source_service
+                        where profile.source_service = asset.source_service
                           and profile.type = 'PROFILE'
-                          and profile.track_id = insulator.track_id
+                          and profile.track_id = asset.track_id
                           and profile.execution_package_id is not null
                         order by profile.updated_at desc, profile.id
                         limit 1),
-                   version = insulator.version + 1,
+                   version = asset.version + 1,
                    updated_at = now()
-             where insulator.source_service = :sourceService
-               and insulator.source_entity_id = :sourceEntityId
-               and insulator.type = 'SECTION_INSULATOR'
-               and insulator.track_id is not null
+             where asset.source_service = :sourceService
+               and asset.source_entity_id = :sourceEntityId
+               and asset.type in ('SECTION_INSULATOR', 'DISCONNECTOR')
+               and asset.profile_source_id is null
+               and asset.track_id is not null
             """, nativeQuery = true)
-    int inheritPackageOfSectionInsulator(@Param("sourceService") String sourceService, @Param("sourceEntityId") String sourceEntityId);
+    int inheritPackageOfTrack(@Param("sourceService") String sourceService, @Param("sourceEntityId") String sourceEntityId);
 
     /**
      * Tras el upsert de un perfil, sus seccionadores le siguen: da igual que evento llegue antes, y un
@@ -209,25 +212,29 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     int propagateLocationToDisconnectors(@Param("sourceService") String sourceService,
                                          @Param("profileSourceEntityId") String profileSourceEntityId);
 
-    /** Tras el upsert de un perfil, los aisladores de su via toman su paquete: cambia con el de la via. */
+    /**
+     * Tras el upsert de un perfil, los aisladores y los seccionadores sin poste de su via toman su
+     * paquete: cambia con el de la via.
+     */
     @Modifying
     @Query(value = """
-            update catenary_asset insulator
+            update catenary_asset asset
                set execution_package_id = profile.execution_package_id,
-                   version = insulator.version + 1,
+                   version = asset.version + 1,
                    updated_at = now()
               from catenary_asset profile
              where profile.source_service = :sourceService
                and profile.source_entity_id = :profileSourceEntityId
                and profile.type = 'PROFILE'
                and profile.execution_package_id is not null
-               and insulator.source_service = profile.source_service
-               and insulator.track_id = profile.track_id
-               and insulator.type = 'SECTION_INSULATOR'
-               and insulator.execution_package_id is distinct from profile.execution_package_id
+               and asset.source_service = profile.source_service
+               and asset.track_id = profile.track_id
+               and asset.type in ('SECTION_INSULATOR', 'DISCONNECTOR')
+               and asset.profile_source_id is null
+               and asset.execution_package_id is distinct from profile.execution_package_id
             """, nativeQuery = true)
-    int propagatePackageToSectionInsulators(@Param("sourceService") String sourceService,
-                                            @Param("profileSourceEntityId") String profileSourceEntityId);
+    int propagatePackageToAssetsOnTrack(@Param("sourceService") String sourceService,
+                                        @Param("profileSourceEntityId") String profileSourceEntityId);
 
     /**
      * Una via borrada en origen deja sin sentido todo lo que hay sobre ella. En lo sincronizado es el

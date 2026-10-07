@@ -62,9 +62,10 @@ class ProfileMasterDataHandler extends AbstractAssetMasterDataHandler {
     @Override
     protected void afterSynchronized(String sourceEntityId) {
         int disconnectors = assets().propagateLocationToDisconnectors(SOURCE_SERVICE, sourceEntityId);
-        int insulators = assets().propagatePackageToSectionInsulators(SOURCE_SERVICE, sourceEntityId);
-        if (disconnectors + insulators > 0) {
-            LOGGER.info("Location of profile {} passed on: disconnectors={}, section insulators={}", sourceEntityId, disconnectors, insulators);
+        int onItsTrack = assets().propagatePackageToAssetsOnTrack(SOURCE_SERVICE, sourceEntityId);
+        if (disconnectors + onItsTrack > 0) {
+            LOGGER.info("Location of profile {} passed on: its disconnectors={}, insulators and pole-less disconnectors of its track={}",
+                    sourceEntityId, disconnectors, onItsTrack);
         }
     }
 }

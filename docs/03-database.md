@@ -116,6 +116,10 @@ track, and then the empty `execution_package_id`/`track_id` of the orders, defec
 created on them (only the empty ones: a value is never overwritten). Like every master-data write it
 is SQL outside Hibernate, so the `_aud` twins show the holes until the next change through the API.
 
+A disconnector without a pole (`profile_source_id` null) brings its own kp and track since `V26` of
+`mto-configuration`, and takes the package of its track like an insulator. No schema change either:
+it is the same `track_id`, `start_kp`/`end_kp` and `execution_package_id`.
+
 ## Asset enabled at the source and locally (`V10`)
 
 `catenary_asset` gains `enabled_at_source` (nullable: what `mto-configuration` last said; `null` on

@@ -364,6 +364,64 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         assertFalse(asset(late).getEnabled());
     }
 
+    /**
+     * Uno que no esta en un poste (los de portico de subestacion, los de puesta a tierra): desde la
+     * V26 de mto-configuration su evento trae su KP y su via, y el paquete es el de su via, como el
+     * de un aislador. Y pasar de un poste a ninguno, o al reves, cambia de regla sin dejar restos.
+     */
+    @Test
+    void aDisconnectorWithoutAPoleBringsItsKpAndTrackAndTakesThePackageOfItsTrack() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long trackId = System.nanoTime();
+        long profileId = trackId + 7;
+        String early = "d-nopole-early-" + trackId;
+        String late = "d-nopole-late-" + trackId;
+        String moving = "d-moving-" + trackId;
+
+        dispatcher.handle(poleLessDisconnectorMessage(early, trackId, "98375.500"), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(0, new BigDecimal("98375.5").compareTo(asset(early).getStartKp()));
+        assertEquals(0, new BigDecimal("98375.5").compareTo(asset(early).getEndKp()), "A point, not a range");
+        assertEquals(trackId, asset(early).getTrackId());
+        assertNull(asset(early).getProfileSourceId());
+        assertNull(asset(early).getExecutionPackageId(), "No profile of its track yet");
+
+        // Un perfil de su via le pasa el paquete; uno que llega despues lo toma al momento.
+        dispatcher.handle(trackProfileMessage(profileId, trackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        dispatcher.handle(poleLessDisconnectorMessage(late, trackId, "98400"), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(6L, asset(early).getExecutionPackageId());
+        assertEquals(6L, asset(late).getExecutionPackageId());
+
+        // La via pasa a otro paquete: le siguen.
+        dispatcher.handle(trackProfileMessage(profileId, trackId, 8L, MasterDataOperation.UPDATED), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertEquals(8L, asset(early).getExecutionPackageId());
+        assertEquals(8L, asset(late).getExecutionPackageId());
+
+        // En un poste, todo es de su perfil; al dejarlo, su KP y su via, y el paquete de esa via.
+        dispatcher.handle(disconnectorMessage(moving, profileId), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(0, new BigDecimal("80196.63").compareTo(asset(moving).getStartKp()));
+        assertEquals(trackId, asset(moving).getTrackId());
+        assertEquals(8L, asset(moving).getExecutionPackageId());
+
+        dispatcher.handle(poleLessDisconnectorMessage(moving, trackId + 1, "120"), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertNull(asset(moving).getProfileSourceId());
+        assertEquals(0, new BigDecimal("120").compareTo(asset(moving).getStartKp()));
+        assertEquals(trackId + 1, asset(moving).getTrackId());
+        assertNull(asset(moving).getExecutionPackageId(), "No profile on its new track: not the old package");
+
+        // Sin via tampoco hay paquete, y el evento de antes de la V26, sin KP ni via, deja ambos vacios.
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, moving, MasterDataOperation.UPDATED,
+                Map.of("id", moving, "name", "HSA-FP1.1", "station", Map.of("id", 9))), new MasterDataEventContext(3L));
+        entityManager.clear();
+        assertNull(asset(moving).getTrackId());
+        assertNull(asset(moving).getStartKp());
+        assertNull(asset(moving).getExecutionPackageId());
+    }
+
     @Test
     void aSectionInsulatorTakesThePackageOfTheProfilesOfItsTrackWhicheverArrivesFirst() {
         MasterDataEventHandler dispatcher = dispatcher();
@@ -477,6 +535,17 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         return message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, disconnectorId, MasterDataOperation.UPDATED,
                 Map.of("id", disconnectorId, "name", "HSA-NS5", "station", Map.of("id", 9),
                         "profile", Map.of("id", profileId, "profileId", "80-1.04", "kp", 80196.63)));
+    }
+
+    /**
+     * Un seccionador sin poste tal como lo publica mto-configuration desde su V26: su estacion, su KP
+     * y su via ({@code {id, name}}), con {@code profile} a null; sin paquete.
+     */
+    private static MasterDataChangedMessage poleLessDisconnectorMessage(String disconnectorId, long trackId, String kp) {
+        Map<String, Object> values = new HashMap<>(Map.of("id", disconnectorId, "name", "HSA-FP1.1", "station", Map.of("id", 9),
+                "kp", new BigDecimal(kp), "track", Map.of("id", trackId, "name", "TRACK 1")));
+        values.put("profile", null);
+        return message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, disconnectorId, MasterDataOperation.UPDATED, values);
     }
 
     private static MasterDataChangedMessage trackProfileMessage(long profileId, long trackId, long executionPackageId, MasterDataOperation operation) {
