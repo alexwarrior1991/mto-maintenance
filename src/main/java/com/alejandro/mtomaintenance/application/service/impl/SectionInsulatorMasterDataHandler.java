@@ -45,7 +45,7 @@ class SectionInsulatorMasterDataHandler extends AbstractAssetMasterDataHandler {
     /** Sin perfiles de su via aun, el paquete lo pone el primero que llegue. */
     @Override
     protected void afterSynchronized(String sourceEntityId) {
-        assets().inheritPackageOfSectionInsulator(SOURCE_SERVICE, sourceEntityId);
+        assets().inheritPackageOfTrack(SOURCE_SERVICE, sourceEntityId);
     }
 
     @Override

@@ -43,7 +43,7 @@ transaction; `recordFailure` runs in its own after it. A message without `data`,
 | Entity | Handler | Effect |
 |---|---|---|
 | `profile` | `ProfileMasterDataHandler` | Upsert `PROFILE` (`PRF-<id>`, name = `profileId`, kp, `track.id`, `track.executionPackageId`, `sectionings[].code` joined), then passes its track and package on to its disconnectors and its package to the insulators of its track / deactivate on `DELETED` |
-| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id`, `profile.id`, `profile.kp`), then takes track and package from its profile / deactivate |
+| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id`; on a pole `profile.id` and `profile.kp`, without one its own `kp` and `track.id`), then takes track and package from its profile, or without a pole the package of its track / deactivate |
 | `section-insulator` | `SectionInsulatorMasterDataHandler` | Upsert `SECTION_INSULATOR` (`SIN-<id>`, `station.id`, `enabled`, `installationType`, `track.id`, `connectedTrack.id`, kp range) **plus its `switches[]` into `catenary_asset_switch`**, then takes the package of the profiles of its track / deactivate |
 | `track` | `TrackMasterDataHandler` | `DELETED` only: `deactivateByTrack(trackId)` |
 | `execution-package`, `station`, `cantilever`, `steady-arm` | none | logged and ignored |
@@ -62,7 +62,11 @@ The contract leaves two holes that maintenance fills from its own rows, without 
 
 - a **disconnector** event carries its station and its profile (id, name, kp), but neither the track
   nor the execution package. Both are the profile's: `profile_source_id` of the disconnector is the
-  `source_entity_id` of its `PROFILE` asset (the numeric id `mto-configuration` publishes for both);
+  `source_entity_id` of its `PROFILE` asset (the numeric id `mto-configuration` publishes for both).
+  A disconnector **without a pole** (on a substation portal, an earthing one) has `profile: null`,
+  and since `V26` of `mto-configuration` its event carries its own `kp` and `track` (`{id, name}`):
+  it is stored at that kp and on that track, and takes the package of its track like an insulator.
+  An event from before `V26` brings neither, and the asset keeps all three empty;
 - a **section insulator** event carries its track and the one it connects to, but not the package.
   It is the package of its track, which every profile of that track carries
   (`track.executionPackageId`).
@@ -72,16 +76,18 @@ the same transaction, whichever event arrives first:
 
 | After the upsert of | Statement | Effect |
 |---|---|---|
-| a disconnector | `inheritLocationOfDisconnector` | track and package of its profile, if it has arrived |
-| a section insulator | `inheritPackageOfSectionInsulator` | package of the last profile received on its track |
+| a disconnector on a pole | `inheritLocationOfDisconnector` | track and package of its profile, if it has arrived |
+| a section insulator or a disconnector without a pole | `inheritPackageOfTrack` | package of the last profile received on its track |
 | a profile | `propagateLocationToDisconnectors` | its track and package to its disconnectors: a profile that changes track takes them along |
-| a profile | `propagatePackageToSectionInsulators` | its package to the insulators of its track: a track moved to another package moves them too |
+| a profile | `propagatePackageToAssetsOnTrack` | its package to the insulators and the pole-less disconnectors of its track: a track moved to another package moves them too |
 
 Without them, both types were missing from the progress and monthly reports by package (and the
 disconnectors from the progress report by track), from the searches by package or track, and from
 the `EP-<package>` stock project of their orders. `V9` filled what was already stored, including
 orders, defects and inspections created with the hole. Like the upsert, none of this leaves an
-Envers revision. A disconnector whose profile never arrives keeps both empty.
+Envers revision. A disconnector whose profile never arrives keeps both empty, and one without a pole
+or a track has no package. A disconnector that leaves its pole changes rule on the next event: its
+own kp and track replace the profile's, and the package is that of its new track, never the old one.
 
 A consequence: a track deleted at the source now also disables the disconnectors on it
 (`deactivateByTrack`), as it already did with its profiles and insulators.
