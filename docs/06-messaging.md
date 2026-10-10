@@ -121,8 +121,9 @@ prints it as `W31 1:9 (out of service)`. With no `enabled` key the turnout count
 the asset's own flag.
 
 `start_kp`/`end_kp` are the **minimum and maximum** of the insulator's own kp and its turnouts',
-sorted, so `chk_catenary_asset_kp_range` can never fire and the insulator shows up in `?kpFrom/kpTo`
-and in the preventive task generation of a track section.
+sorted, so `chk_catenary_asset_kp_range` can never fire and the insulator shows up in `?kpFrom/kpTo`.
+It gets no task from `POST /orders/{id}/tasks/generate`, which only creates one per `PROFILE`: an
+insulator is checked with its own inspection or corrective order.
 
 The block is replaced whole after an applied upsert: the emitter always sends the complete list, so
 what arrives is the final state. Two things follow from the order of operations, and both are
@@ -231,6 +232,12 @@ and every event has a real JSON example in `docs/messaging/examples/` that
 | `material.failed` | `mto-stock` did not answer and nothing is in doubt (the request never left, e.g. resolving the project) | line + `step`, `reason` |
 | `asset.disabled` | `DELETE /assets/{id}` or `PUT enabled=false`, the first time it is disabled here | asset (`code`, `name`, `type`, location, `sourceService`, `sourceEntityId`, `enabledAtSource`, `disabledLocally`, `preventiveIntervalDays`) |
 | `preventive.due-soon` | the daily check (below) | `date`, `horizonDays`, `count`, `overdueCount`, `sampleSize`, `assets[]` (`assetId`, `assetCode`, `assetName`, `assetType`, `trackId`, `executionPackageId`, `lastPreventiveCompletedAt`, `dueAt`, `overdue`) |
+
+The three `material.*` events are published when the line's state changes, not on every attempt: a
+retry that fails the same way (the automatic one every 5 minutes while stock is down, or a repeated
+`sync`) publishes nothing, and a rejection publishes again only if its reason changes
+(`MaterialStockSynchronizer.record`). Each event carries a new `operationId`, so without this the
+consumer got one per round.
 
 The aggregate of the outbox is the entity (`order`-`<id>`), so the relay's strict ordering per
 aggregate keeps `created` before `status-changed` of the same order even if the first one fails and

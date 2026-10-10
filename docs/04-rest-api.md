@@ -165,7 +165,7 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 405 `REQ-405` | The route exists but not for that method; the `Allow` header lists the ones it takes |
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset; a field of a synchronized asset that only `mto-configuration` changes; `enabled=true` on an asset disabled at the source |
-| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track) |
+| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them |
 | 409 `MAT-001` | Over-consumption (also taking `allowOverConsumption` off a line consumed above plan), duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
 | 409 `<AGG>-409` | Duplicated code |

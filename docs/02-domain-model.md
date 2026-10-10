@@ -88,7 +88,9 @@ times and returns to `PENDING` (without shift) the tasks that were not completed
 
 Window rules: a task's profile must be on one of the shift's tracks; a task whose types require
 full possession cannot be assigned to or completed in a `PARTIAL` shift; a `DIVERTED` section only
-accepts `FULL` shifts. The profiles reviewed in a shift are the `PROFILE` assets of its `COMPLETED`
+accepts `FULL` shifts. The same rules hold when a shift with tasks already assigned is changed:
+removing a track one of its open tasks is on, or making it `PARTIAL` under a task that needs full
+possession or a `DIVERTED` section, is 409 `SHF-001` naming the task. The profiles reviewed in a shift are the `PROFILE` assets of its `COMPLETED`
 tasks (`GET /shifts/{id}/profiles`). Teams (`A` Rishpon, `B` Mishmar) carry the execution packages they cover.
 
 ## Inspections (`MaintenanceInspection`) and templates
@@ -120,6 +122,13 @@ the last error. Reservation happens at `plan` (or when the line is added to an o
 planned), consumption at `complete`, release at `cancel`; without a stock project the consumption is a
 direct output. The project is the one of the order's execution package (`EP-<id>` in stock), looked
 up once per plan or start; if stock is down at that moment the lines are left `FAILED`.
+
+The materials sent with a task completion (`materials[]`) become lines of their own (with the task;
+planned = consumed) and are reserved **last**, once the lines, the inline defects and the task are
+stored: a reservation made before another material of the list failed (unknown to stock, repeated)
+used to stay `ACTIVE` in stock with its line rolled back, and the retry made a second one, because
+the idempotency key comes from the line and the line was new. A `PUT`/`PATCH` of a reserved line
+that sends the same `plannedQuantity` is not a change and is accepted.
 
 A step that does not go through leaves the line in one of two states, both blocking `complete`
 unless `force`:
