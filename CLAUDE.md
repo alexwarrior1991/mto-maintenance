@@ -150,7 +150,8 @@ door, and it is called inside the business transaction**: the event goes to `out
 (`OutboxRabbitPublisher` refuses to start without them). The hooks: `StatusHistoryServiceImpl`
 (`order.created`/`status-changed`/`reassigned`, `defect.created`/`status-changed`: every order and
 defect transition passes through it), `MaintenanceShiftServiceImpl.start/close`,
-`MaterialStockSynchronizer.record` (`material.rejected`/`in-doubt`/`failed`),
+`MaterialStockSynchronizer.record` (`material.rejected`/`in-doubt`/`failed`, only when the line's
+state changes: the 5-minute retry must not publish one per round),
 `CatenaryAssetServiceImpl.disable/patch` (`asset.disabled`, once), `MaintenanceInspectionServiceImpl`
 (`inspection.created`/`item-failed`/`defect-created`/`corrective-order-created`) and the daily
 `PreventiveDueSoonService` (`preventive.due-soon`, advisory lock, `operationId` from the date). The

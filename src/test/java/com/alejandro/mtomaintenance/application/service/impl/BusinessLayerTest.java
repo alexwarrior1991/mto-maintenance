@@ -1362,6 +1362,32 @@ class BusinessLayerTest {
     }
 
     @Test
+    void changingTheTracksOrThePossessionOfAShiftKeepsItsAssignedTasksWorkable() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(Set.of(1L, 2L), PossessionType.FULL, ShiftStatus.PLANNED);
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        MaintenanceTask onTrack2 = task(order, MaintenanceTaskStatus.PENDING);
+        onTrack2.setAsset(profile("13-2.01", "13007.290"));
+        onTrack2.getTaskTypes().add(MaintenanceTaskType.builder().code("RG-03").description("Section insulators")
+                .requiresFullPossession(true).orderIndex(3).build());
+        when(fixture.taskRepository.findByShiftIdAndStatusIn(eq(shift.getId()), any())).thenReturn(List.of(onTrack2));
+
+        ShiftException withoutItsTrack = assertThrows(ShiftException.class,
+                () -> fixture.service.update(shift.getId(), shiftUpdate(Set.of(1L), null)));
+        assertTrue(withoutItsTrack.getMessage().contains("Task " + onTrack2.getSequence()), withoutItsTrack.getMessage());
+        shift.getTrackIds().addAll(Set.of(1L, 2L));
+        assertThrows(ShiftException.class, () -> fixture.service.update(shift.getId(), shiftUpdate(null, PossessionType.PARTIAL)),
+                "RG-03 needs full possession");
+        shift.setPossessionType(PossessionType.FULL);
+        verify(fixture.repository, never()).save(any());
+
+        // Quitar la via que no usa ninguna tarea si se puede.
+        fixture.service.update(shift.getId(), shiftUpdate(Set.of(2L), null));
+        assertEquals(Set.of(2L), shift.getTrackIds());
+    }
+
+    @Test
     void closingAShiftWithoutAVoltageCutOffCountsFromTheActualStartAndHonoursAnExplicitNetTime() {
         ShiftFixture fixture = new ShiftFixture();
         MaintenanceShift computed = shift(2L, PossessionType.PARTIAL, ShiftStatus.IN_PROGRESS);
@@ -1672,6 +1698,59 @@ class BusinessLayerTest {
         assertEquals(List.of("12-2.27.jpg"), task.getPhotoRefs());
         assertEquals(0, new BigDecimal("3").compareTo(line.getConsumedQuantity()), "What was used on the profile is already consumed");
         verify(fixture.stock).reserve(line);
+    }
+
+    @Test
+    void completingATaskReservesItsMaterialsOnlyAfterEverythingElseWentThrough() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceShift shift = shift(2L, PossessionType.PARTIAL, ShiftStatus.IN_PROGRESS);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        UUID dropper = UUID.randomUUID();
+        UUID clamp = UUID.randomUUID();
+        UUID warehouse = UUID.randomUUID();
+        TaskMaterialRequest usedDropper = new TaskMaterialRequest(dropper, "DROPPER-STD", warehouse, BigDecimal.ONE, "ud");
+        TaskMaterialRequest misspelt = new TaskMaterialRequest(null, "DROPER-STD", warehouse, BigDecimal.ONE, "ud");
+        TaskMaterialRequest usedClamp = new TaskMaterialRequest(clamp, "CLAMP-12", warehouse, BigDecimal.ONE, "ud");
+        MaintenanceMaterialUsage dropperLine = MaintenanceMaterialUsage.builder().order(order).materialId(dropper).materialCode("DROPPER-STD")
+                .warehouseId(warehouse).plannedQuantity(BigDecimal.ONE).unit("ud").allowOverConsumption(true).build();
+        MaintenanceMaterialUsage clampLine = MaintenanceMaterialUsage.builder().order(order).materialId(clamp).materialCode("CLAMP-12")
+                .warehouseId(warehouse).plannedQuantity(BigDecimal.ONE).unit("ud").allowOverConsumption(true).build();
+        when(fixture.lineFactory.buildLine(any(), any(), eq(dropper), any(), any(), any(), any(), eq(true))).thenReturn(dropperLine);
+        when(fixture.lineFactory.buildLine(any(), any(), eq(clamp), any(), any(), any(), any(), eq(true))).thenReturn(clampLine);
+        when(fixture.lineFactory.buildLine(any(), any(), isNull(), eq("DROPER-STD"), any(), any(), any(), eq(true)))
+                .thenThrow(new ValidationException("Material 'DROPER-STD' is unknown to stock and no materialId was given"));
+        when(fixture.lineFactory.saveLine(dropperLine)).thenReturn(dropperLine);
+
+        // El segundo material no existe en stock: el primero ya estaba guardado, y antes ya estaba reservado.
+        MaintenanceTask first = task(order, MaintenanceTaskStatus.PENDING);
+        first.setAsset(profile("13-2.01", "13007.290"));
+        when(fixture.repository.findByIdAndOrderId(first.getId(), order.getId())).thenReturn(Optional.of(first));
+        assertThrows(ValidationException.class, () -> fixture.service.complete(order.getId(), first.getId(),
+                new CompleteTaskRequest(shift.getId(), null, null, null, true, null, null, List.of(usedDropper, misspelt), null)));
+
+        // El mismo material dos veces: la segunda linea choca con la primera al guardarse.
+        MaintenanceTask second = task(order, MaintenanceTaskStatus.PENDING);
+        second.setAsset(profile("13-2.02", "13060.290"));
+        when(fixture.repository.findByIdAndOrderId(second.getId(), order.getId())).thenReturn(Optional.of(second));
+        when(fixture.lineFactory.saveLine(clampLine)).thenReturn(clampLine)
+                .thenThrow(new MaterialUsageException("Material CLAMP-12 is already registered on this task"));
+        assertThrows(MaterialUsageException.class, () -> fixture.service.complete(order.getId(), second.getId(),
+                new CompleteTaskRequest(shift.getId(), null, null, null, true, null, null, List.of(usedClamp, usedClamp), null)));
+
+        verify(fixture.stock, never()).reserve(any());
+
+        MaintenanceTask third = task(order, MaintenanceTaskStatus.PENDING);
+        third.setAsset(profile("13-2.03", "13110.290"));
+        when(fixture.repository.findByIdAndOrderId(third.getId(), order.getId())).thenReturn(Optional.of(third));
+        fixture.service.complete(order.getId(), third.getId(),
+                new CompleteTaskRequest(shift.getId(), null, null, null, true, null, null, List.of(usedDropper), null));
+
+        InOrder inStock = inOrder(fixture.repository, fixture.stock);
+        inStock.verify(fixture.repository).save(third);
+        inStock.verify(fixture.repository).flush();
+        inStock.verify(fixture.stock).reserve(dropperLine);
     }
 
     @Test
@@ -2538,6 +2617,10 @@ class BusinessLayerTest {
         assertThrows(MaterialUsageException.class, () -> fixture.service.update(planned.getId(), line.getId(), new MaterialUsageUpdateRequest(new BigDecimal("5"), null, null, null)));
         fixture.service.update(planned.getId(), line.getId(), new MaterialUsageUpdateRequest(null, null, true, null));
         assertTrue(line.getAllowOverConsumption());
+        // Un formulario reenvia la linea entera: la misma cantidad prevista no es un cambio.
+        fixture.service.update(planned.getId(), line.getId(), new MaterialUsageUpdateRequest(new BigDecimal("2.000"), BigDecimal.ONE, null, null));
+        assertEquals(0, BigDecimal.ONE.compareTo(line.getConsumedQuantity()));
+        assertEquals(0, new BigDecimal("2").compareTo(line.getPlannedQuantity()));
 
         fixture.service.sync(planned.getId(), line.getId());
         verify(fixture.stock).syncNow(line);
@@ -3040,6 +3123,54 @@ class BusinessLayerTest {
         assertEquals(failed.getId().toString(), third.entityId());
         assertNull(third.values().get("request"), "Nothing was sent: the project could not be resolved");
         assertEquals("resolve project", third.values().get("step"));
+    }
+
+    @Test
+    void aStockFailureIsPublishedOnceAndNotAgainOnEveryRetry() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, events);
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        order.setStockProjectId(UUID.randomUUID());
+        MaintenanceMaterialUsage line = line(order);
+
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenThrow(new StockUnavailableException("Connection refused"));
+        synchronizer.reserve(line);
+        // Lo que hace el reintento automatico cada 5 minutos mientras stock sigue caido, con el texto que toque.
+        assertThrows(StockUnavailableException.class, () -> synchronizer.syncNow(line));
+        org.mockito.Mockito.reset(stockClient);
+        when(stockClient.isEnabled()).thenReturn(true);
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenThrow(new StockUnavailableException("CircuitBreaker 'stock' is OPEN"));
+        assertThrows(StockUnavailableException.class, () -> synchronizer.syncNow(line));
+
+        assertEquals(List.of("material.in-doubt"), events.names(), "One failure, however many rounds it takes stock to come back");
+        assertEquals(StockSyncStatus.FAILED, line.getStockSyncStatus());
+
+        // Stock vuelve: la reserva en duda se confirma. Si despues vuelve a fallar, es otro fallo y se cuenta.
+        org.mockito.Mockito.reset(stockClient);
+        when(stockClient.isEnabled()).thenReturn(true);
+        UUID reservation = UUID.randomUUID();
+        when(stockClient.reserve(any(), any(), any(), any(), any()))
+                .thenReturn(new StockReservation(reservation, line.getMaterialId(), line.getWarehouseId(), order.getStockProjectId(), new BigDecimal("2"), "ACTIVE"));
+        synchronizer.syncNow(line);
+        assertEquals(StockSyncStatus.RESERVED, line.getStockSyncStatus());
+        when(stockClient.findReservation(reservation)).thenThrow(new StockUnavailableException("Read timed out"));
+        assertThrows(StockUnavailableException.class, () -> synchronizer.syncNow(line));
+
+        assertEquals(List.of("material.in-doubt", "material.failed"), events.names());
+
+        // Un rechazo repetido tampoco se repite, salvo que cambie el motivo.
+        MaintenanceMaterialUsage rejected = line(order);
+        when(stockClient.reserve(any(), any(), any(), any(), any()))
+                .thenThrow(new StockRejectedException("Insufficient stock", 409, "STK-001", null))
+                .thenThrow(new StockRejectedException("Insufficient stock", 409, "STK-001", null))
+                .thenThrow(new StockRejectedException("Material retired", 422, "STK-422", null));
+        synchronizer.reserve(rejected);
+        assertThrows(StockRejectedException.class, () -> synchronizer.syncNow(rejected));
+        assertThrows(StockRejectedException.class, () -> synchronizer.syncNow(rejected));
+
+        assertEquals(List.of("material.in-doubt", "material.failed", "material.rejected", "material.rejected"), events.names());
     }
 
     @Test

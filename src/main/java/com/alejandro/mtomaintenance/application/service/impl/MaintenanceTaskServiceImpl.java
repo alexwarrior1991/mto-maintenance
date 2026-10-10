@@ -265,15 +265,15 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         task.setCompletedAt(now);
         task.setStatus(MaintenanceTaskStatus.COMPLETED);
 
+        List<MaintenanceMaterialUsage> used = new ArrayList<>();
         if (request.materials() != null) {
             for (TaskMaterialRequest material : request.materials()) {
                 MaintenanceMaterialUsage line = lineFactory.buildLine(order, task, material.materialId(), material.materialCode(),
                         material.warehouseId(), material.quantity(), material.unit(), true);
-                // Lo usado en el perfil ya esta consumido: previsto = consumido, y se reserva ahora
+                // Lo usado en el perfil ya esta consumido: previsto = consumido, y se reserva al final
                 // para que el cierre de la orden lo consuma contra stock.
                 line.setConsumedQuantity(material.quantity());
-                MaintenanceMaterialUsage saved = lineFactory.saveLine(line);
-                stock.reserve(saved);
+                used.add(lineFactory.saveLine(line));
             }
         }
 
@@ -283,8 +283,16 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
             }
         }
 
+        MaintenanceTask saved = repository.save(task);
+        // Stock lo ultimo, cuando todo lo de aqui ya esta en la base. Una reserva hecha antes de que
+        // fallara otro material de la lista (desconocido, repetido) o un conflicto de version se
+        // quedaba ACTIVE en stock con su linea deshecha, y el reintento creaba otra linea y otra
+        // reserva: la clave de idempotencia sale del id de la linea, y la linea era nueva.
+        repository.flush();
+        used.forEach(stock::reserve);
+
         LOGGER.info("Task {} of order {} completed in shift {}", task.getSequence(), order.getCode(), shift.getCode());
-        return mapper.toResponse(repository.save(task));
+        return mapper.toResponse(saved);
     }
 
     @Override

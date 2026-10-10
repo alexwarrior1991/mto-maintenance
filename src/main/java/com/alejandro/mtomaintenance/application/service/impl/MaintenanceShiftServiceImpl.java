@@ -14,6 +14,7 @@ import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
+import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapper;
@@ -140,6 +141,8 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         if (!ShiftStateMachine.allowsUpdate(shift.getStatus())) {
             throw new InvalidTransitionException("Shift " + shift.getCode() + " is " + shift.getStatus() + " and cannot be changed");
         }
+        Set<Long> tracksBefore = Set.copyOf(shift.getTrackIds());
+        PossessionType possessionBefore = shift.getPossessionType();
         if (request.shiftDate() != null) {
             shift.setShiftDate(request.shiftDate());
         }
@@ -178,6 +181,9 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         PatchRules.set(patch, "measurementEquipment", request.measurementEquipment(), shift::setMeasurementEquipment);
         PatchRules.set(patch, "observations", request.observations(), shift::setObservations);
         validate(shift);
+        if (!tracksBefore.equals(shift.getTrackIds()) || possessionBefore != shift.getPossessionType()) {
+            requireAssignedTasksStillFit(shift);
+        }
         return mapper.toResponse(repository.save(shift));
     }
 
@@ -408,6 +414,25 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
             resolved.add(asset);
         }
         return resolved;
+    }
+
+    /**
+     * Las reglas de asignar una tarea a un turno (su via, la posesion que pide) valen tambien al
+     * cambiar el turno con tareas ya asignadas. Sin esto, quitarle una via o pasarlo a posesion
+     * parcial dejaba tareas que no se podian completar en el, y el equipo se enteraba de noche.
+     */
+    private void requireAssignedTasksStillFit(MaintenanceShift shift) {
+        for (MaintenanceTask task : taskRepository.findByShiftIdAndStatusIn(shift.getId(),
+                EnumSet.of(MaintenanceTaskStatus.PENDING, MaintenanceTaskStatus.IN_PROGRESS))) {
+            try {
+                ShiftRules.requireSameTrack(shift, task);
+                ShiftRules.requireCompatiblePossession(shift, task);
+            } catch (ShiftException doesNotFit) {
+                throw new ShiftException("Task " + task.getSequence() + " of order " + task.getOrder().getCode()
+                        + " is assigned to shift " + shift.getCode() + " and would no longer fit: " + doesNotFit.getMessage()
+                        + ". Take it out of the shift first");
+            }
+        }
     }
 
     private static void validate(MaintenanceShift shift) {

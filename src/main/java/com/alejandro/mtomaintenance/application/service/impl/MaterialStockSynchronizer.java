@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -177,7 +178,7 @@ class MaterialStockSynchronizer {
         try {
             project = projectOf(order);
         } catch (StockUnavailableException | StockRejectedException exception) {
-            lines.forEach(line -> record(line, "resolve project", exception));
+            lines.forEach(line -> record(line, "resolve project", exception, LineState.of(line)));
             return exception;
         }
         RuntimeException failure = null;
@@ -425,29 +426,62 @@ class MaterialStockSynchronizer {
 
     /** Ejecuta un paso contra stock; si falla, la linea lo dice y se devuelve el fallo. */
     private RuntimeException attempt(MaintenanceMaterialUsage usage, String step, Runnable action) {
+        LineState before = LineState.of(usage);
         try {
             action.run();
             return null;
         } catch (StockUnavailableException | StockRejectedException exception) {
-            record(usage, step, exception);
+            record(usage, step, exception, before);
             return exception;
         }
     }
 
-    private void record(MaintenanceMaterialUsage usage, String step, RuntimeException exception) {
+    /**
+     * Deja en la linea lo que contesto stock y lo publica, pero solo si cambia lo que la linea contaba
+     * antes del paso ({@code before}). El reintento automatico repite cada 5 minutos el paso de una
+     * linea FAILED mientras stock siga caido, y un {@code sync} se puede pedir muchas veces; cada evento
+     * lleva un operationId nuevo, asi que sin esto el consumidor recibia un aviso por vuelta.
+     */
+    private void record(MaintenanceMaterialUsage usage, String step, RuntimeException exception, LineState before) {
         if (exception instanceof StockRejectedException rejection) {
             usage.markRejected(step + ": " + exception.getMessage());
             LOGGER.warn("Stock rejected the {} of a material line, left as REJECTED: order={}, material={}, cause={}",
                     step, usage.getOrder().getCode(), usage.getMaterialCode(), exception.getMessage());
-            events.publish(MaintenanceEvents.materialRejected(usage, step, rejection));
+            if (before.changedIn(usage)) {
+                events.publish(MaintenanceEvents.materialRejected(usage, step, rejection));
+            }
             return;
         }
         usage.markFailed(step + ": " + exception.getMessage());
         LOGGER.warn("Stock {} failed, material line left as FAILED: order={}, material={}, cause={}",
                 step, usage.getOrder().getCode(), usage.getMaterialCode(), exception.getMessage());
-        // markFailed conserva la peticion en duda: si la hay, lo que no se sabe es si stock la aplico.
-        events.publish(usage.isInDoubt()
-                ? MaintenanceEvents.materialInDoubt(usage, step, exception)
-                : MaintenanceEvents.materialFailed(usage, step, exception));
+        if (before.changedIn(usage)) {
+            // markFailed conserva la peticion en duda: si la hay, lo que no se sabe es si stock la aplico.
+            events.publish(usage.isInDoubt()
+                    ? MaintenanceEvents.materialInDoubt(usage, step, exception)
+                    : MaintenanceEvents.materialFailed(usage, step, exception));
+        }
+    }
+
+    /** Lo que la linea contaba de su conversacion con stock antes de un paso. */
+    private record LineState(StockSyncStatus status, StockRequestType inDoubt, String error) {
+
+        static LineState of(MaintenanceMaterialUsage usage) {
+            return new LineState(usage.getStockSyncStatus(), usage.getStockRequestInDoubt(), usage.getStockSyncError());
+        }
+
+        /**
+         * Si el paso dejo la linea contando otra cosa. Un rechazo cuenta tambien su motivo: otro motivo
+         * es otra cosa que arreglar. Una caida no, porque su texto cambia (conexion rechazada, tiempo
+         * agotado, circuito abierto) sin decir nada nuevo; si cambia la peticion en duda, si.
+         */
+        boolean changedIn(MaintenanceMaterialUsage usage) {
+            if (status != usage.getStockSyncStatus()) {
+                return true;
+            }
+            return status == StockSyncStatus.REJECTED
+                    ? !Objects.equals(error, usage.getStockSyncError())
+                    : inDoubt != usage.getStockRequestInDoubt();
+        }
     }
 }

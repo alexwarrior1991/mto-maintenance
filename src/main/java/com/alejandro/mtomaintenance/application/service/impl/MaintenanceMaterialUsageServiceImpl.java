@@ -104,7 +104,8 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
             usage.setAllowOverConsumption(request.allowOverConsumption());
         }
         if (request.plannedQuantity() != null) {
-            if (usage.getStockReservationId() != null) {
+            // La misma cantidad no es un cambio: un formulario reenvia la linea entera para apuntar lo consumido.
+            if (usage.getStockReservationId() != null && changes(request.plannedQuantity(), usage.getPlannedQuantity())) {
                 throw new MaterialUsageException("The planned quantity of a reserved line cannot change; remove it and register it again");
             }
             BigDecimal planned = domain(() -> new Quantity(request.plannedQuantity(), usage.getUnit())).amount();
