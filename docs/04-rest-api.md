@@ -69,6 +69,13 @@ The value is case insensitive; an unknown one is `400 VAL-001`. The file arrives
 `progress-report-<date>[-ep<n>][-track<n>]`, `monthly-report-<yyyy-MM>[-ep<n>]` — so a month of
 reports saved in one folder sorts itself.
 
+Times are printed in the zone of `app.reports.time-zone` (`APP_REPORT_TIME_ZONE`, `Asia/Jerusalem` by
+default): a shift that started at `2026-01-27T21:10:00Z` reads 23:10 in its workbook and its PDF, and
+the generation time at the bottom too. The same zone cuts the days and months that count — the month
+of `/reports/monthly`, the inspection dates of `/reports/progress` — so a profile completed at 01:30
+local time on the first of the month is counted in the month its row says. The JSON is unchanged:
+its instants stay UTC with their `Z`. A misspelt zone stops the application from starting.
+
 Two deliberate differences from the JSON:
 
 - The PDF prints a subset of the shift report's columns. Nineteen columns on an A4 would leave about
@@ -164,7 +171,7 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 404 `HTTP-404` | Unknown route |
 | 405 `REQ-405` | The route exists but not for that method; the `Allow` header lists the ones it takes |
 | 409 `TRN-001` | Invalid transition |
-| 409 `AST-001` | Disabled asset; a field of a synchronized asset that only `mto-configuration` changes; `enabled=true` on an asset disabled at the source |
+| 409 `AST-001` | Disabled asset; changing a field of a synchronized asset that only `mto-configuration` changes (sending it with the value it already has is accepted); `enabled=true` on an asset disabled at the source |
 | 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them |
 | 409 `MAT-001` | Over-consumption (also taking `allowOverConsumption` off a line consumed above plan), duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |

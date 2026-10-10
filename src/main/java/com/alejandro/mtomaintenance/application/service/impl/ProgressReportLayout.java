@@ -5,7 +5,6 @@ import com.alejandro.mtomaintenance.application.dto.export.ReportValue;
 import com.alejandro.mtomaintenance.application.dto.report.ProgressReportResponse;
 import com.alejandro.mtomaintenance.application.dto.report.ProgressRowResponse;
 
-import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
@@ -38,7 +37,7 @@ final class ProgressReportLayout {
     private ProgressReportLayout() {
     }
 
-    static ReportDocument of(ProgressReportResponse report, Instant generatedAt) {
+    static ReportDocument of(ProgressReportResponse report, ReportTime time) {
         List<List<ReportValue>> rows = report.rows().stream().map(ProgressReportLayout::row).toList();
         String executionPackage = single(report, ProgressRowResponse::executionPackageId);
         String track = single(report, ProgressRowResponse::trackId);
@@ -46,7 +45,7 @@ final class ProgressReportLayout {
 
         return new ReportDocument(
                 ReportLayouts.fileBaseName(REPORT,
-                        ReportLayouts.text(keyDate(report, generatedAt)),
+                        ReportLayouts.text(keyDate(report, time)),
                         executionPackage == null ? null : "ep" + executionPackage,
                         track == null ? null : "track" + track),
                 SHEET,
@@ -55,12 +54,12 @@ final class ProgressReportLayout {
                         executionPackage == null ? null : "execution package " + executionPackage,
                         track == null ? null : "track " + track,
                         assetType,
-                        period(report)),
+                        period(report, time)),
                 ReportDocument.Layout.LANDSCAPE,
-                ReportLayouts.at(generatedAt),
+                time.generated(),
                 List.of(
-                        new ReportDocument.Field("From", ReportLayouts.timestamp(report.from())),
-                        new ReportDocument.Field("To", ReportLayouts.timestamp(report.to()))),
+                        new ReportDocument.Field("From", time.timestamp(report.from())),
+                        new ReportDocument.Field("To", time.timestamp(report.to()))),
                 new ReportDocument.Table(COLUMNS, rows),
                 List.of(
                         new ReportDocument.Field("Assets", ReportValue.count(report.totalAssets())),
@@ -83,15 +82,15 @@ final class ProgressReportLayout {
     }
 
     /** Sin rango pedido el informe es "todo lo que hay": la fecha que lo identifica es la de hoy. */
-    private static LocalDate keyDate(ProgressReportResponse report, Instant generatedAt) {
-        LocalDate to = ReportLayouts.day(report.to());
-        LocalDate from = ReportLayouts.day(report.from());
-        return to != null ? to : from != null ? from : ReportLayouts.day(generatedAt);
+    private static LocalDate keyDate(ProgressReportResponse report, ReportTime time) {
+        LocalDate to = time.day(report.to());
+        LocalDate from = time.day(report.from());
+        return to != null ? to : from != null ? from : time.today();
     }
 
-    private static String period(ProgressReportResponse report) {
-        LocalDate from = ReportLayouts.day(report.from());
-        LocalDate to = ReportLayouts.day(report.to());
+    private static String period(ProgressReportResponse report, ReportTime time) {
+        LocalDate from = time.day(report.from());
+        LocalDate to = time.day(report.to());
         if (from == null && to == null) {
             return "all time";
         }

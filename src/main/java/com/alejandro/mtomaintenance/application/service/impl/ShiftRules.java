@@ -18,13 +18,21 @@ final class ShiftRules {
     private ShiftRules() {
     }
 
+    /**
+     * La tarea tiene que estar en una de las vias del turno. Un aislador de seccion o un seccionador
+     * que une dos vias ({@code connectedTrackId}) esta en las dos, igual que en los informes por via:
+     * se trabaja desde un turno que cubra cualquiera de ellas.
+     */
     static void requireSameTrack(MaintenanceShift shift, MaintenanceTask task) {
-        Long taskTrack = task.getAsset() != null && task.getAsset().getTrackId() != null
-                ? task.getAsset().getTrackId()
+        CatenaryAsset asset = task.getAsset();
+        Long taskTrack = asset != null && asset.getTrackId() != null
+                ? asset.getTrackId()
                 : task.getOrder().getTrackId();
-        if (taskTrack != null && !shift.worksOn(taskTrack)) {
+        Long connectedTrack = asset == null ? null : asset.getConnectedTrackId();
+        if (taskTrack != null && !shift.worksOn(taskTrack) && (connectedTrack == null || !shift.worksOn(connectedTrack))) {
             throw new ShiftException("Shift " + shift.getCode() + " works on tracks " + shift.getTrackIds().stream().sorted().toList()
-                    + " but the task belongs to track " + taskTrack);
+                    + " but the task belongs to track " + taskTrack
+                    + (connectedTrack == null ? "" : " and connects with track " + connectedTrack));
         }
     }
 

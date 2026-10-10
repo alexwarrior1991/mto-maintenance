@@ -10,7 +10,8 @@
 | `SECTION_INSULATOR` | event `section-insulator` | `code = SIN-<sourceId>`, `stationId`, `enabled` from the source, `installationType` (`TRACK_CONNECTION` / `IN_TRACK`), `trackId` + `connectedTrackId`, `startKp`/`endKp` spanning its turnouts, and its `switches` (`catenary_asset_switch`: `W31`, kp, `1:9`, track) |
 
 Rules: an asset with an origin cannot be created or renamed through the API (`PUT` only touches
-`description`, `enabled`, `preventiveIntervalDays`); `DELETE` disables, never deletes; no new
+`description`, `enabled`, `preventiveIntervalDays`; the other fields are accepted with the value the
+asset already has, so a form can send it back whole, and changing one is 409 `AST-001`); `DELETE` disables, never deletes; no new
 order, inspection or task on a disabled asset; `preventiveIntervalDays` +
 `lastPreventiveCompletedAt` give `nextPreventiveDueAt` and the `preventiveDueBefore` filter (an
 asset never done is due).
@@ -86,7 +87,8 @@ second execution package is a second shift), kp range, personnel, equipment, obs
 States `PLANNED → IN_PROGRESS → CLOSED`, `CANCELLED` before closing. Closing requires the actual
 times and returns to `PENDING` (without shift) the tasks that were not completed.
 
-Window rules: a task's profile must be on one of the shift's tracks; a task whose types require
+Window rules: a task's profile must be on one of the shift's tracks (an insulator or a disconnector
+that joins two tracks is on both, `connectedTrackId`, as in the reports by track); a task whose types require
 full possession cannot be assigned to or completed in a `PARTIAL` shift; a `DIVERTED` section only
 accepts `FULL` shifts. The same rules hold when a shift with tasks already assigned is changed:
 removing a track one of its open tasks is on, or making it `PARTIAL` under a task that needs full

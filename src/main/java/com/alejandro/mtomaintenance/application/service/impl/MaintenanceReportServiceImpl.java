@@ -5,6 +5,7 @@ import com.alejandro.mtomaintenance.application.dto.report.MonthlyReportResponse
 import com.alejandro.mtomaintenance.application.dto.report.ProgressReportResponse;
 import com.alejandro.mtomaintenance.application.dto.report.ProgressRowResponse;
 import com.alejandro.mtomaintenance.application.service.MaintenanceReportService;
+import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
@@ -22,7 +23,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.YearMonth;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -41,12 +42,13 @@ class MaintenanceReportServiceImpl implements MaintenanceReportService {
     private static final BigDecimal THOUSAND = BigDecimal.valueOf(1000);
 
     private final MaintenanceReportRepository repository;
+    private final ReportProperties properties;
 
     @Override
     @Transactional(readOnly = true)
     public ProgressReportResponse progress(Long executionPackageId, Long trackId, CatenaryAssetType assetType, Instant from, Instant to) {
         List<CatenaryAsset> assets = repository.findReportableAssets(executionPackageId, trackId, assetType);
-        Set<UUID> worked = repository.findAssetIdsWorkedBetween(from, to);
+        Set<UUID> worked = repository.findAssetIdsWorkedBetween(from, to, properties.zone());
 
         // Agrupado por (EP, via, tipo). Un perfil cuenta como revisado si tuvo una tarea completada o
         // una inspeccion en el rango; sin rango, si alguna vez lo tuvo (lastPreventiveCompletedAt).
@@ -95,8 +97,11 @@ class MaintenanceReportServiceImpl implements MaintenanceReportService {
     @Override
     @Transactional(readOnly = true)
     public MonthlyReportResponse monthly(YearMonth month, Long executionPackageId) {
-        Instant from = month.atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
-        Instant to = month.plusMonths(1).atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+        // El mes de la zona de los informes, la misma en la que se imprimen sus horas: un perfil
+        // completado la noche del 31 a la 01:30 hora local cuenta en el mes siguiente, como dice su fila.
+        ZoneId zone = properties.zone();
+        Instant from = month.atDay(1).atStartOfDay(zone).toInstant();
+        Instant to = month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant();
 
         List<MaintenanceShift> shifts = repository.findShiftsBetween(month.atDay(1), month.atEndOfMonth(), executionPackageId);
         int closed = (int) shifts.stream().filter(shift -> shift.getStatus() == ShiftStatus.CLOSED).count();

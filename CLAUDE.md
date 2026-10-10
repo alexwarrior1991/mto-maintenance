@@ -69,7 +69,8 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
   (the `RestClientStockClient`), `export` (the POI and OpenPDF writers).
 - `configuration` — security (Keycloak resource server), `rabbitmq`, `messaging` (signature and
   signer), `outbox` (every outbox piece as a `@Bean`, gone with `app.rabbitmq.enabled=false`),
-  `events` (the daily `PreventiveDueSoonService` scheduler), `stock` (`StockProperties`,
+  `events` (the daily `PreventiveDueSoonService` scheduler), `reports` (`ReportProperties`, the report
+  time zone), `stock` (`StockProperties`,
   `StockClientConfiguration`), JPA auditing, OpenAPI.
 
 ### Domain in one paragraph
@@ -77,7 +78,8 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
 A `CatenaryAsset` is what maintenance is done on: a `TRACK_SECTION` (created through the API, a kp
 range on a track, `MAIN` or `DIVERTED`), or a `PROFILE`, `DISCONNECTOR` or `SECTION_INSULATOR`
 synchronized from `mto-configuration` (`source_service` + `source_entity_id`, never created through
-the API, only `description`/`enabled`/`preventiveIntervalDays` editable). `enabled` is the sum of two
+the API, only `description`/`enabled`/`preventiveIntervalDays` editable; the rest is accepted only with
+the value it already has). `enabled` is the sum of two
 voices: `enabledAtSource` (only the events write it) and `disabledLocally` (only `DELETE` and `PUT`
 write it; no event undoes it), kept together by a `CHECK`; `PUT enabled=false` needs
 `maintenance-delete` like the `DELETE`. A disconnector on a pole takes its
@@ -208,9 +210,12 @@ of the requested format. The exporters are `@Component`s indexed by format at st
 registry-by-key as the master-data handlers, failing the startup on a duplicate or a missing one — so
 POI and OpenPDF live only in `infrastructure/export` and a new format is one class plus one
 `ReportFormat` constant, with no controller change. Headers are in English on purpose (the catalogue
-and the enum values printed in the cells already are); see `ReportLayouts` for that and for the
-report time zone. `docs/04-rest-api.md` documents the parameter, the file names and the columns the
-PDF leaves out.
+and the enum values printed in the cells already are); see `ReportLayouts` for that. Instants are
+printed in `app.reports.time-zone` (`Asia/Jerusalem` by default, `ReportProperties`), turned into dates
+only by `ReportTime`, and `MaintenanceReportServiceImpl` cuts its months and inspection days in the
+same zone: one property for both halves, so a row and the counter that counts it never fall on
+different days. The JSON stays UTC. `docs/04-rest-api.md` documents the parameter, the file names
+and the columns the PDF leaves out.
 
 ### Auditing
 

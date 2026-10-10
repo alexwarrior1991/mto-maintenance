@@ -44,8 +44,6 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     /** Lo que un PATCH puede vaciar de un activo; en uno sincronizado, paquete y estacion son del origen. */
     private static final Set<String> CLEARABLE = Set.of("description", "preventiveIntervalDays", "executionPackageId", "stationId");
 
-    /** Lo que en un activo de datos maestros solo cambia mto-configuration, tambien para vaciarlo. */
-    private static final Set<String> IDENTITY = Set.of("executionPackageId", "stationId");
 
     private final CatenaryAssetRepository repository;
     private final CatenaryAssetMapper mapper;
@@ -95,11 +93,12 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
         StaleVersionException.check("Catenary asset " + asset.getCode(), asset.getVersion(), request.version());
         PatchRules.requireClearable(patch, CLEARABLE);
 
-        if (asset.isFromMasterData() && (request.touchesIdentity() || patch.cleared().stream().anyMatch(IDENTITY::contains))) {
+        if (asset.isFromMasterData() && (changesIdentity(asset, request) || clearsIdentity(asset, patch))) {
             // La identidad y la localizacion las decide mto-configuration: cambiarlas aqui dejaria
             // el activo distinto de su origen hasta el siguiente evento, que lo pisaria sin avisar.
             throw new AssetDisabledException("Catenary asset " + asset.getCode()
-                    + " comes from master data: only description, enabled and preventiveIntervalDays can be changed here");
+                    + " comes from master data: only description, enabled and preventiveIntervalDays can be changed here; "
+                    + "the other fields may be sent only with the values it already has");
         }
 
         if (request.name() != null) {
@@ -191,5 +190,38 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     @Transactional(readOnly = true)
     public PageResponse<EntityRevisionResponse<CatenaryAssetResponse>> findRevisions(UUID id, Pageable pageable) {
         return auditService.findRevisions(CatenaryAsset.class, id, mapper::toResponse, pageable);
+    }
+    /**
+     * Si la peticion cambia algo que en un activo de datos maestros decide mto-configuration. Lo que
+     * llega igual a lo guardado no es un cambio: un formulario reenvia el activo entero para tocar la
+     * descripcion, y eso era un 409. El kp se compara por valor (12847.99 y 12847.990 son el mismo).
+     *
+     * <p>Las agujas no aparecen porque no estan en la peticion: las escribe el manejador de datos
+     * maestros y no hay forma de mandarlas por API.</p>
+     */
+    private static boolean changesIdentity(CatenaryAsset asset, CatenaryAssetUpdateRequest request) {
+        return differs(request.name() == null ? null : request.name().trim(), asset.getName())
+                || differs(request.executionPackageId(), asset.getExecutionPackageId())
+                || differs(request.trackId(), asset.getTrackId())
+                || differs(request.stationId(), asset.getStationId())
+                || differsKp(request.startKp(), asset.getStartKp())
+                || differsKp(request.endKp(), asset.getEndKp())
+                || differs(request.trackKind(), asset.getTrackKind())
+                || differs(request.connectedTrackId(), asset.getConnectedTrackId())
+                || differs(request.installationType(), asset.getInstallationType());
+    }
+
+    /** Vaciar lo que el origen decide, salvo que ya estuviera vacio. */
+    private static boolean clearsIdentity(CatenaryAsset asset, MergePatch<CatenaryAssetUpdateRequest> patch) {
+        return (patch.clears("executionPackageId") && asset.getExecutionPackageId() != null)
+                || (patch.clears("stationId") && asset.getStationId() != null);
+    }
+
+    private static boolean differs(Object requested, Object current) {
+        return requested != null && !requested.equals(current);
+    }
+
+    private static boolean differsKp(BigDecimal requested, BigDecimal current) {
+        return requested != null && (current == null || requested.compareTo(current) != 0);
     }
 }

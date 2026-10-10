@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.application.dto.report.ProgressReportRespons
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.service.ReportExportService;
 import com.alejandro.mtomaintenance.application.service.ReportExporter;
+import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -38,26 +39,33 @@ class ReportExportServiceImpl implements ReportExportService {
     private static final Logger LOGGER = LoggerFactory.getLogger(ReportExportServiceImpl.class);
 
     private final Map<ReportFormat, ReportExporter> exportersByFormat;
+    private final ReportProperties properties;
 
-    ReportExportServiceImpl(List<ReportExporter> exporters) {
+    ReportExportServiceImpl(List<ReportExporter> exporters, ReportProperties properties) {
         this.exportersByFormat = indexByFormat(exporters);
+        this.properties = properties;
 
         LOGGER.info("Report exporters ready: {} registered for {}", exportersByFormat.size(), exportersByFormat.keySet());
     }
 
     @Override
     public ExportedReport exportShiftReport(ShiftReportResponse report, ReportFormat format) {
-        return write(ShiftReportLayout.of(report, Instant.now()), format);
+        return write(ShiftReportLayout.of(report, now()), format);
     }
 
     @Override
     public ExportedReport exportProgressReport(ProgressReportResponse report, ReportFormat format) {
-        return write(ProgressReportLayout.of(report, Instant.now()), format);
+        return write(ProgressReportLayout.of(report, now()), format);
     }
 
     @Override
     public ExportedReport exportMonthlyReport(MonthlyReportResponse report, ReportFormat format) {
-        return write(MonthlyReportLayout.of(report, Instant.now()), format);
+        return write(MonthlyReportLayout.of(report, now()), format);
+    }
+
+    /** Ahora, en la zona de los informes: la misma con la que {@code MaintenanceReportServiceImpl} corta los meses. */
+    private ReportTime now() {
+        return new ReportTime(Instant.now(), properties.zone());
     }
 
     private ExportedReport write(ReportDocument document, ReportFormat format) {

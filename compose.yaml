@@ -35,6 +35,8 @@ services:
       APP_RABBITMQ_EVENTS_EXCHANGE: ${APP_RABBITMQ_EVENTS_EXCHANGE:-mto.maintenance.exchange}
       APP_OUTBOX_ENABLED: ${APP_OUTBOX_ENABLED:-true}
       APP_EVENTS_PREVENTIVE_DUE_SOON_ENABLED: ${APP_EVENTS_PREVENTIVE_DUE_SOON_ENABLED:-true}
+      # Zone the exported reports print in and cut their months by; the JSON stays UTC.
+      APP_REPORT_TIME_ZONE: ${APP_REPORT_TIME_ZONE:-Asia/Jerusalem}
       MESSAGING_SIGNATURE_SECRET: ${MESSAGING_SIGNATURE_SECRET:-}
       MESSAGING_SIGNATURE_MODE: ${MESSAGING_SIGNATURE_MODE:-OPTIONAL}
       # mto-stock, reached through the host like the rest of the platform.

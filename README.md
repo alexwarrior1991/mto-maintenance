@@ -31,6 +31,7 @@ The ones without a default:
 | `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_AUDIENCE` | `mto-maintenance-api` |
 | `KEYCLOAK_SERVICE_CLIENT_SECRET` | Secret of the service account `mto-maintenance-svc` used to call `mto-stock` |
 | `MTO_STOCK_URL` | Base URL of `mto-stock` (`http://localhost:8080` from the IDE) |
+| `APP_REPORT_TIME_ZONE` | Zone the exported reports print in and cut their months by (`Asia/Jerusalem`); the JSON stays UTC |
 
 Switches worth knowing: `APP_RABBITMQ_ENABLED=false` starts without a broker (no master data in,
 no events out), `APP_OUTBOX_ENABLED=false` keeps writing the events and stops publishing them,
