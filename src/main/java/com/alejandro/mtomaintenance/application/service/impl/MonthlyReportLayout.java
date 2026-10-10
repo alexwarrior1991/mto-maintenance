@@ -5,7 +5,6 @@ import com.alejandro.mtomaintenance.application.dto.export.ReportValue;
 import com.alejandro.mtomaintenance.application.dto.report.MonthlyMaterialLineResponse;
 import com.alejandro.mtomaintenance.application.dto.report.MonthlyReportResponse;
 
-import java.time.Instant;
 import java.util.List;
 
 /**
@@ -34,7 +33,7 @@ final class MonthlyReportLayout {
     private MonthlyReportLayout() {
     }
 
-    static ReportDocument of(MonthlyReportResponse report, Instant generatedAt) {
+    static ReportDocument of(MonthlyReportResponse report, ReportTime time) {
         List<List<ReportValue>> rows = report.materials().stream().map(MonthlyReportLayout::row).toList();
         String month = ReportLayouts.text(report.month());
         String executionPackage = ReportLayouts.text(report.executionPackageId());
@@ -45,7 +44,7 @@ final class MonthlyReportLayout {
                 "Monthly report " + (month == null ? "" : month),
                 ReportLayouts.subtitle(executionPackage == null ? null : "execution package " + executionPackage),
                 ReportDocument.Layout.PORTRAIT,
-                ReportLayouts.at(generatedAt),
+                time.generated(),
                 header(report, month, executionPackage),
                 new ReportDocument.Table(COLUMNS, rows),
                 List.of());

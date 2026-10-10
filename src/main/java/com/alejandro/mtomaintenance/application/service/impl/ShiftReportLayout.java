@@ -8,7 +8,6 @@ import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamSummaryResponse;
 
-import java.time.Instant;
 import java.util.List;
 
 /**
@@ -60,9 +59,9 @@ final class ShiftReportLayout {
     private ShiftReportLayout() {
     }
 
-    static ReportDocument of(ShiftReportResponse report, Instant generatedAt) {
+    static ReportDocument of(ShiftReportResponse report, ReportTime time) {
         MaintenanceShiftResponse shift = report.shift();
-        List<List<ReportValue>> rows = report.rows().stream().map(ShiftReportLayout::row).toList();
+        List<List<ReportValue>> rows = report.rows().stream().map(each -> row(each, time)).toList();
 
         return new ReportDocument(
                 ReportLayouts.fileBaseName(REPORT, ReportLayouts.text(shift.shiftDate()), shift.code()),
@@ -70,8 +69,8 @@ final class ShiftReportLayout {
                 shift.code() == null ? "Daily shift report" : "Daily shift report " + shift.code(),
                 subtitle(shift),
                 ReportDocument.Layout.LANDSCAPE,
-                ReportLayouts.at(generatedAt),
-                header(shift),
+                time.generated(),
+                header(shift, time),
                 new ReportDocument.Table(COLUMNS, rows),
                 totals(report));
     }
@@ -86,7 +85,7 @@ final class ShiftReportLayout {
                 ReportLayouts.text(shift.status()));
     }
 
-    private static List<ReportDocument.Field> header(MaintenanceShiftResponse shift) {
+    private static List<ReportDocument.Field> header(MaintenanceShiftResponse shift, ReportTime time) {
         MaintenanceTeamSummaryResponse team = shift.team();
         return List.of(
                 new ReportDocument.Field("Shift", ReportValue.text(shift.code())),
@@ -100,11 +99,11 @@ final class ShiftReportLayout {
                 new ReportDocument.Field("Tracks", ReportValue.text(join(shift.trackIds()))),
                 new ReportDocument.Field("Start kp", ReportValue.decimal(shift.startKp(), 3)),
                 new ReportDocument.Field("End kp", ReportValue.decimal(shift.endKp(), 3)),
-                new ReportDocument.Field("Planned start", ReportLayouts.timestamp(shift.plannedStart())),
-                new ReportDocument.Field("Planned end", ReportLayouts.timestamp(shift.plannedEnd())),
-                new ReportDocument.Field("Actual start", ReportLayouts.timestamp(shift.actualStart())),
-                new ReportDocument.Field("Actual end", ReportLayouts.timestamp(shift.actualEnd())),
-                new ReportDocument.Field("Voltage cut-off", ReportLayouts.timestamp(shift.voltageCutoffAt())),
+                new ReportDocument.Field("Planned start", time.timestamp(shift.plannedStart())),
+                new ReportDocument.Field("Planned end", time.timestamp(shift.plannedEnd())),
+                new ReportDocument.Field("Actual start", time.timestamp(shift.actualStart())),
+                new ReportDocument.Field("Actual end", time.timestamp(shift.actualEnd())),
+                new ReportDocument.Field("Voltage cut-off", time.timestamp(shift.voltageCutoffAt())),
                 new ReportDocument.Field("Net work minutes", ReportValue.count(shift.netWorkMinutes())),
                 new ReportDocument.Field("Blocking disconnectors", disconnectors(shift)),
                 new ReportDocument.Field("Earthing points", ReportValue.text(shift.earthingPoints())),
@@ -123,7 +122,7 @@ final class ShiftReportLayout {
                 new ReportDocument.Field("Defects resolved", ReportValue.count(report.defectsResolved())));
     }
 
-    private static List<ReportValue> row(ShiftReportRowResponse row) {
+    private static List<ReportValue> row(ShiftReportRowResponse row, ReportTime time) {
         return List.of(
                 ReportValue.count(row.number()),
                 ReportValue.text(row.orderCode()),
@@ -138,8 +137,8 @@ final class ShiftReportLayout {
                 ReportValue.text(row.worksPerformed()),
                 ReportValue.text(row.defectsFound()),
                 ReportValue.textList(row.materials()),
-                ReportLayouts.timestamp(row.startedAt()),
-                ReportLayouts.timestamp(row.completedAt()),
+                time.timestamp(row.startedAt()),
+                time.timestamp(row.completedAt()),
                 ReportValue.text(row.status()),
                 ReportValue.flag(row.workComplete()),
                 ReportValue.date(row.repairPlannedDate()),

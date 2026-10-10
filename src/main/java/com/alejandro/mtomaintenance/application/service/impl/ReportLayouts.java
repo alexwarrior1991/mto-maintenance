@@ -1,13 +1,6 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
-import com.alejandro.mtomaintenance.application.dto.export.ReportValue;
-
 import java.text.Normalizer;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -32,18 +25,6 @@ import java.util.stream.Collectors;
  */
 final class ReportLayouts {
 
-    /**
-     * Zona en la que se imprime cualquier instante de un informe.
-     *
-     * <p>Es UTC porque {@code MaintenanceReportServiceImpl} ya recorta los meses en UTC y los
-     * minutos netos de un turno salen de instantes. Imprimir en otra zona pondria el "completado a
-     * la 01:30" de una fila en un dia distinto del contador que lo cuenta, dentro del mismo fichero
-     * y sin que nada fallara. Es una constante y no una propiedad a proposito: un ajuste por
-     * despliegue permitiria mover solo una de las dos mitades. El dia que se decida la zona local,
-     * se mueven las dos.</p>
-     */
-    static final ZoneId REPORT_ZONE = ZoneOffset.UTC;
-
     /** Lo que sobrevive en un nombre de fichero en Windows, en una cabecera HTTP y en una terminal. */
     private static final Pattern UNSAFE_IN_FILE_NAME = Pattern.compile("[^A-Za-z0-9._]+");
 
@@ -54,23 +35,6 @@ final class ReportLayouts {
     private static final String SUBTITLE_SEPARATOR = " \u00b7 ";
 
     private ReportLayouts() {
-    }
-
-    /**
-     * Pasa un instante a la zona del informe. Es el unico sitio donde se hace, y por eso los
-     * exportadores reciben fechas ya situadas y no tienen que elegir zona: si eligieran, el .xlsx y
-     * el PDF del mismo turno podrian no coincidir.
-     */
-    static LocalDateTime at(Instant instant) {
-        return instant == null ? null : LocalDateTime.ofInstant(instant, REPORT_ZONE);
-    }
-
-    static ReportValue timestamp(Instant instant) {
-        return ReportValue.timestamp(at(instant));
-    }
-
-    static LocalDate day(Instant instant) {
-        return instant == null ? null : LocalDate.ofInstant(instant, REPORT_ZONE);
     }
 
     /**

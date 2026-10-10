@@ -7,6 +7,7 @@ import com.alejandro.mtomaintenance.application.dto.asset.PreventiveDueSoonRepor
 import com.alejandro.mtomaintenance.application.dto.messaging.DomainEvent;
 import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.configuration.events.PreventiveDueSoonProperties;
+import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import java.nio.charset.StandardCharsets;
@@ -157,7 +158,9 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -874,6 +877,32 @@ class BusinessLayerTest {
     }
 
     @Test
+    void aFormThatSendsASynchronizedAssetBackWholeIsAcceptedUnlessItChangesWhatTheSourceDecides() {
+        AssetFixture fixture = new AssetFixture();
+        CatenaryAsset synced = profile("12-2.27", "12847.990");
+        synced.setSourceService("mto-configuration");
+        synced.setSourceEntityId("prf-1");
+        when(fixture.lookups.asset(synced.getId())).thenReturn(synced);
+
+        // Lo que manda un formulario: el activo entero, con la descripcion nueva y el kp con otra escala.
+        fixture.service.update(synced.getId(), new CatenaryAssetUpdateRequest(" 12-2.27 ", "Next to the bridge", null, null, 6L, 2L, null,
+                new BigDecimal("12847.99"), new BigDecimal("12847.990"), null, null, null, null));
+        assertEquals("Next to the bridge", synced.getDescription());
+        assertEquals("12-2.27", synced.getName());
+
+        assertThrows(AssetDisabledException.class, () -> fixture.service.update(synced.getId(),
+                new CatenaryAssetUpdateRequest("12-2.27", null, null, null, 6L, 3L, null, null, null, null, null, null, null)), "another track");
+        assertThrows(AssetDisabledException.class, () -> fixture.service.update(synced.getId(),
+                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, new BigDecimal("12848"), null, null, null, null, null)), "another kp");
+        assertThrows(AssetDisabledException.class, () -> fixture.service.update(synced.getId(),
+                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, 9L, null, null, null, null, null, null)), "a station it does not have");
+        assertThrows(AssetDisabledException.class, () -> fixture.service.update(synced.getId(),
+                new CatenaryAssetUpdateRequest(null, null, null, null, null, null, null, null, null, TrackKind.MAIN, null, null, null)),
+                "a track kind, which only own sections have");
+        assertEquals(2L, synced.getTrackId());
+    }
+
+    @Test
     void assetsFromMasterDataOnlyAcceptDescriptionEnabledAndPreventiveInterval() {
         AssetFixture fixture = new AssetFixture();
         CatenaryAsset synced = profile("12-2.27", "12847.990");
@@ -1023,8 +1052,10 @@ class BusinessLayerTest {
         when(assets.lookups.asset(synced.getId())).thenReturn(synced);
         assets.service.patch(synced.getId(), new MergePatch<>(assetUpdate(null), Set.of("preventiveIntervalDays", "description")));
         assertNull(synced.getPreventiveIntervalDays());
-        assertThrows(AssetDisabledException.class, () -> assets.service.patch(synced.getId(), new MergePatch<>(assetUpdate(null), Set.of("stationId"))),
-                "Emptying the station of a synchronized asset is changing what mto-configuration decides");
+        assertThrows(AssetDisabledException.class, () -> assets.service.patch(synced.getId(), new MergePatch<>(assetUpdate(null), Set.of("executionPackageId"))),
+                "Emptying the package of a synchronized asset is changing what mto-configuration decides");
+        assets.service.patch(synced.getId(), new MergePatch<>(assetUpdate(null), Set.of("stationId")));
+        assertNull(synced.getStationId(), "A profile has no station: emptying it changes nothing, so it is not refused");
         CatenaryAsset section = trackSection();
         section.setStationId(9L);
         when(assets.lookups.asset(section.getId())).thenReturn(section);
@@ -1868,6 +1899,22 @@ class BusinessLayerTest {
         order.getAsset().setTrackKind(TrackKind.DIVERTED);
         assertThrows(ShiftException.class, () -> ShiftRules.requireCompatiblePossession(partial, plain));
         assertThrows(ShiftException.class, () -> ShiftRules.requireInProgress(shift(2L, PossessionType.PARTIAL, ShiftStatus.PLANNED)));
+    }
+
+    @Test
+    void anInsulatorThatJoinsTwoTracksIsWorkedFromAShiftOnEitherOfThem() {
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceTask onTheInsulator = task(order, MaintenanceTaskStatus.PENDING);
+        CatenaryAsset insulator = CatenaryAsset.builder().code("SIN-41").name("SI-W31").type(CatenaryAssetType.SECTION_INSULATOR)
+                .trackId(1L).connectedTrackId(2L).build();
+        onTheInsulator.setAsset(insulator);
+
+        assertDoesNotThrow(() -> ShiftRules.requireSameTrack(shift(1L, PossessionType.FULL, ShiftStatus.IN_PROGRESS), onTheInsulator));
+        assertDoesNotThrow(() -> ShiftRules.requireSameTrack(shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS), onTheInsulator),
+                "Its other track: the reports by track already count it there");
+        ShiftException elsewhere = assertThrows(ShiftException.class,
+                () -> ShiftRules.requireSameTrack(shift(3L, PossessionType.FULL, ShiftStatus.IN_PROGRESS), onTheInsulator));
+        assertTrue(elsewhere.getMessage().contains("connects with track 2"), elsewhere.getMessage());
     }
 
     @Test
@@ -2732,7 +2779,7 @@ class BusinessLayerTest {
     @Test
     void theProgressReportGroupsAssetsByPackageTrackAndTypeAndCountsTheSpansCovered() {
         MaintenanceReportRepository repository = mock(MaintenanceReportRepository.class);
-        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository);
+        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository, UTC_REPORTS);
         CatenaryAsset first = profile("12-2.27", "12847.990");
         CatenaryAsset second = profile("12-2.28", "12899.290");
         CatenaryAsset third = profile("13-2.01", "13007.290");
@@ -2741,7 +2788,7 @@ class BusinessLayerTest {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-01-31T23:59:59Z");
         when(repository.findReportableAssets(6L, null, null)).thenReturn(List.of(first, second, third, disconnector));
-        when(repository.findAssetIdsWorkedBetween(from, to)).thenReturn(Set.of(first.getId()));
+        when(repository.findAssetIdsWorkedBetween(from, to, UTC)).thenReturn(Set.of(first.getId()));
 
         ProgressReportResponse report = service.progress(6L, null, null, from, to);
 
@@ -2763,21 +2810,21 @@ class BusinessLayerTest {
 
         // Fuera de la ventana el preventivo antiguo ya no cuenta.
         Instant laterFrom = Instant.parse("2026-02-01T00:00:00Z");
-        when(repository.findAssetIdsWorkedBetween(laterFrom, null)).thenReturn(Set.of());
+        when(repository.findAssetIdsWorkedBetween(laterFrom, null, UTC)).thenReturn(Set.of());
         assertEquals(0, service.progress(6L, null, null, laterFrom, null).checkedAssets());
     }
 
     @Test
     void filteredByTrackTheProgressReportCountsAnInsulatorOfTwoTracksUnderTheOneAskedFor() {
         MaintenanceReportRepository repository = mock(MaintenanceReportRepository.class);
-        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository);
+        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository, UTC_REPORTS);
         CatenaryAsset profile = profile("40-1.02", "40100.000");
         profile.setTrackId(4L);
         CatenaryAsset insulator = CatenaryAsset.builder().code("SIN-12").name("SI-12").type(CatenaryAssetType.SECTION_INSULATOR)
                 .trackId(2L).connectedTrackId(4L).executionPackageId(6L).build();
         ReflectionTestUtils.setField(insulator, "id", UUID.randomUUID());
         when(repository.findReportableAssets(null, 4L, null)).thenReturn(List.of(profile, insulator));
-        when(repository.findAssetIdsWorkedBetween(null, null)).thenReturn(Set.of());
+        when(repository.findAssetIdsWorkedBetween(null, null, UTC)).thenReturn(Set.of());
 
         ProgressReportResponse report = service.progress(null, 4L, null, null, null);
 
@@ -2790,7 +2837,7 @@ class BusinessLayerTest {
     @Test
     void theMonthlyReportAggregatesShiftsTasksProfilesAndMaterialsByMaterial() {
         MaintenanceReportRepository repository = mock(MaintenanceReportRepository.class);
-        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository);
+        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository, UTC_REPORTS);
         YearMonth month = YearMonth.of(2026, 1);
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-02-01T00:00:00Z");
@@ -2856,7 +2903,7 @@ class BusinessLayerTest {
     void theExportServiceHandsEachReportToTheExporterOfTheRequestedFormat() {
         RecordingExporter workbook = new RecordingExporter(ReportFormat.XLSX);
         RecordingExporter printable = new RecordingExporter(ReportFormat.PDF);
-        ReportExportServiceImpl service = new ReportExportServiceImpl(List.of(workbook, printable));
+        ReportExportServiceImpl service = new ReportExportServiceImpl(List.of(workbook, printable), UTC_REPORTS);
 
         service.exportShiftReport(shiftReport(ShiftStatus.CLOSED, List.of(shiftReportRow())), ReportFormat.XLSX);
         service.exportProgressReport(progressReport(), ReportFormat.PDF);
@@ -2876,11 +2923,11 @@ class BusinessLayerTest {
 
         // Con dos para el mismo formato, cual gana dependeria del orden de escaneo del classpath.
         assertThrows(IllegalStateException.class,
-                () -> new ReportExportServiceImpl(List.of(workbook, new RecordingExporter(ReportFormat.XLSX))));
+                () -> new ReportExportServiceImpl(List.of(workbook, new RecordingExporter(ReportFormat.XLSX)), UTC_REPORTS));
         // Un formato que ?format acepta y nadie escribe seria un 500 la primera vez que lo pidieran.
-        assertThrows(IllegalStateException.class, () -> new ReportExportServiceImpl(List.of(workbook)));
-        assertThrows(IllegalStateException.class, () -> new ReportExportServiceImpl(List.of(new RecordingExporter(ReportFormat.JSON))));
-        assertDoesNotThrow(() -> new ReportExportServiceImpl(List.of(workbook, new RecordingExporter(ReportFormat.PDF))));
+        assertThrows(IllegalStateException.class, () -> new ReportExportServiceImpl(List.of(workbook), UTC_REPORTS));
+        assertThrows(IllegalStateException.class, () -> new ReportExportServiceImpl(List.of(new RecordingExporter(ReportFormat.JSON)), UTC_REPORTS));
+        assertDoesNotThrow(() -> new ReportExportServiceImpl(List.of(workbook, new RecordingExporter(ReportFormat.PDF)), UTC_REPORTS));
     }
 
     @Test
@@ -2899,7 +2946,7 @@ class BusinessLayerTest {
 
     @Test
     void theShiftLayoutExportsAShiftThatHasNotStartedWithItsTimesEmptyAndItsFileNameStable() {
-        ReportDocument document = ShiftReportLayout.of(shiftReport(ShiftStatus.PLANNED, List.of()), GENERATED_AT);
+        ReportDocument document = ShiftReportLayout.of(shiftReport(ShiftStatus.PLANNED, List.of()), AT_UTC);
 
         assertEquals("shift-report-2026-01-27-SH-000001", document.fileBaseName());
         assertEquals(ReportDocument.Layout.LANDSCAPE, document.layout());
@@ -2916,14 +2963,46 @@ class BusinessLayerTest {
         // El DTO del avance no lleva los filtros que lo produjeron: el ambito sale de las filas, y
         // solo cuando todas coinciden, para que el nombre no afirme algo que el contenido desmiente.
         assertEquals("progress-report-2026-01-31-ep6-track2",
-                ProgressReportLayout.of(progressReport(), GENERATED_AT).fileBaseName());
+                ProgressReportLayout.of(progressReport(), AT_UTC).fileBaseName());
         assertEquals("progress-report-2026-01-31-ep6",
-                ProgressReportLayout.of(progressReportAcrossTwoTracks(), GENERATED_AT).fileBaseName(),
+                ProgressReportLayout.of(progressReportAcrossTwoTracks(), AT_UTC).fileBaseName(),
                 "the package every row shares stays; the track they do not share drops");
 
-        assertEquals("monthly-report-2026-01-ep6", MonthlyReportLayout.of(monthlyReport(6L), GENERATED_AT).fileBaseName());
-        assertEquals("monthly-report-2026-01", MonthlyReportLayout.of(monthlyReport(null), GENERATED_AT).fileBaseName());
-        assertEquals(ReportDocument.Layout.PORTRAIT, MonthlyReportLayout.of(monthlyReport(6L), GENERATED_AT).layout());
+        assertEquals("monthly-report-2026-01-ep6", MonthlyReportLayout.of(monthlyReport(6L), AT_UTC).fileBaseName());
+        assertEquals("monthly-report-2026-01", MonthlyReportLayout.of(monthlyReport(null), AT_UTC).fileBaseName());
+        assertEquals(ReportDocument.Layout.PORTRAIT, MonthlyReportLayout.of(monthlyReport(6L), AT_UTC).layout());
+    }
+
+    @Test
+    void reportsPrintAndCutTheirDaysInTheConfiguredZoneWhileTheJsonStaysUtc() {
+        ZoneId jerusalem = ZoneId.of("Asia/Jerusalem");
+        ShiftReportResponse report = shiftReport(ShiftStatus.CLOSED, List.of(shiftReportRow()));
+
+        // El turno arranco a las 21:10 UTC del 27 de enero: en Israel, en invierno, eran las 23:10.
+        ReportDocument local = ShiftReportLayout.of(report, new ReportTime(GENERATED_AT, jerusalem));
+        assertEquals(ReportValue.timestamp(LocalDateTime.of(2026, 1, 27, 23, 10)), headerField(local, "Actual start"));
+        assertEquals(LocalDateTime.of(2026, 1, 28, 7, 30), local.generatedAt());
+        assertEquals(ReportValue.timestamp(LocalDateTime.of(2026, 1, 27, 21, 10)),
+                headerField(ShiftReportLayout.of(report, AT_UTC), "Actual start"));
+
+        // Y el mes que cuenta es el mismo en el que se imprime: febrero empieza a las 22:00 UTC del 31.
+        MaintenanceReportRepository repository = mock(MaintenanceReportRepository.class);
+        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(repository, new ReportProperties("Asia/Jerusalem"));
+        service.monthly(YearMonth.of(2026, 2), 6L);
+        verify(repository).findOrdersCompletedBetween(Instant.parse("2026-01-31T22:00:00Z"), Instant.parse("2026-02-28T22:00:00Z"), 6L);
+        verify(repository).findTasksCompletedBetween(Instant.parse("2026-01-31T22:00:00Z"), Instant.parse("2026-02-28T22:00:00Z"), 6L);
+
+        service.progress(6L, null, null, Instant.parse("2026-02-01T00:00:00Z"), null);
+        verify(repository).findAssetIdsWorkedBetween(Instant.parse("2026-02-01T00:00:00Z"), null, jerusalem);
+    }
+
+    @Test
+    void theReportTimeZoneDefaultsToWhereTheCrewsWorkAndAMisspeltOneStopsTheStartup() {
+        assertEquals(ZoneId.of("Asia/Jerusalem"), new ReportProperties(null).zone());
+        assertEquals(ZoneId.of("Asia/Jerusalem"), new ReportProperties(" ").zone());
+        assertEquals(ZoneId.of("Europe/Madrid"), new ReportProperties(" Europe/Madrid ").zone());
+        IllegalArgumentException misspelt = assertThrows(IllegalArgumentException.class, () -> new ReportProperties("Asia/Jerusalen"));
+        assertTrue(misspelt.getMessage().contains("Asia/Jerusalen"), misspelt.getMessage());
     }
 
     @Test
@@ -2936,6 +3015,9 @@ class BusinessLayerTest {
     }
 
     private static final Instant GENERATED_AT = Instant.parse("2026-01-28T05:30:00Z");
+    private static final ZoneId UTC = ZoneId.of("UTC");
+    private static final ReportProperties UTC_REPORTS = new ReportProperties("UTC");
+    private static final ReportTime AT_UTC = new ReportTime(GENERATED_AT, UTC);
 
     /** Se queda con el documento en vez de escribirlo: aqui se prueba el reparto, no el fichero. */
     private static final class RecordingExporter implements ReportExporter {

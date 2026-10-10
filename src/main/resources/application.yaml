@@ -295,6 +295,12 @@ app:
       # Activos que viajan en el evento, ademas del recuento: los que vencen antes, primero.
       sample-size: 20
 
+  # Informes (parte del turno, avance, mensual). La zona en la que se leen sus instantes, para lo que
+  # se imprime en el .xlsx y el PDF y para los cortes de mes y de dia que cuentan; es una sola para que
+  # las dos mitades no se separen. El JSON sigue en UTC. Una zona mal escrita no deja arrancar.
+  reports:
+    time-zone: ${APP_REPORT_TIME_ZONE:Asia/Jerusalem}
+
   # Integracion con mto-stock: reserva de materiales al planificar una orden, consumo al
   # completarla y liberacion al cancelarla.
   stock:
