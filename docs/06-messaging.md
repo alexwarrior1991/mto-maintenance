@@ -43,7 +43,7 @@ transaction; `recordFailure` runs in its own after it. A message without `data`,
 | Entity | Handler | Effect |
 |---|---|---|
 | `profile` | `ProfileMasterDataHandler` | Upsert `PROFILE` (`PRF-<id>`, name = `profileId`, kp, `track.id`, `track.executionPackageId`, `sectionings[].code` joined), then passes its track and package on to its disconnectors and its package to the insulators of its track / deactivate on `DELETED` |
-| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id` or none; on a pole `profile.id` and `profile.kp`, without one its own `kp` and `track.id`; `connectedTrack.id` either way), then takes track and package from its profile, or without a pole the package of its track / deactivate |
+| `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id` or none; on a pole `profile.id` and `profile.kp`, and `track.id` when it switches another track than its pole's; without one its own `kp` and `track.id`; `connectedTrack.id` either way), then takes the package from its profile, and the track too unless it brought its own, or without a pole the package of its track / deactivate |
 | `section-insulator` | `SectionInsulatorMasterDataHandler` | Upsert `SECTION_INSULATOR` (`SIN-<id>`, `station.id`, `enabled`, `installationType`, `track.id`, `connectedTrack.id`, kp range) **plus its `switches[]` into `catenary_asset_switch`**, then takes the package of the profiles of its track / deactivate |
 | `track` | `TrackMasterDataHandler` | `DELETED` only: `deactivateByTrack(trackId)` |
 | `execution-package`, `station`, `cantilever`, `steady-arm` | none | logged and ignored |
@@ -60,9 +60,14 @@ handler runs inside the inbox transaction and must not open its own.
 
 The contract leaves two holes that maintenance fills from its own rows, without changing it:
 
-- a **disconnector** event carries its station and its profile (id, name, kp), but neither the track
-  nor the execution package. Both are the profile's: `profile_source_id` of the disconnector is the
-  `source_entity_id` of its `PROFILE` asset (the numeric id `mto-configuration` publishes for both).
+- a **disconnector** event carries its station and its profile (id, name, kp), but not the
+  execution package, and usually not the track. Both are the profile's: `profile_source_id` of the
+  disconnector is the `source_entity_id` of its `PROFILE` asset (the numeric id `mto-configuration`
+  publishes for both). On a pole, the event carries a `track` only when the disconnector switches
+  another track than its pole's: in a bundle of tracks (workshops, depots) it sometimes hangs from
+  the pole of one track and isolates another, or joins two that are not the pole's. That track is
+  its own (`own_track`, `V14`): it is stored, its profile passes it only the package, and an event
+  without it (it switches its pole's track again) takes the profile's back.
   A disconnector **without a pole** (on a substation portal, an earthing one) has `profile: null`,
   and since `V26` of `mto-configuration` its event carries its own `kp` and `track` (`{id, name}`):
   it is stored at that kp and on that track, and takes the package of its track like an insulator.
@@ -86,9 +91,9 @@ the same transaction, whichever event arrives first:
 
 | After the upsert of | Statement | Effect |
 |---|---|---|
-| a disconnector on a pole | `inheritLocationOfDisconnector` | track and package of its profile, if it has arrived |
+| a disconnector on a pole | `inheritLocationOfDisconnector` | package of its profile, if it has arrived, and its track unless the disconnector brought its own (`own_track`) |
 | a section insulator or a disconnector without a pole | `inheritPackageOfTrack` | package of the last profile received on its track |
-| a profile | `propagateLocationToDisconnectors` | its track and package to its disconnectors: a profile that changes track takes them along |
+| a profile | `propagateLocationToDisconnectors` | its package to its disconnectors, and its track to those without `own_track`: a profile that changes track takes them along |
 | a profile | `propagatePackageToAssetsOnTrack` | its package to the insulators and the pole-less disconnectors of its track: a track moved to another package moves them too |
 
 Without them, both types were missing from the progress and monthly reports by package (and the
@@ -100,7 +105,9 @@ or a track has no package. A disconnector that leaves its pole changes rule on t
 own kp and track replace the profile's, and the package is that of its new track, never the old one.
 
 A consequence: a track deleted at the source now also disables the disconnectors on it
-(`deactivateByTrack`), as it already did with its profiles and insulators.
+(`deactivateByTrack`), as it already did with its profiles and insulators. One with `own_track`
+goes down with the track it switches and also with the track of its pole: without it there is no
+pole left to hang from.
 
 #### The switches of a section insulator
 

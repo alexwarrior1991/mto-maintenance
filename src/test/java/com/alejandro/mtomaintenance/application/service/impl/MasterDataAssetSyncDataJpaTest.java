@@ -490,6 +490,92 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         assertEquals(trackId, asset(onAPole).getTrackId());
     }
 
+    /**
+     * En un haz de vias (talleres, cocheras) un seccionador cuelga a veces del poste de una via y
+     * maniobra otra, o une dos que no son la del poste: mto-configuration publica entonces su via
+     * tambien con poste. Es la suya (own_track, V14): su perfil le pasa el paquete pero no la pisa, ni
+     * al llegar antes o despues ni al cambiar de via, y un evento sin ella vuelve a la del poste.
+     */
+    @Test
+    void aDisconnectorThatSwitchesAnotherTrackThanThatOfItsPoleKeepsItsOwn() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long poleTrackId = System.nanoTime();
+        long switchedTrackId = poleTrackId + 1;
+        long movedTrackId = poleTrackId + 2;
+        long profileId = poleTrackId + 7;
+        String early = "d-own-early-" + poleTrackId;
+        String late = "d-own-late-" + poleTrackId;
+
+        // Llega antes que su perfil: ya tiene su via, y el paquete aun no.
+        dispatcher.handle(withTrack(disconnectorMessage(early, profileId), switchedTrackId), new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(switchedTrackId, asset(early).getTrackId());
+        assertTrue(asset(early).isOwnTrack());
+        assertEquals("" + profileId, asset(early).getProfileSourceId());
+        assertNull(asset(early).getExecutionPackageId());
+
+        // El perfil le pasa el paquete y no la via. Uno que llega despues, igual, y une la via del
+        // poste con la que maniobra.
+        dispatcher.handle(trackProfileMessage(profileId, poleTrackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        dispatcher.handle(parallel(withTrack(disconnectorMessage(late, profileId), switchedTrackId), poleTrackId),
+                new MasterDataEventContext(1L));
+        entityManager.clear();
+        assertEquals(switchedTrackId, asset(early).getTrackId());
+        assertEquals(6L, asset(early).getExecutionPackageId());
+        assertEquals(switchedTrackId, asset(late).getTrackId());
+        assertEquals(poleTrackId, asset(late).getConnectedTrackId());
+        assertEquals(6L, asset(late).getExecutionPackageId());
+        assertEquals(0, new BigDecimal("80196.63").compareTo(asset(late).getStartKp()), "Its kp is still that of its pole");
+
+        // El perfil cambia de via y de paquete: el paquete le sigue, la via no.
+        dispatcher.handle(trackProfileMessage(profileId, movedTrackId, 7L, MasterDataOperation.UPDATED), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertEquals(switchedTrackId, asset(early).getTrackId());
+        assertEquals(7L, asset(early).getExecutionPackageId());
+        assertEquals(switchedTrackId, asset(late).getTrackId());
+
+        // Un evento sin via es uno que ya maniobra la de su poste: la toma del perfil.
+        dispatcher.handle(disconnectorMessage(early, profileId), new MasterDataEventContext(3L));
+        entityManager.clear();
+        assertFalse(asset(early).isOwnTrack());
+        assertEquals(movedTrackId, asset(early).getTrackId());
+        assertEquals(7L, asset(early).getExecutionPackageId());
+    }
+
+    /**
+     * Borrar la via que maniobra lo desactiva, como a todo lo que esta sobre ella; y borrar la de su
+     * poste tambien, aunque su track_id sea la otra: sin esa via no queda poste del que colgar.
+     */
+    @Test
+    void aDisconnectorThatSwitchesAnotherTrackGoesDownWithItAndWithTheTrackOfItsPole() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long poleTrackId = System.nanoTime();
+        long switchedA = poleTrackId + 1;
+        long switchedB = poleTrackId + 2;
+        long profileId = poleTrackId + 7;
+        String first = "d-own-a-" + poleTrackId;
+        String second = "d-own-b-" + poleTrackId;
+
+        dispatcher.handle(trackProfileMessage(profileId, poleTrackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        dispatcher.handle(withTrack(disconnectorMessage(first, profileId), switchedA), new MasterDataEventContext(1L));
+        dispatcher.handle(withTrack(disconnectorMessage(second, profileId), switchedB), new MasterDataEventContext(1L));
+
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.TRACK, String.valueOf(switchedA), MasterDataOperation.DELETED,
+                Map.of("id", switchedA)), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertFalse(asset(first).getEnabled());
+        assertTrue(asset(second).getEnabled());
+        assertTrue(asset(String.valueOf(profileId)).getEnabled());
+
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.TRACK, String.valueOf(poleTrackId), MasterDataOperation.DELETED,
+                Map.of("id", poleTrackId)), new MasterDataEventContext(3L));
+        entityManager.clear();
+        assertFalse(asset(String.valueOf(profileId)).getEnabled());
+        assertFalse(asset(second).getEnabled(), "Its own track is still there, but not the pole it hangs from");
+        assertEquals(3L, asset(second).getSourceSequenceNumber(), "The watermark goes up to the deletion, as on its own track");
+        assertEquals(switchedB, asset(second).getTrackId());
+    }
+
     @Test
     void aSectionInsulatorTakesThePackageOfTheProfilesOfItsTrackWhicheverArrivesFirst() {
         MasterDataEventHandler dispatcher = dispatcher();
@@ -630,6 +716,19 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
     private static MasterDataChangedMessage parallel(MasterDataChangedMessage message, long connectedTrackId) {
         Map<String, Object> values = new HashMap<>(message.data().values());
         values.put("connectedTrack", Map.of("id", connectedTrackId, "name", "TRACK 2"));
+        return new MasterDataChangedMessage(message.operationId(), message.referenceId(), message.origin(),
+                message.creationDate(), message.eventType(),
+                new MasterDataChangedEvent(message.data().entityName(), message.data().entityId(),
+                        message.data().operation(), values), message.messageHash());
+    }
+
+    /**
+     * El mismo mensaje con su via aunque este en un poste: la que maniobra cuando no es la del poste,
+     * como la publica mto-configuration desde que la admite con poste.
+     */
+    private static MasterDataChangedMessage withTrack(MasterDataChangedMessage message, long trackId) {
+        Map<String, Object> values = new HashMap<>(message.data().values());
+        values.put("track", Map.of("id", trackId, "name", "TRACK 3"));
         return new MasterDataChangedMessage(message.operationId(), message.referenceId(), message.origin(),
                 message.creationDate(), message.eventType(),
                 new MasterDataChangedEvent(message.data().entityName(), message.data().entityId(),

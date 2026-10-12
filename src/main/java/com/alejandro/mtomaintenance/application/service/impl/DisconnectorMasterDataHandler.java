@@ -11,10 +11,12 @@ import java.util.List;
 
 /**
  * Seccionador: tiene inspeccion propia. Cuelga de una estacion y, si viene, de un perfil (con su kp).
- * En un poste, la via y el paquete no vienen en el evento: son los de su perfil, y se toman de el.
- * Sin poste (los de los porticos de subestacion, los de puesta a tierra), mto-configuration publica
- * desde su V26 el KP y la via del propio seccionador; el paquete sigue sin venir, y es el de su via,
- * como el de un aislador de seccion.
+ * En un poste, el paquete no viene en el evento: es el de su perfil, y se toma de el. La via tambien,
+ * salvo cuando el evento la trae: entonces es la que maniobra y no la del poste (en un haz de vias,
+ * talleres y cocheras, cuelga a veces del poste de una y aisla otra, o une dos que no son la del
+ * poste), y el perfil no se la pisa (V14). Sin poste (los de los porticos de subestacion, los de
+ * puesta a tierra), mto-configuration publica desde su V26 el KP y la via del propio seccionador; el
+ * paquete sigue sin venir, y es el de su via, como el de un aislador de seccion.
  */
 @Service
 class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
@@ -43,7 +45,9 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
                 CODE_PREFIX,
                 payload.string("name"),
                 null,
-                onAPole ? null : payload.nested("track").longValue("id"),
+                // Sin poste, la suya (V26). Con poste, solo si maniobra otra que la del poste: sin
+                // ella, la de su perfil, que pone inheritLocationOfDisconnector.
+                payload.nested("track").longValue("id"),
                 // La otra via de uno que pone dos en paralelo (V27 de mto-configuration), con poste o
                 // sin el: es del seccionador, no de su perfil. En la misma columna que la del aislador,
                 // asi que los informes por via lo encuentran en las dos, y la busqueda de activos
@@ -65,8 +69,9 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
     }
 
     /**
-     * En un poste, la via y el paquete de su perfil; sin el, el paquete de su via. Cada sentencia
-     * solo toca el caso que es suyo, y lo que aun no ha llegado lo pone el perfil al llegar.
+     * En un poste, el paquete de su perfil, y su via si el evento no traia la suya; sin el, el paquete
+     * de su via. Cada sentencia solo toca el caso que es suyo, y lo que aun no ha llegado lo pone el
+     * perfil al llegar.
      */
     @Override
     protected void afterSynchronized(String sourceEntityId) {

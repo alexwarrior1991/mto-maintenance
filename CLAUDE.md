@@ -80,10 +80,12 @@ synchronized from `mto-configuration` (`source_service` + `source_entity_id`, ne
 the API, only `description`/`enabled`/`preventiveIntervalDays` editable). `enabled` is the sum of two
 voices: `enabledAtSource` (only the events write it) and `disabledLocally` (only `DELETE` and `PUT`
 write it; no event undoes it), kept together by a `CHECK`; `PUT enabled=false` needs
-`maintenance-delete` like the `DELETE`. A disconnector on a pole takes its
-track and package from its profile, and an insulator or a disconnector without a pole (which brings
-its own kp and track since `V26` of `mto-configuration`) its package from the profiles of its track,
-because the source publishes no package for them (`docs/06-messaging.md`). A disconnector that puts
+`maintenance-delete` like the `DELETE`. A disconnector on a pole takes its package from its
+profile, and its track too unless its event brings its own (`ownTrack`, `V14`: in a bundle of tracks
+it may hang from the pole of one track and switch another), and an insulator or a disconnector
+without a pole (which brings its own kp and track since `V26` of `mto-configuration`) its package
+from the profiles of its track, because the source publishes no package for them
+(`docs/06-messaging.md`). A disconnector that puts
 two tracks in parallel also brings the other one (`connectedTrackId`, `V27` of `mto-configuration`),
 in the same column as an insulator's. A disconnector may belong to no station (`station: null`, on open
 track, in a neutral section or a substation): its location never comes from the station. A `SECTION_INSULATOR`

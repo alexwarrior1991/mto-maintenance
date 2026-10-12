@@ -90,6 +90,15 @@ public class CatenaryAsset extends VersionedEntity {
     @Column(name = "track_id")
     private Long trackId;
 
+    /**
+     * Si la vía de un seccionador en un poste es la suya y no la de su perfil (V14): la que maniobra
+     * cuando no es la del poste, en un haz de vías (talleres, cocheras), y que trae su evento. La
+     * escribe solo el upsert de datos maestros, y con ella el perfil ya no le pasa su vía, solo su
+     * paquete. {@code false} en todo lo demás.
+     */
+    @Column(name = "own_track", nullable = false)
+    private boolean ownTrack;
+
     @Column(name = "station_id")
     private Long stationId;
 

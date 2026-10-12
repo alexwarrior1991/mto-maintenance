@@ -124,6 +124,9 @@ A disconnector that puts two tracks in parallel brings, since `V27` of `mto-conf
 track it joins (on a pole or without one). It goes to `connected_track_id`, which `V7` added for the
 section insulator, so it is no longer meaningful only on a `SECTION_INSULATOR`: no schema change.
 
+A disconnector on a pole that switches another track than its pole's keeps that track instead of its
+profile's: `own_track` (`V14`, below).
+
 ## Asset enabled at the source and locally (`V10`)
 
 `catenary_asset` gains `enabled_at_source` (nullable: what `mto-configuration` last said; `null` on
@@ -167,6 +170,19 @@ rule), `created_at`, `next_attempt_at`, `published_at`, `last_error` (1000, trun
 W3C trace context `trace_parent`/`trace_state`. Partial indexes for the relay's claim
 (`sequence_number` where pending/in progress), the aggregate retention, the purge (`published_at`
 where published) and the failed count. Written only by the outbox; no `_aud` twin.
+
+## Own track of a disconnector on a pole (`V14`)
+
+`catenary_asset` gains `own_track` (`not null default false`; nullable in `catenary_asset_aud`). A
+disconnector on a pole used to be always on the track of its profile; `mto-configuration` now also
+publishes a `track` with a pole when the disconnector switches another track than its pole's (in a
+bundle of tracks, in workshops and depots, it sometimes hangs from the pole of one track and
+isolates another, or joins two that are not the pole's). `own_track` says that `track_id` is that
+one: the master-data upsert sets it when the event of a disconnector on a pole brings a track, and
+`inheritLocationOfDisconnector` and `propagateLocationToDisconnectors` then pass it only the
+package of its profile. `chk_catenary_asset_own_track` allows it only on a `DISCONNECTOR` with a
+pole (`profile_source_id`) and a track. Existing rows stay `false`, which is what they were: the
+next event of each disconnector (a republish) sets it.
 
 ## Auditing (`V4`)
 
