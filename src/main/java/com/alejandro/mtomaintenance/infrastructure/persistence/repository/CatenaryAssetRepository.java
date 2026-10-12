@@ -57,19 +57,23 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
      * <p>{@code enabled} del evento va a {@code enabled_at_source}; el efectivo se recalcula sin tocar
      * {@code disabled_locally}, asi que una desactivacion hecha aqui sobrevive a cualquier evento.</p>
      *
+     * <p>{@code ownTrack} dice que la via de un seccionador en un poste es suya (V14): la que maniobra
+     * cuando no es la del poste. Con el, {@link #inheritLocationOfDisconnector} y
+     * {@link #propagateLocationToDisconnectors} le pasan el paquete de su perfil, pero no su via.</p>
+     *
      * <p>Todas las escrituras nativas de esta interfaz suben {@code version}: Hibernate no las ve, y
      * sin eso un PUT que leyo antes del evento lo pisaria sin que nadie se enterase.</p>
      */
     @Modifying
     @Query(value = """
             insert into catenary_asset (
-                id, code, name, type, execution_package_id, track_id, connected_track_id, station_id,
+                id, code, name, type, execution_package_id, track_id, own_track, connected_track_id, station_id,
                 start_kp, end_kp, profile_source_id, sectioning, installation_type,
                 source_service, source_entity_id, source_sequence_number, enabled_at_source, enabled,
                 created_at, updated_at, created_by, updated_by
             ) values (
                 gen_random_uuid(), :code, :name, cast(:type as catenary_asset_type), :executionPackageId, :trackId,
-                :connectedTrackId, :stationId, :startKp, :endKp, :profileSourceId, :sectioning,
+                :ownTrack, :connectedTrackId, :stationId, :startKp, :endKp, :profileSourceId, :sectioning,
                 cast(:installationType as section_insulator_installation),
                 :sourceService, :sourceEntityId, :sourceSequenceNumber, :enabled, :enabled, now(), now(), 'system', 'system'
             ) on conflict (source_service, source_entity_id) do update
@@ -77,6 +81,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                    name = excluded.name,
                    execution_package_id = excluded.execution_package_id,
                    track_id = excluded.track_id,
+                   own_track = excluded.own_track,
                    connected_track_id = excluded.connected_track_id,
                    station_id = excluded.station_id,
                    start_kp = excluded.start_kp,
@@ -102,6 +107,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             @Param("type") String type,
             @Param("executionPackageId") Long executionPackageId,
             @Param("trackId") Long trackId,
+            @Param("ownTrack") boolean ownTrack,
             @Param("connectedTrackId") Long connectedTrackId,
             @Param("stationId") Long stationId,
             @Param("startKp") BigDecimal startKp,
@@ -135,15 +141,17 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     );
 
     /**
-     * Un seccionador esta sobre la via y en el paquete de su perfil: mto-configuration no publica
-     * ninguno de los dos para el. Tras el upsert del seccionador, los toma del perfil con el que
-     * cuelga, si ese perfil ya llego; si no, los pone {@link #propagateLocationToDisconnectors}
+     * Un seccionador en un poste esta en el paquete de su perfil, y casi siempre sobre su via:
+     * mto-configuration no publica el paquete, y la via solo cuando maniobra otra que la del poste (en
+     * un haz de vias cuelga a veces del poste de una y aisla otra), que es entonces la suya
+     * ({@code own_track}, V14) y no se pisa. Tras el upsert del seccionador, los toma del perfil con
+     * el que cuelga, si ese perfil ya llego; si no, los pone {@link #propagateLocationToDisconnectors}
      * cuando llegue. SQL nativo como el upsert, asi que tampoco deja revision de Envers.
      */
     @Modifying
     @Query(value = """
             update catenary_asset disconnector
-               set track_id = profile.track_id,
+               set track_id = case when disconnector.own_track then disconnector.track_id else profile.track_id end,
                    execution_package_id = profile.execution_package_id,
                    version = disconnector.version + 1,
                    updated_at = now()
@@ -154,7 +162,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                and profile.source_service = disconnector.source_service
                and profile.source_entity_id = disconnector.profile_source_id
                and profile.type = 'PROFILE'
-               and (disconnector.track_id is distinct from profile.track_id
+               and ((not disconnector.own_track and disconnector.track_id is distinct from profile.track_id)
                     or disconnector.execution_package_id is distinct from profile.execution_package_id)
             """, nativeQuery = true)
     int inheritLocationOfDisconnector(@Param("sourceService") String sourceService, @Param("sourceEntityId") String sourceEntityId);
@@ -190,12 +198,13 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
 
     /**
      * Tras el upsert de un perfil, sus seccionadores le siguen: da igual que evento llegue antes, y un
-     * perfil que cambia de via se lleva al seccionador con el.
+     * perfil que cambia de via se lleva al seccionador con el. Al que maniobra otra via que la del
+     * poste ({@code own_track}) solo le pasa el paquete: su via es la suya.
      */
     @Modifying
     @Query(value = """
             update catenary_asset disconnector
-               set track_id = profile.track_id,
+               set track_id = case when disconnector.own_track then disconnector.track_id else profile.track_id end,
                    execution_package_id = profile.execution_package_id,
                    version = disconnector.version + 1,
                    updated_at = now()
@@ -206,7 +215,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                and disconnector.source_service = profile.source_service
                and disconnector.profile_source_id = profile.source_entity_id
                and disconnector.type = 'DISCONNECTOR'
-               and (disconnector.track_id is distinct from profile.track_id
+               and ((not disconnector.own_track and disconnector.track_id is distinct from profile.track_id)
                     or disconnector.execution_package_id is distinct from profile.execution_package_id)
             """, nativeQuery = true)
     int propagateLocationToDisconnectors(@Param("sourceService") String sourceService,
@@ -242,6 +251,10 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
      * secuencia es global en mto-configuration, asi que un evento de un perfil anterior al borrado que
      * llegue despues se descarta en lugar de reactivarlo. Un tramo propio no tiene origen: queda
      * desactivado aqui, y una persona puede reactivarlo.
+     *
+     * <p>Lo que hay sobre ella es lo que tiene su {@code track_id} y, ademas, el seccionador que
+     * cuelga de uno de sus postes y maniobra otra via ({@code own_track}, V14): su {@code track_id}
+     * es la otra, pero sin la via de su poste tampoco queda poste del que colgar.</p>
      */
     @Modifying
     @Query(value = """
@@ -253,7 +266,13 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                                                  else greatest(source_sequence_number, cast(:sequenceNumber as bigint)) end,
                    version = version + 1,
                    updated_at = now()
-             where track_id = :trackId
+             where (track_id = :trackId
+                    or (own_track and profile_source_id in (
+                            select pole.source_entity_id
+                              from catenary_asset pole
+                             where pole.type = 'PROFILE'
+                               and pole.source_service = catenary_asset.source_service
+                               and pole.track_id = :trackId)))
                and (source_service is null
                     or source_sequence_number is null
                     or cast(:sequenceNumber as bigint) is null

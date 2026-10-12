@@ -63,6 +63,15 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
             List<SwitchSnapshot> switches,
             boolean enabled
     ) {
+
+        /**
+         * Si la via es del propio activo aunque cuelgue de un poste (V14): un seccionador en un poste
+         * solo trae via cuando maniobra otra que la del poste, y entonces su perfil no se la pisa. Un
+         * perfil y un aislador no cuelgan de ningun poste.
+         */
+        boolean ownTrack() {
+            return profileSourceId != null && trackId != null;
+        }
     }
 
     /**
@@ -142,7 +151,7 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
         try {
             applied = repository.upsertFromMasterData(
                     SOURCE_SERVICE, sourceEntityId, code, name, snapshot.type().name(),
-                    snapshot.executionPackageId(), snapshot.trackId(), snapshot.connectedTrackId(),
+                    snapshot.executionPackageId(), snapshot.trackId(), snapshot.ownTrack(), snapshot.connectedTrackId(),
                     snapshot.stationId(), snapshot.startKp(), snapshot.endKp(),
                     snapshot.profileSourceId(), snapshot.sectioning(),
                     snapshot.installationType() == null ? null : snapshot.installationType().name(),
