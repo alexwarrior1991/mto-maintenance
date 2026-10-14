@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
+import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
 import com.alejandro.mtomaintenance.application.dto.export.ExportedReport;
 import com.alejandro.mtomaintenance.application.dto.export.ReportFormat;
 import com.alejandro.mtomaintenance.application.dto.export.ReportMediaTypes;
@@ -59,6 +60,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>Tambien es la comprobacion de que la exportacion no toca la seguridad: las rutas no cambian,
  * {@code ?format} es un parametro, y {@code SecurityConfiguration} decide por ruta y verbo. Que un
  * token con {@code MAINTENANCE_READ} se lleve el .xlsx se verifica aqui en vez de suponerlo.</p>
+ *
+ * <p>Por la misma razon aloja lo que solo se ve por HTTP en la busqueda de turnos: el
+ * {@code trackId} repetido.</p>
  */
 @WebMvcTest({MaintenanceReportController.class, MaintenanceShiftController.class})
 @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class, GlobalExceptionHandler.class})
@@ -166,6 +170,28 @@ class ReportExportControllerMockMvcTest {
         mockMvc.perform(get(PROGRESS).param("format", "xlsx").with(role(SecurityRoles.OPS_METRICS)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.errorCode").value("AUTH-403"));
+    }
+
+    /**
+     * Va aqui porque es la clase que levanta el controlador de turnos. Un aislador que une dos vias
+     * se trabaja desde un turno de cualquiera, y quien completa su tarea pide los de las dos de una
+     * vez: el parametro se repite, y un valor solo sigue siendo lo de siempre.
+     */
+    @Test
+    void theShiftsOfSeveralTracksAreAskedForInOneSearchWithTheTrackRepeated() throws Exception {
+        when(shiftService.search(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageResponse<>(List.of(), null));
+
+        mockMvc.perform(get(SHIFTS).param("trackId", "12", "13").param("status", "IN_PROGRESS").with(role(SecurityRoles.MAINTENANCE_READ)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get(SHIFTS).param("trackId", "12").with(role(SecurityRoles.MAINTENANCE_READ)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get(SHIFTS).with(role(SecurityRoles.MAINTENANCE_READ)))
+                .andExpect(status().isOk());
+
+        verify(shiftService).search(eq(null), eq(null), eq(null), eq(null), eq(List.of(12L, 13L)), eq(null), eq(ShiftStatus.IN_PROGRESS), eq(null), any());
+        verify(shiftService).search(eq(null), eq(null), eq(null), eq(null), eq(List.of(12L)), eq(null), eq(null), eq(null), any());
+        verify(shiftService).search(eq(null), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null), any());
     }
 
     private static byte[] bytes(String content) {

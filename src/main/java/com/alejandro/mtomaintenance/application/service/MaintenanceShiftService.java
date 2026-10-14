@@ -17,6 +17,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -31,7 +32,11 @@ public interface MaintenanceShiftService {
 
     MaintenanceShiftResponse findById(UUID id);
 
-    PageResponse<MaintenanceShiftResponse> search(LocalDate date, LocalDate dateFrom, LocalDate dateTo, UUID teamId, Long trackId,
+    /**
+     * @param trackIds los turnos que recorren alguna de estas vias: las dos de un aislador o de un
+     *                 seccionador que las une se trabajan desde un turno de cualquiera; vacio o nulo no filtra
+     */
+    PageResponse<MaintenanceShiftResponse> search(LocalDate date, LocalDate dateFrom, LocalDate dateTo, UUID teamId, Collection<Long> trackIds,
                                                   Long executionPackageId, ShiftStatus status, PossessionType possessionType,
                                                   Pageable pageable);
 

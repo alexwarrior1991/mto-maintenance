@@ -3430,7 +3430,7 @@ class BusinessLayerTest {
             when(assetMapper.toSummary(any())).thenAnswer(invocation -> {
                 CatenaryAsset asset = invocation.getArgument(0);
                 return new CatenaryAssetSummaryResponse(asset.getId(), asset.getCode(), asset.getName(), asset.getType(), asset.getTrackId(),
-                        asset.getStartKp(), asset.getEndKp(), asset.getSectioning(), asset.getEnabled());
+                        asset.getStartKp(), asset.getEndKp(), asset.getSectioning(), asset.getEnabled(), asset.getConnectedTrackId());
             });
             service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository,
                     mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events);

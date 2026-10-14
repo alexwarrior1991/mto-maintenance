@@ -17,11 +17,16 @@ GET/POST        /assets                       type, trackId, stationId, executio
                                               the turnout it sits on (W31, partial and case insensitive)
 GET/PUT/DELETE  /assets/{id}                  DELETE disables
 GET             /assets/{id}/orders | /revisions
+                                              orders, tasks, inspections and defects embed the asset as a summary: id, code, name,
+                                              type, trackId, startKp, endKp, sectioning, enabled, connectedTrackId (the other track
+                                              of one that joins two, so a client offers the shifts of both)
 
 GET             /task-types | /task-types/{code}     functionalGroup, requiresFullPossession, diagnostic
 GET/POST        /teams        GET/PUT /teams/{id}
 
 GET/POST        /shifts                       date, dateFrom, dateTo, teamId, trackId, executionPackageId, status, possessionType
+                                              trackId can be repeated (?trackId=12&trackId=13): the shifts working on any of
+                                              them, each once — the two tracks of an insulator or a disconnector that joins them
 GET/PUT         /shifts/{id}                  POST /shifts/{id}/start | /close | /cancel
 GET             /shifts/{id}/tasks?status= | /profiles?status= | /report?format= | /revisions
                                               /profiles: PROFILE assets of the shift's tasks by kp (default status=COMPLETED = reviewed)

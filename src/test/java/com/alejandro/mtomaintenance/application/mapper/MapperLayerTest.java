@@ -161,8 +161,10 @@ class MapperLayerTest {
             // Una aguja fuera de servicio viaja marcada, no desaparece de la respuesta.
             assertEquals(List.of(true, false),
                     response.switches().stream().map(CatenaryAssetSwitchResponse::enabled).toList());
-            // El resumen se queda pequeno a proposito: va embebido en orden, turno y defecto.
+            // El resumen se queda pequeno a proposito: va embebido en orden, turno y defecto. Lleva la
+            // via conectada porque quien completa su tarea elige entre los turnos de las dos vias.
             assertEquals("SIN-7", mapper.toSummary(insulator).code());
+            assertEquals(4L, mapper.toSummary(insulator).connectedTrackId());
         });
     }
 

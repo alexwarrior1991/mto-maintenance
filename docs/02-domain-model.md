@@ -88,7 +88,8 @@ States `PLANNED → IN_PROGRESS → CLOSED`, `CANCELLED` before closing. Closing
 times and returns to `PENDING` (without shift) the tasks that were not completed.
 
 Window rules: a task's profile must be on one of the shift's tracks (an insulator or a disconnector
-that joins two tracks is on both, `connectedTrackId`, as in the reports by track); a task whose types require
+that joins two tracks is on both, `connectedTrackId`, as in the reports by track; the asset summary
+embedded in a task carries it, and `GET /shifts?trackId=a&trackId=b` finds the shifts of either); a task whose types require
 full possession cannot be assigned to or completed in a `PARTIAL` shift; a `DIVERTED` section only
 accepts `FULL` shifts. The same rules hold when a shift with tasks already assigned is changed:
 removing a track one of its open tasks is on, or making it `PARTIAL` under a task that needs full

@@ -131,7 +131,7 @@ class RestControllerLayerTest {
         MaintenanceShiftController controller = new MaintenanceShiftController(shiftService, taskService, mock(ReportExportService.class));
         UUID shiftId = UUID.randomUUID();
         List<CatenaryAssetSummaryResponse> profiles = List.of(new CatenaryAssetSummaryResponse(UUID.randomUUID(), "PRF-1", "12-2.27",
-                CatenaryAssetType.PROFILE, 2L, new BigDecimal("12847.990"), new BigDecimal("12847.990"), "A/S", true));
+                CatenaryAssetType.PROFILE, 2L, new BigDecimal("12847.990"), new BigDecimal("12847.990"), "A/S", true, null));
         when(shiftService.profiles(shiftId, null)).thenReturn(profiles);
         when(taskService.findByShift(shiftId, MaintenanceTaskStatus.COMPLETED)).thenReturn(List.of());
 

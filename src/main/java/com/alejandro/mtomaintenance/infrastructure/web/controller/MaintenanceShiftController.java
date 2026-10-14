@@ -94,14 +94,15 @@ public class MaintenanceShiftController {
         return ResponseEntity.ok(shiftService.findById(id));
     }
 
-    @Operation(summary = "Search shifts")
+    @Operation(summary = "Search shifts", description = "trackId can be repeated: the shifts working on any of those tracks, "
+            + "as the two tracks of a section insulator or a disconnector joining them.")
     @GetMapping
     public ResponseEntity<PageResponse<MaintenanceShiftResponse>> search(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
             @RequestParam(required = false) UUID teamId,
-            @RequestParam(required = false) Long trackId,
+            @RequestParam(required = false) List<Long> trackId,
             @RequestParam(required = false) Long executionPackageId,
             @RequestParam(required = false) ShiftStatus status,
             @RequestParam(required = false) PossessionType possessionType,
