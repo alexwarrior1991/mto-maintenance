@@ -55,7 +55,8 @@ class ProfileMasterDataHandler extends AbstractAssetMasterDataHandler {
                 payload.joinedCodes("sectionings"),
                 null,
                 List.of(),
-                true
+                true,
+                null
         );
     }
 

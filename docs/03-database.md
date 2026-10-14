@@ -185,6 +185,15 @@ package of its profile. `chk_catenary_asset_own_track` allows it only on a `DISC
 pole (`profile_source_id`) and a track. Existing rows stay `false`, which is what they were: the
 next event of each disconnector (a republish) sets it.
 
+## Drive of a disconnector (`V16`)
+
+`catenary_asset` gains `drive_type` (`disconnector_drive_type`: `MOTOR`, `MANUAL`; nullable, also in
+`catenary_asset_aud`), how a disconnector is driven as `mto-configuration` publishes it
+(`driveType`). It decides its default task type when a preventive order is generated: `RP-06`
+(motor disconnectors) only with a motor. `chk_catenary_asset_drive_type` allows it only on a
+`DISCONNECTOR`. Written only by the master-data upsert; existing rows stay `NULL` (no data) until the
+next event of each disconnector (a republish).
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`

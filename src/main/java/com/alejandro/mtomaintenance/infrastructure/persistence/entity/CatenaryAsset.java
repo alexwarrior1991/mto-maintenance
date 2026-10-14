@@ -137,6 +137,15 @@ public class CatenaryAsset extends VersionedEntity {
     private SectionInsulatorInstallation installationType;
 
     /**
+     * Cómo se acciona un seccionador (V16): con motor o a mano, o {@code null} sin dato. Solo lo lleva
+     * un {@code DISCONNECTOR} y solo lo escribe el upsert de datos maestros.
+     */
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "drive_type", columnDefinition = "disconnector_drive_type")
+    private DisconnectorDriveType driveType;
+
+    /**
      * Agujas por las que el aislador conecta con la vía, en orden físico a lo largo de ella.
      *
      * <p><b>Sin cascade ni orphanRemoval, a propósito.</b> Esta colección es sólo de lectura: las

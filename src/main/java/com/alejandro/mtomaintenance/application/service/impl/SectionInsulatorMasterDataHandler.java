@@ -67,7 +67,8 @@ class SectionInsulatorMasterDataHandler extends AbstractAssetMasterDataHandler {
                 null,
                 installationType(payload.string("installationType")),
                 switches,
-                payload.bool("enabled", true)
+                payload.bool("enabled", true),
+                null
         );
     }
 

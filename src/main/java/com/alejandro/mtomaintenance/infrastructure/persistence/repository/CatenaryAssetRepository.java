@@ -64,6 +64,35 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     );
 
     /**
+     * Lo que encaja en una seleccion de un preventivo: activos habilitados de un tipo, en una via (la
+     * suya o la conectada: un aislador o un seccionador que une dos esta en las dos; un perfil no
+     * tiene via conectada), en un rango de kp que se solapa con el suyo, de una estacion y de un EP.
+     * Cada filtro a null no filtra. Un rango pedido deja fuera lo que no tiene kp, porque no se sabe
+     * donde esta; sin rango entra. Un perfil esta en un punto, asi que el solape es estar dentro.
+     * En el orden en que se recorre: por via, kp y codigo.
+     */
+    @Query("""
+            select asset
+            from CatenaryAsset asset
+            where asset.type = :type
+              and asset.enabled = true
+              and (:trackId is null or asset.trackId = :trackId or asset.connectedTrackId = :trackId)
+              and (:fromKp is null or coalesce(asset.endKp, asset.startKp) >= :fromKp)
+              and (:toKp is null or asset.startKp <= :toKp)
+              and (:stationId is null or asset.stationId = :stationId)
+              and (:executionPackageId is null or asset.executionPackageId = :executionPackageId)
+            order by asset.trackId asc nulls last, asset.startKp asc nulls last, asset.code asc
+            """)
+    List<CatenaryAsset> findEnabledForGeneration(
+            @Param("type") CatenaryAssetType type,
+            @Param("trackId") Long trackId,
+            @Param("fromKp") BigDecimal fromKp,
+            @Param("toKp") BigDecimal toKp,
+            @Param("stationId") Long stationId,
+            @Param("executionPackageId") Long executionPackageId
+    );
+
+    /**
      * Un cerrojo de aviso de PostgreSQL ligado a la transaccion en curso: {@code true} si esta
      * transaccion lo tiene, {@code false} si otra lo tenia ya (no se espera). Se suelta solo al
      * terminar la transaccion. Es lo que reparte un trabajo diario entre varias instancias sin una
@@ -85,6 +114,8 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
      * cuando no es la del poste. Con el, {@link #inheritLocationOfDisconnector} y
      * {@link #propagateLocationToDisconnectors} le pasan el paquete de su perfil, pero no su via.</p>
      *
+     * <p>{@code driveType} es el accionamiento de un seccionador (V16); null en todo lo demas.</p>
+     *
      * <p>Todas las escrituras nativas de esta interfaz suben {@code version}: Hibernate no las ve, y
      * sin eso un PUT que leyo antes del evento lo pisaria sin que nadie se enterase.</p>
      */
@@ -92,13 +123,14 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     @Query(value = """
             insert into catenary_asset (
                 id, code, name, type, execution_package_id, track_id, own_track, connected_track_id, station_id,
-                start_kp, end_kp, profile_source_id, sectioning, installation_type,
+                start_kp, end_kp, profile_source_id, sectioning, installation_type, drive_type,
                 source_service, source_entity_id, source_sequence_number, enabled_at_source, enabled,
                 created_at, updated_at, created_by, updated_by
             ) values (
                 gen_random_uuid(), :code, :name, cast(:type as catenary_asset_type), :executionPackageId, :trackId,
                 :ownTrack, :connectedTrackId, :stationId, :startKp, :endKp, :profileSourceId, :sectioning,
                 cast(:installationType as section_insulator_installation),
+                cast(:driveType as disconnector_drive_type),
                 :sourceService, :sourceEntityId, :sourceSequenceNumber, :enabled, :enabled, now(), now(), 'system', 'system'
             ) on conflict (source_service, source_entity_id) do update
                set code = excluded.code,
@@ -113,6 +145,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                    profile_source_id = excluded.profile_source_id,
                    sectioning = excluded.sectioning,
                    installation_type = excluded.installation_type,
+                   drive_type = excluded.drive_type,
                    enabled_at_source = excluded.enabled_at_source,
                    enabled = excluded.enabled_at_source and not catenary_asset.disabled_locally,
                    source_sequence_number = coalesce(
@@ -139,6 +172,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             @Param("profileSourceId") String profileSourceId,
             @Param("sectioning") String sectioning,
             @Param("installationType") String installationType,
+            @Param("driveType") String driveType,
             @Param("enabled") boolean enabled,
             @Param("sourceSequenceNumber") Long sourceSequenceNumber
     );

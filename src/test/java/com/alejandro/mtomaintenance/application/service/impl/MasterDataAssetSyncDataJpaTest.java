@@ -12,6 +12,7 @@ import com.alejandro.mtomaintenance.application.service.MasterDataEventHandler;
 import com.alejandro.mtomaintenance.configuration.JpaAuditingConfiguration;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DisconnectorDriveType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InboxMessageStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.SectionInsulatorInstallation;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
@@ -319,6 +320,49 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
 
         assertTrue(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, activeId).orElseThrow().getEnabled());
         assertFalse(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, disabledId).orElseThrow().getEnabled());
+    }
+
+    @Test
+    void aDisconnectorKeepsHowItIsDrivenAndAnUnknownDriveIsStoredAsNothing() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long suffix = System.nanoTime();
+        String motorId = "d-motor-" + suffix;
+        String manualId = "d-manual-" + suffix;
+        String unknownId = "d-unknown-" + suffix;
+        String withoutId = "d-without-" + suffix;
+        dispatcher.handle(withDrive(disconnectorMessage(motorId, suffix), "MOTOR"), new MasterDataEventContext(1L));
+        dispatcher.handle(withDrive(disconnectorMessage(manualId, suffix), "manual"), new MasterDataEventContext(1L));
+        dispatcher.handle(withDrive(disconnectorMessage(unknownId, suffix), "HYDRAULIC"), new MasterDataEventContext(1L));
+        dispatcher.handle(disconnectorMessage(withoutId, suffix), new MasterDataEventContext(1L));
+        entityManager.clear();
+
+        assertEquals(DisconnectorDriveType.MOTOR, asset(motorId).getDriveType());
+        assertEquals(DisconnectorDriveType.MANUAL, asset(manualId).getDriveType());
+        assertNull(asset(unknownId).getDriveType(), "A drive this side does not know is no drive, never the DLQ");
+        assertNull(asset(withoutId).getDriveType());
+
+        // Un evento sin el dato (anterior a que se publicara, o porque lo han borrado) lo quita.
+        dispatcher.handle(disconnectorMessage(motorId, suffix), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertNull(asset(motorId).getDriveType());
+
+        // Ni un perfil ni un aislador llevan accionamiento.
+        String profileId = String.valueOf(suffix + 1);
+        dispatcher.handle(trackProfileMessage(suffix + 1, suffix, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(3L));
+        dispatcher.handle(insulatorOnTrack("si-drive-" + suffix, suffix, null), new MasterDataEventContext(3L));
+        entityManager.clear();
+        assertNull(asset(profileId).getDriveType());
+        assertNull(asset("si-drive-" + suffix).getDriveType());
+    }
+
+    /** El mismo mensaje con el accionamiento que publica mto-configuration: {@code MOTOR}, {@code MANUAL} o null. */
+    private static MasterDataChangedMessage withDrive(MasterDataChangedMessage message, String driveType) {
+        Map<String, Object> values = new HashMap<>(message.data().values());
+        values.put("driveType", driveType);
+        return new MasterDataChangedMessage(message.operationId(), message.referenceId(), message.origin(),
+                message.creationDate(), message.eventType(),
+                new MasterDataChangedEvent(message.data().entityName(), message.data().entityId(),
+                        message.data().operation(), values), message.messageHash());
     }
 
     @Test

@@ -6,6 +6,8 @@ import com.alejandro.mtomaintenance.application.dto.task.CancelTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.CompleteTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationOutcome;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationPreviewLine;
 import com.alejandro.mtomaintenance.application.dto.task.InlineDefectRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
@@ -49,11 +51,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.EnumMap;
-import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -77,9 +79,11 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
      */
     static final List<String> DEFAULT_INSULATOR_TASK_TYPES = List.of("RG-03");
 
-    /** Los activos de un tramo que se generan uno a uno; un seccionador no tiene un tipo comun en el plan. */
-    private static final Set<CatenaryAssetType> GENERATED_ASSET_TYPES =
-            EnumSet.of(CatenaryAssetType.PROFILE, CatenaryAssetType.SECTION_INSULATOR);
+    /**
+     * Lo que se hace en cada seccionador con motor: RP-06 del plan, que pide posesion total. Uno manual,
+     * o sin dato de su accionamiento, no tiene tipo en el plan: solo se genera con tipos elegidos.
+     */
+    static final List<String> DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES = List.of("RP-06");
 
     private final MaintenanceTaskRepository repository;
     private final CatenaryAssetRepository assetRepository;
@@ -91,6 +95,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     private final WorkloadEstimator workloadEstimator;
     private final MaterialLineFactory lineFactory;
     private final MaterialStockSynchronizer stock;
+    private final PreventiveTaskSelector selector;
 
     @Override
     @Transactional(readOnly = true)
@@ -110,6 +115,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     public MaintenanceTaskResponse create(UUID orderId, MaintenanceTaskRequest request) {
         MaintenanceOrder order = lookups.order(orderId);
         requireAcceptsTasks(order);
+        lockGeneration(order);
         CatenaryAsset asset = request.assetId() == null ? null : lookups.enabledAsset(request.assetId());
 
         MaintenanceTask task = MaintenanceTask.builder()
@@ -173,91 +179,101 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         if (order.getStatus() != MaintenanceOrderStatus.DRAFT && order.getStatus() != MaintenanceOrderStatus.PLANNED) {
             throw new InvalidTransitionException("Order " + order.getCode() + " is " + order.getStatus() + "; tasks are generated in DRAFT or PLANNED");
         }
-        CatenaryAsset section = order.getAsset();
-        if (section.getType() != CatenaryAssetType.TRACK_SECTION) {
-            throw new InvalidTransitionException("Order " + order.getCode() + " is not on a track section: nothing to generate profile by profile");
+        boolean dryRun = request.previewOnly();
+        // Antes de mirar que esta libre: dos generaciones a la vez en el mismo EP darian el mismo activo
+        // por libre. Previsualizar no escribe y no hace fila.
+        if (!dryRun) {
+            lockGeneration(order);
         }
-        if (section.getTrackId() == null || section.getStartKp() == null || section.getEndKp() == null) {
-            throw new ValidationException("Track section " + section.getCode() + " has no track or kp range");
-        }
+        PreventiveTaskSelector.Plan plan = selector.select(order, request);
 
-        Set<CatenaryAssetType> assetTypes = generatedAssetTypes(request.assetTypes());
-        // Con tipos pedidos, valen para todo lo generado; sin ellos, cada activo lleva los del plan
-        // para el suyo. Para tipos distintos por activo se genera dos veces: es idempotente por activo.
-        boolean explicitTypes = request.taskTypeCodes() != null && !request.taskTypeCodes().isEmpty();
-        Map<CatenaryAssetType, Set<MaintenanceTaskType>> taskTypesByAsset = new EnumMap<>(CatenaryAssetType.class);
-        Set<MaintenanceTaskType> requested = explicitTypes ? lookups.taskTypes(request.taskTypeCodes()) : null;
-        for (CatenaryAssetType type : assetTypes) {
-            taskTypesByAsset.put(type, explicitTypes ? requested : lookups.taskTypes(defaultTaskTypes(type)));
-        }
-
-        List<CatenaryAsset> assets = new ArrayList<>();
-        if (assetTypes.contains(CatenaryAssetType.PROFILE)) {
-            assets.addAll(assetRepository.findEnabledByTypeOnTrackBetween(
-                    CatenaryAssetType.PROFILE, section.getTrackId(), section.getStartKp(), section.getEndKp()));
-        }
-        if (assetTypes.contains(CatenaryAssetType.SECTION_INSULATOR)) {
-            assets.addAll(assetRepository.findEnabledByTypeTouchingSection(
-                    CatenaryAssetType.SECTION_INSULATOR, section.getTrackId(), section.getStartKp(), section.getEndKp()));
-        }
-        // En el orden en que se recorre la via de noche: un aislador entre los perfiles que lo rodean.
-        assets.sort(Comparator.comparing(CatenaryAsset::getStartKp).thenComparing(CatenaryAsset::getCode));
-
-        List<UUID> alreadyCovered = repository.findAssetIdsByOrderId(orderId);
         int sequence = repository.findMaxSequence(orderId);
-        int created = 0;
-        int skippedProfiles = 0;
-        int skipped = 0;
-
-        for (CatenaryAsset asset : assets) {
-            if (alreadyCovered.contains(asset.getId())) {
-                skipped++;
-                if (asset.getType() == CatenaryAssetType.PROFILE) {
-                    skippedProfiles++;
-                }
+        List<MaintenanceTask> planned = new ArrayList<>();
+        Map<CatenaryAssetType, Integer> createdByAssetType = new EnumMap<>(CatenaryAssetType.class);
+        plan.assetTypes().forEach(type -> createdByAssetType.put(type, 0));
+        List<GenerationPreviewLine> lines = new ArrayList<>();
+        for (PreventiveTaskSelector.Candidate candidate : plan.candidates()) {
+            CatenaryAsset asset = candidate.asset();
+            if (dryRun) {
+                lines.add(previewLine(candidate));
+            }
+            if (!candidate.isCreated()) {
                 continue;
             }
-            Set<MaintenanceTaskType> taskTypes = taskTypesByAsset.get(asset.getType());
+            createdByAssetType.merge(asset.getType(), 1, Integer::sum);
             MaintenanceTask task = MaintenanceTask.builder()
-                    .order(order)
+                    .order(dryRun ? null : order)
                     .sequence(++sequence)
-                    .description("Preventive maintenance of " + describe(asset.getType()) + " " + asset.getName() + " (kp " + asset.getStartKp() + ")")
+                    .description(describe(asset))
                     .asset(asset)
-                    .taskTypes(new java.util.LinkedHashSet<>(taskTypes))
+                    .taskTypes(new LinkedHashSet<>(candidate.taskTypes()))
                     .build();
-            if (Boolean.TRUE.equals(request.withChecklist()) || taskTypes.stream().anyMatch(MaintenanceTaskType::getDiagnostic)) {
+            if (dryRun) {
+                planned.add(task);
+                continue;
+            }
+            if (candidate.withChecklist() || task.isDiagnostic()) {
                 attachChecklist(task, asset);
             }
             order.getTasks().add(repository.save(task));
-            created++;
         }
-        LOGGER.info("Preventive tasks generated for order {}: created={}, skipped={}, assets={} ({})",
-                order.getCode(), created, skipped, assets.size(), assetTypes);
 
-        WorkloadEstimate estimate = workloadEstimator.estimate(order);
-        return new GeneratePreventiveTasksResponse(created, skippedProfiles, order.getTasks().size(),
-                estimate.estimatedMinutes(), estimate.estimatedShifts(), skipped);
+        int skippedAssets = count(plan, GenerationOutcome.ALREADY_IN_ORDER, null);
+        int skippedProfiles = count(plan, GenerationOutcome.ALREADY_IN_ORDER, CatenaryAssetType.PROFILE);
+        List<String> otherOrders = plan.candidates().stream()
+                .map(PreventiveTaskSelector.Candidate::otherOrderCode)
+                .filter(Objects::nonNull)
+                .distinct()
+                .sorted()
+                .toList();
+        LOGGER.info("Preventive tasks {} for order {}: created={}, alreadyInOrder={}, inOtherOrders={}, otherPackage={}, withoutTypes={} ({})",
+                dryRun ? "previewed" : "generated", order.getCode(), sumOf(createdByAssetType), skippedAssets,
+                count(plan, GenerationOutcome.IN_OTHER_ORDER, null), count(plan, GenerationOutcome.OTHER_PACKAGE, null),
+                count(plan, GenerationOutcome.NO_TASK_TYPES, null), plan.assetTypes());
+
+        WorkloadEstimate estimate = dryRun ? workloadEstimator.estimate(order, planned) : workloadEstimator.estimate(order);
+        return new GeneratePreventiveTasksResponse(sumOf(createdByAssetType), skippedProfiles, order.getTasks().size() + planned.size(),
+                estimate.estimatedMinutes(), estimate.estimatedShifts(), skippedAssets, createdByAssetType,
+                count(plan, GenerationOutcome.IN_OTHER_ORDER, null), otherOrders,
+                count(plan, GenerationOutcome.OTHER_PACKAGE, null), count(plan, GenerationOutcome.NO_TASK_TYPES, null),
+                dryRun, dryRun ? lines : List.of());
     }
 
-    /** Sin tipos de activo, los perfiles, que es lo que hacia antes de admitirlos; un seccionador o un tramo no se generan. */
-    private static Set<CatenaryAssetType> generatedAssetTypes(List<CatenaryAssetType> requested) {
-        if (requested == null || requested.isEmpty()) {
-            return EnumSet.of(CatenaryAssetType.PROFILE);
-        }
-        Set<CatenaryAssetType> types = EnumSet.copyOf(requested);
-        if (!GENERATED_ASSET_TYPES.containsAll(types)) {
-            throw new ValidationException("assetTypes: only " + GENERATED_ASSET_TYPES + " are generated one by one along a section, not "
-                    + types.stream().filter(type -> !GENERATED_ASSET_TYPES.contains(type)).toList());
-        }
-        return types;
+    /**
+     * Pone en fila lo que escribe tareas en un mismo EP (en una orden sin EP, en la misma orden): la
+     * generacion, para que dos a la vez no den el mismo activo por libre en dos ordenes, y el alta a
+     * mano, para no chocar con ella en la secuencia. Se suelta al terminar la transaccion.
+     */
+    private void lockGeneration(MaintenanceOrder order) {
+        String scope = order.getExecutionPackageId() != null ? "EP-" + order.getExecutionPackageId() : "order-" + order.getId();
+        repository.advisoryTransactionLock(("mto-maintenance:generate-tasks:" + scope).hashCode());
     }
 
-    private static List<String> defaultTaskTypes(CatenaryAssetType type) {
-        return type == CatenaryAssetType.SECTION_INSULATOR ? DEFAULT_INSULATOR_TASK_TYPES : DEFAULT_PREVENTIVE_TASK_TYPES;
+    private static int count(PreventiveTaskSelector.Plan plan, GenerationOutcome outcome, CatenaryAssetType type) {
+        return (int) plan.candidates().stream()
+                .filter(candidate -> candidate.outcome() == outcome && (type == null || candidate.asset().getType() == type))
+                .count();
     }
 
-    private static String describe(CatenaryAssetType type) {
-        return type == CatenaryAssetType.SECTION_INSULATOR ? "section insulator" : "profile";
+    private static int sumOf(Map<CatenaryAssetType, Integer> counts) {
+        return counts.values().stream().mapToInt(Integer::intValue).sum();
+    }
+
+    private static GenerationPreviewLine previewLine(PreventiveTaskSelector.Candidate candidate) {
+        CatenaryAsset asset = candidate.asset();
+        List<String> codes = candidate.taskTypes().stream().map(MaintenanceTaskType::getCode).sorted().toList();
+        boolean withChecklist = candidate.withChecklist() || candidate.taskTypes().stream().anyMatch(MaintenanceTaskType::getDiagnostic);
+        return new GenerationPreviewLine(asset.getId(), asset.getCode(), asset.getName(), asset.getType(), asset.getTrackId(),
+                asset.getConnectedTrackId(), asset.getStartKp(), codes, withChecklist, candidate.outcome(), candidate.otherOrderCode());
+    }
+
+    private static String describe(CatenaryAsset asset) {
+        String kind = switch (asset.getType()) {
+            case SECTION_INSULATOR -> "section insulator";
+            case DISCONNECTOR -> "disconnector";
+            default -> "profile";
+        };
+        return "Preventive maintenance of " + kind + " " + asset.getName() + (asset.getStartKp() == null ? "" : " (kp " + asset.getStartKp() + ")");
     }
 
     @Override
