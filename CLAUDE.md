@@ -98,10 +98,18 @@ insulator, not an asset of its own, so there is no new `CatenaryAssetType`. A `M
 `DRAFT → PLANNED → ASSIGNED → IN_PROGRESS → COMPLETED` (or `CANCELLED`); `URGENT` is the only type
 that jumps `DRAFT → IN_PROGRESS` and is born `CRITICAL`. A preventive order on a `TRACK_SECTION`
 generates one `MaintenanceTask` per enabled `PROFILE` in the range (`POST /orders/{id}/tasks/generate`;
-with `assetTypes` also one per `SECTION_INSULATOR` touching it, its own track's or one connecting to it, `RG-03` by default),
-each carrying the `MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan,
-with standard minutes that feed `WorkloadEstimator`). Tasks are executed inside a
-`MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one or more tracks): a task can
+with `assetTypes` also one per `SECTION_INSULATOR` or `DISCONNECTOR` touching it, its own track's or one connecting to it),
+and with `selections` any order mixes profiles, insulators and disconnectors of other sections, other
+tracks or the whole execution package: **an order is of one package** (its stock project and the
+monthly report are) and may cover several of its tracks; what is of another package goes in another
+order. `PreventiveTaskSelector` decides what fits and what is skipped (already in the order, of
+another package, open in another open preventive order, without a task type), `dryRun` previews it,
+and generations of one package queue behind an advisory lock. Each task carries the
+`MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan, with standard
+minutes that feed `WorkloadEstimator`; by default groups 1, 2 and 4 on a profile, `RG-03` on an
+insulator, `RP-06` on a disconnector whose `driveType` (`V16`) is `MOTOR`, none on a manual one).
+Tasks are executed inside a `MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one
+or more tracks): a task can
 only be completed with the order and a shift covering its track both `IN_PROGRESS`, a task type that requires
 full possession cannot be done in a `PARTIAL` shift, and a `DIVERTED` section only accepts `FULL`
 shifts. Completing a task can record `CatenaryDefect`s inline (`RESOLVED` in the shift if the work

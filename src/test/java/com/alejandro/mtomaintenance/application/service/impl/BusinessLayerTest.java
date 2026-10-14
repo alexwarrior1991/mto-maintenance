@@ -57,6 +57,9 @@ import com.alejandro.mtomaintenance.application.dto.task.CancelTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.CompleteTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationOutcome;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationPreviewLine;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationSelection;
 import com.alejandro.mtomaintenance.application.dto.task.InlineDefectRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskUpdateRequest;
@@ -106,6 +109,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDe
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CheckItemResult;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectStatus;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DisconnectorDriveType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FunctionalGroup;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionKind;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionResult;
@@ -164,6 +168,8 @@ import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -512,7 +518,7 @@ class BusinessLayerTest {
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("540")));
 
-        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null));
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
 
         assertEquals(1, response.createdTasks());
         assertEquals(1, response.skippedProfiles());
@@ -548,7 +554,7 @@ class BusinessLayerTest {
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("300")));
 
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, true,
-                List.of(CatenaryAssetType.PROFILE, CatenaryAssetType.SECTION_INSULATOR)));
+                List.of(CatenaryAssetType.PROFILE, CatenaryAssetType.SECTION_INSULATOR), null, null));
 
         assertEquals(4, response.createdTasks());
         assertEquals(0, response.skippedAssets());
@@ -582,7 +588,7 @@ class BusinessLayerTest {
 
         // Solo aisladores, con los tipos elegidos: el perfil ni se pide.
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
-                new GeneratePreventiveTasksRequest(List.of("RG-03", "RP-02"), null, List.of(CatenaryAssetType.SECTION_INSULATOR)));
+                new GeneratePreventiveTasksRequest(List.of("RG-03", "RP-02"), null, List.of(CatenaryAssetType.SECTION_INSULATOR), null, null));
 
         assertEquals(1, response.createdTasks());
         assertEquals(1, response.skippedAssets());
@@ -596,17 +602,287 @@ class BusinessLayerTest {
     }
 
     @Test
-    void onlyProfilesAndInsulatorsAreGeneratedOneByOneAlongASection() {
+    void aTrackSectionIsNeverGeneratedOneByOne() {
         TaskFixture fixture = new TaskFixture();
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
         when(fixture.lookups.order(order.getId())).thenReturn(order);
 
         ValidationException rejected = assertThrows(ValidationException.class, () -> fixture.service.generatePreventiveTasks(order.getId(),
-                new GeneratePreventiveTasksRequest(null, null, List.of(CatenaryAssetType.PROFILE, CatenaryAssetType.DISCONNECTOR))));
+                new GeneratePreventiveTasksRequest(null, null, List.of(CatenaryAssetType.PROFILE, CatenaryAssetType.TRACK_SECTION), null, null)));
 
         assertTrue(rejected.getMessage().startsWith("assetTypes"), rejected.getMessage());
-        assertTrue(rejected.getMessage().contains("DISCONNECTOR"), rejected.getMessage());
+        assertTrue(rejected.getMessage().contains("TRACK_SECTION"), rejected.getMessage());
         verify(fixture.repository, never()).save(any());
+    }
+
+    @Test
+    void theDisconnectorsOfTheSectionGetRp06OnlyWithAMotorAndAManualOneWaitsForChosenTypes() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        CatenaryAsset motor = disconnectorAt("HSA-NS5", 2L, "12900.000", DisconnectorDriveType.MOTOR);
+        CatenaryAsset manual = disconnectorAt("HSA-NS6", 2L, "13100.000", DisconnectorDriveType.MANUAL);
+        CatenaryAsset unknown = disconnectorAt("HSA-NS7", 2L, "13200.000", null);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledByTypeTouchingSection(eq(CatenaryAssetType.DISCONNECTOR), eq(2L), any(), any()))
+                .thenReturn(List.of(motor, manual, unknown));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES)).thenReturn(fullPossessionTypes("RP-06"));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("45")));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(null, null, List.of(CatenaryAssetType.DISCONNECTOR), null, null));
+
+        assertEquals(1, response.createdTasks());
+        assertEquals(2, response.skippedWithoutTaskTypes(), "The plan has no type for a manual one, nor for one whose drive is unknown");
+        assertEquals(Map.of(CatenaryAssetType.DISCONNECTOR, 1), response.createdByAssetType());
+        MaintenanceTask created = fixture.savedTask();
+        assertEquals(motor, created.getAsset());
+        assertEquals("Preventive maintenance of disconnector HSA-NS5 (kp 12900.000)", created.getDescription());
+        assertTrue(created.requiresFullPossession(), "RP-06 waits for a FULL shift");
+    }
+
+    @Test
+    void anOrderMixesProfilesOfAnotherSectionInsulatorsOfAnotherTrackAndTheDisconnectorsOfItsPackage() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        CatenaryAsset otherSection = sectionOn(3L, 6L, TrackKind.MAIN);
+        CatenaryAsset farProfile = profileOn("3-1.02", 3L, "13500.000");
+        CatenaryAsset nearProfile = profileOn("3-1.01", 3L, "13000.000");
+        CatenaryAsset onTrack13 = insulator("SI-W51", 13L, null, "20100.000", "20150.000");
+        CatenaryAsset connectingTo13 = insulator("SI-W52", 12L, 13L, "20000.000", "20040.000");
+        CatenaryAsset motor = disconnectorAt("HSA-NS5", 2L, "12900.000", DisconnectorDriveType.MOTOR);
+        CatenaryAsset manual = disconnectorAt("HSA-NS6", 2L, "13100.000", DisconnectorDriveType.MANUAL);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findById(otherSection.getId())).thenReturn(Optional.of(otherSection));
+        when(fixture.assetRepository.findEnabledByTypeOnTrackBetween(CatenaryAssetType.PROFILE, 3L, otherSection.getStartKp(), otherSection.getEndKp()))
+                .thenReturn(List.of(nearProfile, farProfile));
+        when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.SECTION_INSULATOR, 13L, null, null, null, null))
+                .thenReturn(List.of(connectingTo13, onTrack13));
+        when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.DISCONNECTOR, null, null, null, null, 6L))
+                .thenReturn(List.of(motor, manual));
+        when(fixture.repository.findMaxSequence(order.getId())).thenReturn(0);
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypes());
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES)).thenReturn(fullPossessionTypes("RP-06"));
+        when(fixture.lookups.activeTemplate(any())).thenReturn(Optional.of(template("RUNNERS", "BODY")));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("600")));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(
+                null, true, null, List.of(
+                        selection(CatenaryAssetType.PROFILE).sectionId(otherSection.getId()).build(),
+                        selection(CatenaryAssetType.SECTION_INSULATOR).trackId(13L).build(),
+                        selection(CatenaryAssetType.DISCONNECTOR).build()), null));
+
+        assertEquals(5, response.createdTasks());
+        assertEquals(Map.of(CatenaryAssetType.PROFILE, 2, CatenaryAssetType.SECTION_INSULATOR, 2, CatenaryAssetType.DISCONNECTOR, 1),
+                response.createdByAssetType());
+        assertEquals(1, response.skippedWithoutTaskTypes(), "The manual disconnector");
+        assertFalse(response.dryRun());
+        assertEquals(List.of(), response.assets(), "The lines come only with a preview");
+        ArgumentCaptor<MaintenanceTask> saved = ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(fixture.repository, times(5)).save(saved.capture());
+        List<MaintenanceTask> tasks = saved.getAllValues();
+        assertEquals(List.of(nearProfile, farProfile, connectingTo13, onTrack13, motor), tasks.stream().map(MaintenanceTask::getAsset).toList(),
+                "Track by track in the order asked for, by kp inside: the insulator of track 12 that connects goes with track 13");
+        assertEquals(List.of(1, 2, 3, 4, 5), tasks.stream().map(MaintenanceTask::getSequence).toList());
+        assertEquals(Set.of("RG-01", "RG-12"), codesOf(tasks.get(0)));
+        assertEquals(Set.of("RG-03"), codesOf(tasks.get(2)));
+        assertEquals(Set.of("RP-06"), codesOf(tasks.get(4)));
+        assertTrue(tasks.stream().allMatch(task -> task.getCheckItems().size() == 2), "Each with the checklist of its type");
+        verify(fixture.lookups).activeTemplate(motor);
+        assertTrue(tasks.stream().allMatch(task -> task.getOrder() == order));
+    }
+
+    @Test
+    void anOrderOnAnInsulatorGeneratesOnlyInsulatorsWithSelectionsAndSelectionsNeedAPackage() {
+        TaskFixture fixture = new TaskFixture();
+        CatenaryAsset anchor = insulator("SI-W31", 2L, 3L, "12850.000", "12890.000");
+        MaintenanceOrder order = orderOn(anchor);
+        CatenaryAsset another = insulator("SI-W41", 3L, null, "12920.000", "12960.000");
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.SECTION_INSULATOR, null, null, null, null, 6L))
+                .thenReturn(List.of(anchor, another));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypes());
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(
+                null, null, null, List.of(selection(CatenaryAssetType.SECTION_INSULATOR).build()), null));
+
+        assertEquals(2, response.createdTasks());
+        assertEquals(Map.of(CatenaryAssetType.SECTION_INSULATOR, 2), response.createdByAssetType());
+        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(null, null, null, null, null)), "Without selections it is still the order's section");
+
+        MaintenanceOrder withoutPackage = orderOn(insulator("SI-W99", 9L, null, "100.000", "120.000"));
+        withoutPackage.setExecutionPackageId(null);
+        when(fixture.lookups.order(withoutPackage.getId())).thenReturn(withoutPackage);
+        ValidationException rejected = assertThrows(ValidationException.class, () -> fixture.service.generatePreventiveTasks(withoutPackage.getId(),
+                new GeneratePreventiveTasksRequest(null, null, null, List.of(selection(CatenaryAssetType.SECTION_INSULATOR).build()), null)));
+        assertTrue(rejected.getMessage().startsWith("selections:"), rejected.getMessage());
+    }
+
+    @Test
+    void whatIsAlreadyInTheOrderInTwoSelectionsInAnotherOpenOrderOrInAnotherPackageIsNeverGeneratedTwice() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        CatenaryAsset covered = profileOn("2-1.01", 2L, "12900.000");
+        CatenaryAsset twice = profileOn("2-1.02", 2L, "13000.000");
+        CatenaryAsset busy = profileOn("2-1.03", 2L, "13100.000");
+        CatenaryAsset foreign = profileOn("2-1.04", 2L, "13200.000");
+        foreign.setExecutionPackageId(7L);
+        CatenaryAsset unknownPackage = profileOn("2-1.05", 2L, "13300.000");
+        unknownPackage.setExecutionPackageId(null);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.PROFILE, 2L, null, null, null, null))
+                .thenReturn(List.of(covered, twice, busy, foreign, unknownPackage));
+        when(fixture.assetRepository.findAllById(List.of(twice.getId()))).thenReturn(List.of(twice));
+        when(fixture.repository.findAssetIdsByOrderId(order.getId())).thenReturn(List.of(covered.getId()));
+        when(fixture.repository.findOpenPreventiveTasksElsewhere(List.of(twice.getId(), busy.getId(), unknownPackage.getId()), order.getId()))
+                .thenReturn(List.of(inOtherOrder(busy.getId(), "MO-000042")));
+        when(fixture.lookups.taskTypes(List.of("RG-11"))).thenReturn(taskTypes("RG-11"));
+        when(fixture.lookups.taskTypes(List.of("RG-01"))).thenReturn(taskTypes("RG-01"));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("30")));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(
+                List.of("RG-01"), null, null, List.of(
+                        selection(CatenaryAssetType.PROFILE).assetIds(List.of(twice.getId())).taskTypeCodes(List.of("RG-11")).build(),
+                        selection(CatenaryAssetType.PROFILE).trackId(2L).taskTypeCodes(List.of()).build()), null));
+
+        assertEquals(2, response.createdTasks(), "The one in two selections once, and the one without a package");
+        assertEquals(1, response.skippedAssets());
+        assertEquals(1, response.skippedProfiles());
+        assertEquals(1, response.skippedInOtherOrders());
+        assertEquals(List.of("MO-000042"), response.otherOrderCodes());
+        assertEquals(1, response.skippedOtherPackage());
+        ArgumentCaptor<MaintenanceTask> saved = ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(fixture.repository, times(2)).save(saved.capture());
+        assertEquals(List.of(twice, unknownPackage), saved.getAllValues().stream().map(MaintenanceTask::getAsset).toList());
+        assertEquals(Set.of("RG-11"), codesOf(saved.getAllValues().get(0)), "The first selection that finds it decides, with its own types");
+        assertEquals(Set.of("RG-01"), codesOf(saved.getAllValues().get(1)), "An empty list in a selection leaves the request's");
+    }
+
+    @Test
+    void theSelectionsAreCheckedBeforeAnythingIsGenerated() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        CatenaryAsset foreignSection = sectionOn(4L, 7L, TrackKind.MAIN);
+        CatenaryAsset diverted = sectionOn(5L, 6L, TrackKind.DIVERTED);
+        CatenaryAsset notASection = profileOn("2-1.01", 2L, "12900.000");
+        CatenaryAsset foreign = profileOn("2-1.02", 2L, "13000.000");
+        foreign.setExecutionPackageId(7L);
+        CatenaryAsset off = profileOn("2-1.03", 2L, "13100.000");
+        off.disableLocally();
+        UUID missing = UUID.randomUUID();
+        when(fixture.assetRepository.findById(foreignSection.getId())).thenReturn(Optional.of(foreignSection));
+        when(fixture.assetRepository.findById(diverted.getId())).thenReturn(Optional.of(diverted));
+        when(fixture.assetRepository.findById(notASection.getId())).thenReturn(Optional.of(notASection));
+        when(fixture.assetRepository.findAllById(any())).thenAnswer(invocation -> {
+            List<UUID> ids = invocation.getArgument(0);
+            return Stream.of(notASection, foreign, off).filter(asset -> ids.contains(asset.getId())).toList();
+        });
+
+        Map<String, GenerationSelection> rejected = new LinkedHashMap<>();
+        rejected.put("selections[0].assetType", selection(CatenaryAssetType.TRACK_SECTION).build());
+        rejected.put("selections[0]: one of", selection(CatenaryAssetType.PROFILE).trackId(2L).sectionId(foreignSection.getId()).build());
+        rejected.put("selections[0].fromKp: a kp range", selection(CatenaryAssetType.PROFILE).fromKp(BigDecimal.ONE).build());
+        rejected.put("selections[0].fromKp: 2", selection(CatenaryAssetType.PROFILE).trackId(2L).fromKp(BigDecimal.TWO).toKp(BigDecimal.ONE).build());
+        rejected.put("selections[0].stationId", selection(CatenaryAssetType.PROFILE).assetIds(List.of(notASection.getId())).stationId(4L).build());
+        rejected.put("selections[0].sectionId: " + foreignSection.getCode() + " is not in the execution package",
+                selection(CatenaryAssetType.PROFILE).sectionId(foreignSection.getId()).build());
+        rejected.put("selections[0].sectionId: " + diverted.getCode() + " is a DIVERTED track",
+                selection(CatenaryAssetType.PROFILE).sectionId(diverted.getId()).build());
+        rejected.put("selections[0].sectionId: " + notASection.getCode() + " is a PROFILE",
+                selection(CatenaryAssetType.PROFILE).sectionId(notASection.getId()).build());
+        rejected.put("selections[0].sectionId: no asset", selection(CatenaryAssetType.PROFILE).sectionId(missing).build());
+        rejected.put("selections[0].assetIds: no assets", selection(CatenaryAssetType.PROFILE).assetIds(List.of(missing)).build());
+        rejected.put("selections[0].assetIds: " + notASection.getCode() + " are not DISCONNECTOR",
+                selection(CatenaryAssetType.DISCONNECTOR).assetIds(List.of(notASection.getId())).build());
+        rejected.put("selections[0].assetIds: " + off.getCode() + " are disabled", selection(CatenaryAssetType.PROFILE).assetIds(List.of(off.getId())).build());
+        rejected.put("selections[0].assetIds: " + foreign.getCode() + " are not in the execution package",
+                selection(CatenaryAssetType.PROFILE).assetIds(List.of(foreign.getId())).build());
+
+        rejected.forEach((message, selection) -> {
+            ValidationException exception = assertThrows(ValidationException.class, () -> fixture.service.generatePreventiveTasks(order.getId(),
+                    new GeneratePreventiveTasksRequest(null, null, null, List.of(selection), null)), message);
+            assertTrue(exception.getMessage().startsWith(message), exception.getMessage());
+        });
+        ValidationException together = assertThrows(ValidationException.class, () -> fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(null, null, List.of(CatenaryAssetType.PROFILE),
+                        List.of(selection(CatenaryAssetType.PROFILE).build()), null)));
+        assertTrue(together.getMessage().startsWith("assetTypes:"), together.getMessage());
+        verify(fixture.repository, never()).save(any());
+    }
+
+    @Test
+    void aPreviewCreatesNothingTakesNoLockAndSaysWhatWouldHappenToEachAsset() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        order.getTasks().add(task(order, MaintenanceTaskStatus.PENDING));
+        CatenaryAsset fresh = profileOn("2-1.01", 2L, "12900.000");
+        CatenaryAsset busy = profileOn("2-1.02", 2L, "13000.000");
+        CatenaryAsset manual = disconnectorAt("HSA-NS6", 2L, "13100.000", DisconnectorDriveType.MANUAL);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.PROFILE, 2L, null, null, null, null)).thenReturn(List.of(fresh, busy));
+        when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.DISCONNECTOR, 2L, null, null, null, null)).thenReturn(List.of(manual));
+        when(fixture.repository.findOpenPreventiveTasksElsewhere(any(), eq(order.getId()))).thenReturn(List.of(inOtherOrder(busy.getId(), "MO-000042")));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-12", "RG-01"));
+        when(fixture.workloadEstimator.estimate(eq(order), any())).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("15")));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(
+                null, null, null, List.of(selection(CatenaryAssetType.PROFILE).trackId(2L).build(),
+                selection(CatenaryAssetType.DISCONNECTOR).trackId(2L).build()), true));
+
+        assertTrue(response.dryRun());
+        assertEquals(1, response.createdTasks(), "What would be created");
+        assertEquals(2, response.totalTasks(), "The one there plus the one that would be created");
+        assertEquals(List.of(GenerationOutcome.CREATE, GenerationOutcome.IN_OTHER_ORDER, GenerationOutcome.NO_TASK_TYPES),
+                response.assets().stream().map(GenerationPreviewLine::outcome).toList());
+        GenerationPreviewLine first = response.assets().getFirst();
+        assertEquals(List.of("RG-01", "RG-12"), first.taskTypeCodes());
+        assertEquals(new BigDecimal("12900.000"), first.kp());
+        assertEquals("MO-000042", response.assets().get(1).otherOrderCode());
+        assertEquals(List.of(), response.assets().get(2).taskTypeCodes());
+        ArgumentCaptor<Collection<MaintenanceTask>> planned = ArgumentCaptor.captor();
+        verify(fixture.workloadEstimator).estimate(eq(order), planned.capture());
+        assertEquals(List.of(fresh), planned.getValue().stream().map(MaintenanceTask::getAsset).toList());
+        verify(fixture.repository, never()).save(any());
+        verify(fixture.repository, never()).advisoryTransactionLock(anyLong());
+        assertEquals(1, order.getTasks().size(), "The order is not touched");
+    }
+
+    @Test
+    void generatingAndAddingATaskByHandQueueBehindTheSameLockOfThePackage() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
+        long packageLock = "mto-maintenance:generate-tasks:EP-6".hashCode();
+
+        fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
+        InOrder inOrder = inOrder(fixture.repository);
+        inOrder.verify(fixture.repository).advisoryTransactionLock(packageLock);
+        inOrder.verify(fixture.repository).findAssetIdsByOrderId(order.getId());
+
+        fixture.service.create(order.getId(), new MaintenanceTaskRequest("By hand", null, null, null, null));
+        verify(fixture.repository, times(2)).advisoryTransactionLock(packageLock);
+
+        MaintenanceOrder withoutPackage = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        withoutPackage.setExecutionPackageId(null);
+        when(fixture.lookups.order(withoutPackage.getId())).thenReturn(withoutPackage);
+        when(fixture.workloadEstimator.estimate(withoutPackage)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
+        fixture.service.generatePreventiveTasks(withoutPackage.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
+        verify(fixture.repository).advisoryTransactionLock(("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()).hashCode());
+    }
+
+    @Test
+    void aGeneratedTaskOnAnotherTrackOfThePackageIsWorkedFromAShiftOfItsOwnTrack() {
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceTask task = task(order, MaintenanceTaskStatus.PENDING);
+        task.setAsset(disconnectorAt("HSA-NS5", 5L, "12900.000", DisconnectorDriveType.MOTOR));
+
+        assertDoesNotThrow(() -> ShiftRules.requireSameTrack(shift(5L, PossessionType.FULL, ShiftStatus.IN_PROGRESS), task));
+        assertThrows(ShiftException.class, () -> ShiftRules.requireSameTrack(shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS), task),
+                "Not from the track of the order's section");
     }
 
     @Test
@@ -614,11 +890,11 @@ class BusinessLayerTest {
         TaskFixture fixture = new TaskFixture();
         MaintenanceOrder corrective = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
         when(fixture.lookups.order(corrective.getId())).thenReturn(corrective);
-        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(corrective.getId(), new GeneratePreventiveTasksRequest(null, null, null)));
+        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(corrective.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null)));
 
         MaintenanceOrder inProgress = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         when(fixture.lookups.order(inProgress.getId())).thenReturn(inProgress);
-        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(inProgress.getId(), new GeneratePreventiveTasksRequest(null, null, null)));
+        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(inProgress.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null)));
     }
 
     @Test
@@ -791,6 +1067,29 @@ class BusinessLayerTest {
         // 3 perfiles x 5 min + (60 + 3 x 2 km) una sola vez.
         assertEquals(0, new BigDecimal("81.00").compareTo(estimate.estimatedMinutes()));
         assertEquals(1, estimate.estimatedShifts());
+    }
+
+    @Test
+    void perKilometreTypesCountTheLengthWalkedOnEachTrackOfTheOrder() {
+        WorkloadEstimatorImpl estimator = new WorkloadEstimatorImpl();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        order.setStartKp(new BigDecimal("10000.000"));
+        order.setEndKp(new BigDecimal("12000.000"));
+        MaintenanceTaskType messenger = MaintenanceTaskType.builder().code("RG-08").description("Messenger wire").unit(TaskUnit.KM)
+                .fixedMinutes(new BigDecimal("60")).standardMinutesPerUnit(new BigDecimal("3")).orderIndex(8).build();
+        MaintenanceTask onTheSection = task(order, MaintenanceTaskStatus.PENDING);
+        onTheSection.setAsset(profileOn("2-1.01", 2L, "10500.000"));
+        onTheSection.getTaskTypes().add(messenger);
+        order.getTasks().add(onTheSection);
+        MaintenanceTask planned = MaintenanceTask.builder().sequence(9).description("Track 3, km 1").asset(profileOn("3-1.01", 3L, "1000.000")).build();
+        planned.getTaskTypes().add(messenger);
+        MaintenanceTask plannedToo = MaintenanceTask.builder().sequence(10).description("Track 3, km 4").asset(profileOn("3-1.02", 3L, "4000.000")).build();
+        plannedToo.getTaskTypes().add(messenger);
+
+        // Via 2: (60 + 3 x 2 km, el tramo de la orden); via 3: (60 + 3 x 3 km, del primero al ultimo).
+        assertEquals(0, new BigDecimal("135.00").compareTo(estimator.estimate(order, List.of(planned, plannedToo)).estimatedMinutes()));
+        assertEquals(0, new BigDecimal("66.00").compareTo(estimator.estimate(order).estimatedMinutes()), "Only the section, as always");
+        assertEquals(1, order.getTasks().size(), "What is planned is not added to the order");
     }
 
     // ----------------------------------------------------------------- shifts
@@ -3622,7 +3921,8 @@ class BusinessLayerTest {
             when(assetMapper.toSummary(any())).thenAnswer(invocation -> {
                 CatenaryAsset asset = invocation.getArgument(0);
                 return new CatenaryAssetSummaryResponse(asset.getId(), asset.getCode(), asset.getName(), asset.getType(), asset.getTrackId(),
-                        asset.getStartKp(), asset.getEndKp(), asset.getSectioning(), asset.getEnabled(), asset.getConnectedTrackId());
+                        asset.getStartKp(), asset.getEndKp(), asset.getSectioning(), asset.getEnabled(), asset.getConnectedTrackId(),
+                        asset.getExecutionPackageId(), asset.getStationId(), asset.getDriveType());
             });
             service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository, inspectionRepository,
                     mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events);
@@ -3743,7 +4043,8 @@ class BusinessLayerTest {
         TaskFixture() {
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
             service = new MaintenanceTaskServiceImpl(repository, assetRepository, defectRepository, mapper, lookups,
-                    codeGenerator, history, workloadEstimator, lineFactory, stock);
+                    codeGenerator, history, workloadEstimator, lineFactory, stock,
+                    new PreventiveTaskSelector(assetRepository, repository, lookups));
         }
 
         MaintenanceTask savedTask() {
@@ -3797,6 +4098,112 @@ class BusinessLayerTest {
 
     private static Set<String> codesOf(MaintenanceTask task) {
         return task.getTaskTypes().stream().map(MaintenanceTaskType::getCode).collect(Collectors.toSet());
+    }
+
+    private static CatenaryAsset profileOn(String name, Long trackId, String kp) {
+        CatenaryAsset asset = profile(name, kp);
+        asset.setTrackId(trackId);
+        return asset;
+    }
+
+    private static CatenaryAsset disconnectorAt(String name, Long trackId, String kp, DisconnectorDriveType driveType) {
+        CatenaryAsset asset = disconnector(name);
+        asset.setTrackId(trackId);
+        asset.setStartKp(new BigDecimal(kp));
+        asset.setEndKp(new BigDecimal(kp));
+        asset.setDriveType(driveType);
+        return asset;
+    }
+
+    private static CatenaryAsset sectionOn(Long trackId, Long packageId, TrackKind kind) {
+        CatenaryAsset asset = trackSection();
+        asset.setCode("SEC-T" + trackId);
+        asset.setTrackId(trackId);
+        asset.setExecutionPackageId(packageId);
+        asset.setTrackKind(kind);
+        return asset;
+    }
+
+    /** Una orden preventiva sobre cualquier activo: con selecciones solo aporta el EP y la clase de via. */
+    private static MaintenanceOrder orderOn(CatenaryAsset asset) {
+        MaintenanceOrder order = MaintenanceOrder.builder().code("MO-ON-" + asset.getCode()).title("Order").type(MaintenanceOrderType.PREVENTIVE)
+                .status(MaintenanceOrderStatus.DRAFT).priority(MaintenancePriority.MEDIUM).asset(asset).build();
+        order.locateAt(asset);
+        ReflectionTestUtils.setField(order, "id", UUID.randomUUID());
+        return order;
+    }
+
+    private static MaintenanceTaskRepository.AssetInOtherOrder inOtherOrder(UUID assetId, String orderCode) {
+        return new MaintenanceTaskRepository.AssetInOtherOrder() {
+            @Override
+            public UUID getAssetId() {
+                return assetId;
+            }
+
+            @Override
+            public String getOrderCode() {
+                return orderCode;
+            }
+        };
+    }
+
+    /** Una seleccion por partes, para no escribir los nueve componentes en cada caso. */
+    private static SelectionBuilder selection(CatenaryAssetType type) {
+        return new SelectionBuilder(type);
+    }
+
+    private static final class SelectionBuilder {
+        private final CatenaryAssetType type;
+        private UUID sectionId;
+        private Long trackId;
+        private BigDecimal fromKp;
+        private BigDecimal toKp;
+        private Long stationId;
+        private List<UUID> assetIds;
+        private List<String> taskTypeCodes;
+
+        private SelectionBuilder(CatenaryAssetType type) {
+            this.type = type;
+        }
+
+        SelectionBuilder sectionId(UUID value) {
+            sectionId = value;
+            return this;
+        }
+
+        SelectionBuilder trackId(Long value) {
+            trackId = value;
+            return this;
+        }
+
+        SelectionBuilder fromKp(BigDecimal value) {
+            fromKp = value;
+            return this;
+        }
+
+        SelectionBuilder toKp(BigDecimal value) {
+            toKp = value;
+            return this;
+        }
+
+        SelectionBuilder stationId(Long value) {
+            stationId = value;
+            return this;
+        }
+
+        SelectionBuilder assetIds(List<UUID> value) {
+            assetIds = value;
+            return this;
+        }
+
+        SelectionBuilder taskTypeCodes(List<String> value) {
+            taskTypeCodes = value;
+            return this;
+        }
+
+        GenerationSelection build() {
+            return new GenerationSelection(type, sectionId, trackId, fromKp, toKp, stationId, assetIds, taskTypeCodes, null);
+        }
     }
 
     private static CatenaryAsset disconnector(String name) {
@@ -3934,6 +4341,12 @@ class BusinessLayerTest {
     private static Set<MaintenanceTaskType> fullPossessionTypes() {
         Set<MaintenanceTaskType> types = new LinkedHashSet<>();
         types.add(MaintenanceTaskType.builder().code("RG-03").description("Section insulators").requiresFullPossession(true).orderIndex(3).build());
+        return types;
+    }
+
+    private static Set<MaintenanceTaskType> fullPossessionTypes(String code) {
+        Set<MaintenanceTaskType> types = new LinkedHashSet<>();
+        types.add(MaintenanceTaskType.builder().code(code).description(code).requiresFullPossession(true).orderIndex(26).build());
         return types;
     }
 

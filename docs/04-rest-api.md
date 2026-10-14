@@ -37,9 +37,8 @@ GET/POST        /orders                       status, type, priority, assetId, a
 GET/PUT         /orders/{id}
 POST            /orders/{id}/plan | /assign | /start | /complete | /cancel
 GET             /orders/{id}/history | /revisions
-GET/POST        /orders/{id}/tasks            POST /orders/{id}/tasks/generate {taskTypeCodes, withChecklist, assetTypes}
-                                              assetTypes: PROFILE (default) and/or SECTION_INSULATOR (RG-03 by default; also
-                                              the ones of another track that connect with the section's); any other is 400
+GET/POST        /orders/{id}/tasks            POST /orders/{id}/tasks/generate {taskTypeCodes, withChecklist, assetTypes,
+                                              selections, dryRun} — see "Generating preventive tasks" below
 GET/PUT         /orders/{id}/tasks/{taskId}   POST .../start | /complete | /cancel
 PUT             /orders/{id}/tasks/{taskId}/check-items/{itemId}
 GET/POST        /orders/{id}/materials        PUT .../{usageId}   POST .../{usageId}/sync   DELETE .../{usageId}
@@ -58,6 +57,63 @@ GET             /defects/{id}/history | /revisions
 GET             /reports/progress             executionPackageId, trackId (also the insulators connecting to it), assetType, from, to, format
 GET             /reports/monthly              executionPackageId, month=yyyy-MM, format
 ```
+
+## Generating preventive tasks
+
+`POST /orders/{id}/tasks/generate`, for a `PREVENTIVE` order in `DRAFT` or `PLANNED` (else 409
+`TRN-001`). The body is optional; without one it generates the profiles of the order's section.
+
+```jsonc
+{
+  "taskTypeCodes": ["RG-01"],          // for everything generated; default: per asset (below)
+  "withChecklist": true,               // the template of each asset's type
+  "assetTypes": ["PROFILE", "SECTION_INSULATOR", "DISCONNECTOR"],   // only without selections
+  "selections": [                      // at most 20; not together with assetTypes
+    {"assetType": "PROFILE", "sectionId": "…"},                    // another section of the package
+    {"assetType": "SECTION_INSULATOR", "trackId": 13, "fromKp": 12000, "toKp": 14000},
+    {"assetType": "DISCONNECTOR", "stationId": 4},                  // the whole package, of a station
+    {"assetType": "DISCONNECTOR", "assetIds": ["…"], "taskTypeCodes": ["RP-06"], "withChecklist": false}
+  ],
+  "dryRun": true                       // create nothing: say what would happen
+}
+```
+
+- **Without `selections`**: the order must be on a `TRACK_SECTION` (else 409 `TRN-001`). Profiles of
+  its track between its kp; with `assetTypes`, also the insulators and disconnectors on its track or
+  connecting to it whose kp range overlaps it. `TRACK_SECTION` in `assetTypes` is a 400.
+- **With `selections`**: the order (on any asset) must have an execution package (400 on
+  `selections`); each selection is one asset type in at most one scope — `sectionId` (a
+  `TRACK_SECTION` of the package and of the same kind, `MAIN`/`DIVERTED`, as the order's),
+  `trackId` with an optional `fromKp`/`toKp` (what is on that track or connects with it, overlapping
+  the range), `assetIds` (at most 500, of the type, enabled and of the package) or none (the whole
+  package). `stationId` filters any scope but `assetIds`. Every mistake is a 400 on its field
+  (`selections[i].sectionId: …`, `selections[i].assetIds: …`): two scopes, a kp range without a
+  track, `fromKp > toKp`, a section or an asset of another package, of another type, disabled or
+  unknown.
+- **Default task types**: groups 1, 2 and 4 on a profile, `RG-03` on a section insulator, `RP-06` on
+  a disconnector with `driveType: MOTOR`; a manual one or one without the data has none. A
+  selection's `taskTypeCodes`/`withChecklist` win over the request's.
+- **Skipped, never duplicated**: what already has a task in the order (also cancelled), what belongs
+  to another package than the order's, what has an open task in another open preventive order, and
+  what has no task type. Generations in one package run one after another.
+
+```jsonc
+{
+  "createdTasks": 5, "skippedProfiles": 0, "totalTasks": 5, "estimatedMinutes": 610.5, "estimatedShifts": 2,
+  "skippedAssets": 0,                                  // already in the order (skippedProfiles: the profiles among them)
+  "createdByAssetType": {"PROFILE": 2, "SECTION_INSULATOR": 2, "DISCONNECTOR": 1},
+  "skippedInOtherOrders": 1, "otherOrderCodes": ["MO-000042"],
+  "skippedOtherPackage": 0, "skippedWithoutTaskTypes": 1,
+  "dryRun": true,
+  "assets": [                                          // only with dryRun, in the order they would be generated
+    {"assetId": "…", "code": "PRF-…", "name": "3-1.01", "type": "PROFILE", "trackId": 3, "connectedTrackId": null,
+     "kp": 13000.000, "taskTypeCodes": ["RG-01", "RG-12"], "withChecklist": true, "outcome": "CREATE", "otherOrderCode": null}
+  ]
+}
+```
+
+`outcome` is `CREATE`, `ALREADY_IN_ORDER`, `OTHER_PACKAGE`, `IN_OTHER_ORDER` or `NO_TASK_TYPES`. With
+`dryRun` the counters and the estimate are those of generating it.
 
 ## Export (`?format=`)
 

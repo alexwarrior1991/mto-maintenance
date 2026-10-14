@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.application.service.impl;
 
 import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataEntityNames;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DisconnectorDriveType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetSwitchRepository;
 import org.springframework.stereotype.Service;
@@ -64,8 +65,25 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
                 // tiene, y uno que deja de existir llega como DELETED, que ya lo desactiva. Se lee de
                 // todos modos, con true por defecto, para que los tres handlers traten el estado
                 // igual si algun dia el origen lo anade.
-                payload.bool("enabled", true)
+                payload.bool("enabled", true),
+                // Con motor o a mano (V16): decide si RP-06 le va por defecto al generar un preventivo.
+                driveType(payload.string("driveType"))
         );
+    }
+
+    /** Lectura tolerante: un valor que este lado no conoce se guarda como nada, nunca va a la DLQ. */
+    private static DisconnectorDriveType driveType(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+
+        for (DisconnectorDriveType each : DisconnectorDriveType.values()) {
+            if (each.name().equalsIgnoreCase(value.trim())) {
+                return each;
+            }
+        }
+
+        return null;
     }
 
     /**

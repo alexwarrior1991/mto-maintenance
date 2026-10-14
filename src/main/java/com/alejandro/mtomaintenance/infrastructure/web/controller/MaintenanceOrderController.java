@@ -196,11 +196,16 @@ public class MaintenanceOrderController {
         return ResponseEntity.created(URI.create(MaintenanceApiPaths.BASE + "/orders/" + id + "/tasks/" + response.id())).body(response);
     }
 
-    @Operation(summary = "Generate preventive tasks profile by profile", tags = "Tasks",
-            description = "One task per enabled PROFILE of the order's track section (and, with assetTypes, per SECTION_INSULATOR on it or connecting to it), ordered by kp, with the given task types (default: groups 1, 2 and 4 on a profile, RG-03 on an insulator). Idempotent per asset.")
+    @Operation(summary = "Generate preventive tasks asset by asset", tags = "Tasks",
+            description = "Without selections, one task per enabled PROFILE of the order's track section (and, with assetTypes, per "
+                    + "SECTION_INSULATOR or DISCONNECTOR on it or connecting to it). With selections, what each one says (an asset type in "
+                    + "a section, a track with an optional kp range, chosen assets or the whole execution package, optionally of a station), "
+                    + "on any track of the order's execution package. Default task types per asset: groups 1, 2 and 4 on a profile, RG-03 "
+                    + "on an insulator, RP-06 on a motor disconnector. Skips what already has a task in the order, what belongs to another "
+                    + "package and what has an open task in another open preventive order. dryRun previews without creating anything.")
     @PostMapping("/{id}/tasks/generate")
     public ResponseEntity<GeneratePreventiveTasksResponse> generateTasks(@PathVariable UUID id, @Valid @RequestBody(required = false) GeneratePreventiveTasksRequest request) {
-        return ResponseEntity.ok(taskService.generatePreventiveTasks(id, request == null ? new GeneratePreventiveTasksRequest(null, null, null) : request));
+        return ResponseEntity.ok(taskService.generatePreventiveTasks(id, request == null ? new GeneratePreventiveTasksRequest(null, null, null, null, null) : request));
     }
 
     @Operation(summary = "Get task", tags = "Tasks")

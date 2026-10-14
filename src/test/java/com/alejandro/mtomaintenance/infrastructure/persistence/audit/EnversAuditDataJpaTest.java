@@ -184,7 +184,7 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         // buscarlo a catenary_asset_aud: ahi no esta, y leer su codigo era un 500.
         String sourceId = "prf-" + UUID.randomUUID();
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27", "PROFILE",
-                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 10L));
+                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, true, 10L));
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         UUID[] ids = inTransaction(em -> {
             CatenaryAsset asset = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
@@ -207,7 +207,7 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
 
         // Y el activo que se lee es el de ahora: el evento siguiente lo renombra.
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27 renamed", "PROFILE",
-                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 11L));
+                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, true, 11L));
 
         assertEquals("12-2.27 renamed", assetNameInFirstRevision(MaintenanceOrder.class, ids[0], MaintenanceOrder::getAsset));
         assertEquals("12-2.27 renamed", assetNameInFirstRevision(MaintenanceTask.class, ids[1], MaintenanceTask::getAsset));
@@ -231,13 +231,13 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
     void masterDataUpsertsLeaveNoRevisionWhileAnApiEditOfTheSameAssetDoes() {
         String sourceId = "prf-" + UUID.randomUUID();
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27", "PROFILE",
-                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 10L));
+                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, true, 10L));
         UUID assetId = inTransaction(em -> assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getId());
 
         assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId)).isEmpty(), "Native SQL bypasses Envers on purpose");
 
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27 renamed", "PROFILE",
-                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 11L));
+                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, true, 11L));
         assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId)).isEmpty());
 
         inTransaction(em -> {
@@ -267,7 +267,7 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
             return null;
         });
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27 renamed", "PROFILE",
-                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, 12L));
+                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, true, 12L));
         List<Number> afterDisable = reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId));
         assertEquals(2, afterDisable.size());
         CatenaryAsset disabled = reading(reader -> reader.find(CatenaryAsset.class, assetId, afterDisable.getLast()));

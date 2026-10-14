@@ -62,6 +62,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -98,14 +99,15 @@ class RestControllerLayerTest {
         MaintenanceOrderRequest request = new MaintenanceOrderRequest("Preventive T2", null, MaintenanceOrderType.PREVENTIVE, null, assetId, null, null, null, null);
         MaintenanceOrderResponse order = orderResponse(orderId);
         PageResponse<MaintenanceOrderResponse> page = new PageResponse<>(List.of(order), new PageMetadataResponse(0, 20, 1, 1, true, true));
-        GeneratePreventiveTasksResponse generated = new GeneratePreventiveTasksResponse(23, 0, 23, new BigDecimal("1266.00"), 5, 0);
+        GeneratePreventiveTasksResponse generated = new GeneratePreventiveTasksResponse(23, 0, 23, new BigDecimal("1266.00"), 5, 0,
+                Map.of(), 0, List.of(), 0, 0, false, List.of());
         LocalDate from = LocalDate.of(2026, 1, 1);
         LocalDate to = LocalDate.of(2026, 1, 31);
 
         when(orderService.create(request)).thenReturn(order);
         when(orderService.search(MaintenanceOrderStatus.PLANNED, null, MaintenancePriority.HIGH, null, null, 2L, null, null, from, to, null, null, null, null, null, pageable)).thenReturn(page);
         when(orderService.cancel(orderId, new CancelOrderRequest("rain"))).thenReturn(order);
-        when(taskService.generatePreventiveTasks(orderId, new GeneratePreventiveTasksRequest(null, null, null))).thenReturn(generated);
+        when(taskService.generatePreventiveTasks(orderId, new GeneratePreventiveTasksRequest(null, null, null, null, null))).thenReturn(generated);
 
         var createResponse = controller.create(request);
         var searchResponse = controller.search(MaintenanceOrderStatus.PLANNED, null, MaintenancePriority.HIGH, null, null, 2L, null, null, from, to, null, null, null, null, null, pageable);
@@ -131,7 +133,7 @@ class RestControllerLayerTest {
         MaintenanceShiftController controller = new MaintenanceShiftController(shiftService, taskService, mock(ReportExportService.class));
         UUID shiftId = UUID.randomUUID();
         List<CatenaryAssetSummaryResponse> profiles = List.of(new CatenaryAssetSummaryResponse(UUID.randomUUID(), "PRF-1", "12-2.27",
-                CatenaryAssetType.PROFILE, 2L, new BigDecimal("12847.990"), new BigDecimal("12847.990"), "A/S", true, null));
+                CatenaryAssetType.PROFILE, 2L, new BigDecimal("12847.990"), new BigDecimal("12847.990"), "A/S", true, null, 1L, null, null));
         when(shiftService.profiles(shiftId, null)).thenReturn(profiles);
         when(taskService.findByShift(shiftId, MaintenanceTaskStatus.COMPLETED)).thenReturn(List.of());
 

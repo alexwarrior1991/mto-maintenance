@@ -22,6 +22,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.specification.Mai
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectStatus;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DisconnectorDriveType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionResult;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionTemplate;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspection;
@@ -187,6 +188,94 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
     }
 
     @Test
+    void whatASelectionGeneratesIsOfItsTypeOnTheTrackOrConnectingToItOverlappingTheRangeOfTheStationAndOfThePackage() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        long track = System.nanoTime();
+        long nextTrack = track + 1;
+        long otherPackage = track + 2;
+        CatenaryAsset onTrack = assetRepository.save(disconnector("ON-" + suffix, track, null, "13000.000", 4L, 6L));
+        CatenaryAsset connecting = assetRepository.save(disconnector("CON-" + suffix, nextTrack, track, "12900.000", 4L, 6L));
+        CatenaryAsset atAnotherStation = assetRepository.save(disconnector("ST5-" + suffix, track, null, "13100.000", 5L, 6L));
+        CatenaryAsset outOfRange = assetRepository.save(disconnector("FAR-" + suffix, track, null, "15000.000", 4L, 6L));
+        CatenaryAsset withoutKp = assetRepository.save(disconnector("NOKP-" + suffix, track, null, null, 4L, 6L));
+        CatenaryAsset ofAnotherPackage = assetRepository.save(disconnector("EP7-" + suffix, track, null, "13200.000", 4L, otherPackage));
+        CatenaryAsset off = disconnector("OFF-" + suffix, track, null, "13050.000", 4L, 6L);
+        off.disableLocally();
+        assetRepository.save(off);
+        CatenaryAsset profileOnTrack = assetRepository.save(profile("12-2.27-" + suffix, track, "12950.000"));
+        entityManager.flush();
+
+        List<CatenaryAsset> inRange = assetRepository.findEnabledForGeneration(CatenaryAssetType.DISCONNECTOR, track,
+                new BigDecimal("12800.000"), new BigDecimal("14000.000"), null, null);
+        assertEquals(List.of(onTrack, atAnotherStation, ofAnotherPackage, connecting), inRange,
+                "By track first (its own, then the connected one), by kp inside; the package is not filtered on a track");
+
+        List<CatenaryAsset> wholeTrack = assetRepository.findEnabledForGeneration(CatenaryAssetType.DISCONNECTOR, track, null, null, null, null);
+        assertTrue(wholeTrack.containsAll(List.of(outOfRange, withoutKp)), "Without a range, also what has no kp");
+        assertTrue(wholeTrack.stream().noneMatch(asset -> asset.getId().equals(off.getId())), "Never what is disabled");
+
+        assertEquals(List.of(onTrack, connecting), assetRepository.findEnabledForGeneration(CatenaryAssetType.DISCONNECTOR, track,
+                new BigDecimal("12800.000"), new BigDecimal("14000.000"), 4L, 6L), "Of a station and a package");
+        assertEquals(List.of(profileOnTrack), assetRepository.findEnabledForGeneration(CatenaryAssetType.PROFILE, track,
+                new BigDecimal("12900.000"), new BigDecimal("13000.000"), null, null), "A profile is a point inside the range");
+        List<CatenaryAsset> ofThePackage = assetRepository.findEnabledForGeneration(CatenaryAssetType.DISCONNECTOR, null, null, null, null,
+                otherPackage);
+        assertEquals(List.of(ofAnotherPackage), ofThePackage, "The whole package, on any track");
+    }
+
+    @Test
+    void anAssetIsBusyElsewhereOnlyWithAnOpenTaskInAnotherOpenPreventiveOrder() {
+        long trackId = System.nanoTime();
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        CatenaryAsset section = assetRepository.save(section("SEC-ELS-" + suffix, trackId));
+        CatenaryAsset busy = assetRepository.save(profile("BUSY-" + suffix, trackId, "12900.000"));
+        CatenaryAsset cancelledTask = assetRepository.save(profile("CANC-" + suffix, trackId, "12910.000"));
+        CatenaryAsset finishedOrder = assetRepository.save(profile("DONE-" + suffix, trackId, "12920.000"));
+        CatenaryAsset corrective = assetRepository.save(profile("CORR-" + suffix, trackId, "12930.000"));
+        CatenaryAsset ownOrder = assetRepository.save(profile("OWN-" + suffix, trackId, "12940.000"));
+        MaintenanceOrder current = orderRepository.save(order("MO-ELS-A-" + suffix, section, MaintenanceOrderStatus.DRAFT, MaintenancePriority.MEDIUM, null));
+        MaintenanceOrder other = orderRepository.save(order("MO-ELS-B-" + suffix, section, MaintenanceOrderStatus.PLANNED, MaintenancePriority.MEDIUM, null));
+        MaintenanceOrder cancelled = order("MO-ELS-C-" + suffix, section, MaintenanceOrderStatus.CANCELLED, MaintenancePriority.MEDIUM, null);
+        cancelled.setCancellationReason("Replanned");
+        orderRepository.save(cancelled);
+        MaintenanceOrder correctiveOrder = order("MO-ELS-D-" + suffix, section, MaintenanceOrderStatus.PLANNED, MaintenancePriority.MEDIUM, null);
+        correctiveOrder.setType(MaintenanceOrderType.CORRECTIVE);
+        orderRepository.save(correctiveOrder);
+        taskRepository.save(MaintenanceTask.builder().order(other).sequence(1).description("Busy").asset(busy).build());
+        taskRepository.save(MaintenanceTask.builder().order(other).sequence(2).description("Cancelled").asset(cancelledTask)
+                .status(MaintenanceTaskStatus.CANCELLED).build());
+        taskRepository.save(MaintenanceTask.builder().order(cancelled).sequence(1).description("Order cancelled").asset(finishedOrder).build());
+        taskRepository.save(MaintenanceTask.builder().order(correctiveOrder).sequence(1).description("Corrective").asset(corrective).build());
+        taskRepository.save(MaintenanceTask.builder().order(current).sequence(1).description("Own").asset(ownOrder).build());
+        entityManager.flush();
+
+        List<MaintenanceTaskRepository.AssetInOtherOrder> found = taskRepository.findOpenPreventiveTasksElsewhere(
+                List.of(busy.getId(), cancelledTask.getId(), finishedOrder.getId(), corrective.getId(), ownOrder.getId()), current.getId());
+
+        assertEquals(List.of(busy.getId()), found.stream().map(MaintenanceTaskRepository.AssetInOtherOrder::getAssetId).toList());
+        assertEquals("MO-ELS-B-" + suffix, found.getFirst().getOrderCode());
+        assertEquals(List.of(), taskRepository.findOpenPreventiveTasksElsewhere(List.of(), current.getId()), "Nothing to ask without assets");
+        List<UUID> manyAssets = new java.util.ArrayList<>(java.util.stream.Stream.generate(UUID::randomUUID).limit(2500).toList());
+        manyAssets.add(busy.getId());
+        assertEquals(List.of(busy.getId()), taskRepository.findOpenPreventiveTasksElsewhere(manyAssets, current.getId()).stream()
+                .map(MaintenanceTaskRepository.AssetInOtherOrder::getAssetId).toList(), "A whole package is asked in batches");
+    }
+
+    @Test
+    void theGenerationLockIsTakenAndADriveTypeIsOnlyForADisconnector() {
+        long key = ("mto-maintenance:generate-tasks:EP-" + System.nanoTime()).hashCode();
+        assertEquals(1, taskRepository.advisoryTransactionLock(key));
+        assertEquals(1, taskRepository.advisoryTransactionLock(key), "The same transaction takes it again without waiting");
+
+        CatenaryAsset profile = profile("DRV-" + UUID.randomUUID().toString().substring(0, 8), System.nanoTime(), "12900.000");
+        profile.setDriveType(DisconnectorDriveType.MOTOR);
+        assertThrows(PersistenceException.class, () -> {
+            assetRepository.save(profile);
+            entityManager.flush();
+        }, "chk_catenary_asset_drive_type");
+    }
+
+    @Test
     void masterDataUpsertHonoursTheSequenceWatermarkAndDeactivationAdvancesIt() {
         String sourceId = "prf-" + UUID.randomUUID();
 
@@ -336,7 +425,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
 
     private int upsert(String sourceId, String name, Long sequence) {
         int applied = assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, name, "PROFILE",
-                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, true, sequence);
+                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, true, sequence);
         entityManager.clear();
         return applied;
     }
@@ -381,6 +470,13 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         return CatenaryAsset.builder().code("SIN-" + trackId + "-" + name).name(name).type(CatenaryAssetType.SECTION_INSULATOR)
                 .trackId(trackId).connectedTrackId(connectedTrackId).executionPackageId(6L)
                 .startKp(startKp == null ? null : new BigDecimal(startKp)).endKp(endKp == null ? null : new BigDecimal(endKp)).build();
+    }
+
+    private static CatenaryAsset disconnector(String name, long trackId, Long connectedTrackId, String kp, Long stationId, long packageId) {
+        BigDecimal at = kp == null ? null : new BigDecimal(kp);
+        return CatenaryAsset.builder().code("DSC-" + trackId + "-" + name).name(name).type(CatenaryAssetType.DISCONNECTOR)
+                .trackId(trackId).connectedTrackId(connectedTrackId).stationId(stationId).executionPackageId(packageId)
+                .startKp(at).endKp(at).driveType(DisconnectorDriveType.MOTOR).build();
     }
 
     private static CatenaryAsset section(String code, long trackId) {

@@ -18,12 +18,17 @@ import com.alejandro.mtomaintenance.configuration.security.RestAuthenticationEnt
 import com.alejandro.mtomaintenance.configuration.security.SecurityAuthorityPrefixes;
 import com.alejandro.mtomaintenance.configuration.security.SecurityConfiguration;
 import com.alejandro.mtomaintenance.configuration.security.SecurityRoles;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.web.exception.GlobalExceptionHandler;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageResponse;
+import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationOutcome;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationPreviewLine;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationSelection;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
@@ -429,10 +434,52 @@ class MaintenanceOrderControllerMockMvcTest {
         verify(taskService, never()).generatePreventiveTasks(any(), any());
 
         // Sin cuerpo genera con los tipos por defecto, como hasta ahora.
-        when(taskService.generatePreventiveTasks(eq(orderId), any())).thenReturn(new GeneratePreventiveTasksResponse(3, 0, 3, java.math.BigDecimal.TEN, 1, 0));
+        when(taskService.generatePreventiveTasks(eq(orderId), any())).thenReturn(new GeneratePreventiveTasksResponse(3, 0, 3, java.math.BigDecimal.TEN, 1, 0,
+                java.util.Map.of(), 0, java.util.List.of(), 0, 0, false, java.util.List.of()));
         mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.createdTasks").value(3));
+    }
+
+    @Test
+    void generatingWithSelectionsReadsEachOneAndAPreviewAnswersWithItsLines() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID sectionId = UUID.randomUUID();
+        UUID assetId = UUID.randomUUID();
+        GenerationPreviewLine line = new GenerationPreviewLine(assetId, "DSC-HSA-NS5", "HSA-NS5", CatenaryAssetType.DISCONNECTOR, 13L, null,
+                new java.math.BigDecimal("12900.000"), java.util.List.of("RP-06"), false, GenerationOutcome.CREATE, null);
+        when(taskService.generatePreventiveTasks(eq(orderId), any())).thenReturn(new GeneratePreventiveTasksResponse(1, 0, 4,
+                java.math.BigDecimal.TEN, 1, 0, java.util.Map.of(CatenaryAssetType.DISCONNECTOR, 1), 1, java.util.List.of("MO-000042"), 0, 0,
+                true, java.util.List.of(line)));
+
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                                {"selections": [
+                                  {"assetType": "PROFILE", "sectionId": "%s"},
+                                  {"assetType": "DISCONNECTOR", "trackId": 13, "fromKp": 12000.5, "toKp": 13000, "stationId": 4,
+                                   "taskTypeCodes": ["RP-06"], "withChecklist": true}
+                                ], "dryRun": true}""".formatted(sectionId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.dryRun").value(true))
+                .andExpect(jsonPath("$.createdByAssetType.DISCONNECTOR").value(1))
+                .andExpect(jsonPath("$.otherOrderCodes[0]").value("MO-000042"))
+                .andExpect(jsonPath("$.assets[0].outcome").value("CREATE"))
+                .andExpect(jsonPath("$.assets[0].taskTypeCodes[0]").value("RP-06"));
+
+        ArgumentCaptor<GeneratePreventiveTasksRequest> request = ArgumentCaptor.forClass(GeneratePreventiveTasksRequest.class);
+        verify(taskService).generatePreventiveTasks(eq(orderId), request.capture());
+        assertTrue(request.getValue().previewOnly());
+        assertEquals(new GenerationSelection(CatenaryAssetType.PROFILE, sectionId, null, null, null, null, null, null, null),
+                request.getValue().selections().get(0));
+        assertEquals(new GenerationSelection(CatenaryAssetType.DISCONNECTOR, null, 13L, new java.math.BigDecimal("12000.5"),
+                new java.math.BigDecimal("13000"), 4L, null, java.util.List.of("RP-06"), true), request.getValue().selections().get(1));
+
+        // Una seleccion sin tipo de activo es un 400 sobre ella, antes del servicio.
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"selections\":[{\"trackId\":13}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors[0].field").value("selections[0].assetType"));
+        verify(taskService, times(1)).generatePreventiveTasks(any(), any());
     }
 
     @Test

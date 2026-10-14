@@ -50,12 +50,14 @@ import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.task.CompleteTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationSelection;
 import com.alejandro.mtomaintenance.application.dto.task.InlineDefectRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DisconnectorDriveType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionResult;
@@ -228,6 +230,10 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         assetRepository.save(profile("12-2.27-" + suffix, trackId, "12847.990"));
         assetRepository.save(profile("12-2.28-" + suffix, trackId, "12899.290"));
+        // En otra via del mismo EP: una orden abarca varias, y el informe de esta via no lo cuenta.
+        assetRepository.save(CatenaryAsset.builder().code("DSC-E2E-" + suffix).name("HSA-E2E-" + suffix).type(CatenaryAssetType.DISCONNECTOR)
+                .trackId(trackId + 1).executionPackageId(6L).startKp(new BigDecimal("13000.000")).endKp(new BigDecimal("13000.000"))
+                .driveType(DisconnectorDriveType.MOTOR).build());
         CatenaryAsset disabled = profile("12-2.29-" + suffix, trackId, "12950.000");
         disabled.disableLocally();
         assetRepository.save(disabled);
@@ -240,10 +246,17 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         assertEquals(MaintenanceOrderStatus.DRAFT, order.status());
         assertEquals(trackId, order.trackId());
 
-        GeneratePreventiveTasksResponse generated = taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null));
+        GeneratePreventiveTasksResponse generated = taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
         assertEquals(2, generated.createdTasks(), "One task per enabled profile of the section");
         assertEquals(1, generated.estimatedShifts());
-        assertEquals(2, taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null)).skippedProfiles(), "Idempotent per profile");
+        assertEquals(2, taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null, null, null)).skippedProfiles(), "Idempotent per profile");
+        // Lo que daria anadir los seccionadores de otra via del EP, contra las consultas reales y sin crear nada.
+        GeneratePreventiveTasksResponse preview = taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null,
+                List.of(new GenerationSelection(CatenaryAssetType.DISCONNECTOR, null, trackId + 1, null, null, null, null, null, null)), true));
+        assertEquals(1, preview.createdTasks());
+        assertEquals(3, preview.totalTasks());
+        assertEquals(List.of("RP-06"), preview.assets().getFirst().taskTypeCodes(), "A motor disconnector gets RP-06 from the real catalogue");
+        assertEquals(2, taskService.findByOrder(order.id()).size(), "A preview creates nothing");
 
         MaterialUsageResponse material = materialService.register(order.id(), new MaterialUsageRequest(UUID.randomUUID(), "GA70", UUID.randomUUID(),
                 new BigDecimal("4"), "ud", null, null));

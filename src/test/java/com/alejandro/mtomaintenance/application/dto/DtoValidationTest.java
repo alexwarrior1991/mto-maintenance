@@ -26,6 +26,7 @@ import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderUpdate
 import com.alejandro.mtomaintenance.application.dto.shift.CancelShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksRequest;
+import com.alejandro.mtomaintenance.application.dto.task.GenerationSelection;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.task.TaskMaterialRequest;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamRequest;
@@ -171,8 +172,10 @@ class DtoValidationTest {
                 Arrays.asList((InlineDefectRequest) null), Arrays.asList((TaskMaterialRequest) null), codes);
         assertEquals(Set.of("taskTypeCodes", "inlineDefects", "materials", "photoRefs"), lists(validator.validate(complete)));
         assertEquals(Set.of("taskTypeCodes", "assetTypes"), lists(validator.validate(new GeneratePreventiveTasksRequest(codes, null,
-                Arrays.asList(CatenaryAssetType.SECTION_INSULATOR, null)))));
+                Arrays.asList(CatenaryAssetType.SECTION_INSULATOR, null), null, null))));
         assertEquals(Set.of("taskTypeCodes", "photoRefs"), lists(validator.validate(new MaintenanceTaskUpdateRequest(null, null, codes, null, null, codes, 0L))));
+        assertEquals(Set.of("selections"), lists(validator.validate(new GeneratePreventiveTasksRequest(null, null, null,
+                Arrays.asList((GenerationSelection) null), null))));
 
         Set<Long> tracks = new HashSet<>(Arrays.asList(2L, null));
         Set<UUID> disconnectors = new HashSet<>(Arrays.asList(UUID.randomUUID(), null));
@@ -181,6 +184,26 @@ class DtoValidationTest {
         assertEquals(Set.of("executionPackageIds"), lists(validator.validate(new MaintenanceTeamRequest("A", "Team A", null, null, null, tracks))));
         assertEquals(Set.of("photoRefs"), lists(validator.validate(new CatenaryDefectRequest(UUID.randomUUID(), DefectSeverity.HIGH, "kink", null, null,
                 null, null, null, null, null, null, null, codes))));
+    }
+
+    @Test
+    void aSelectionToGenerateIsCheckedInsideItsList() {
+        // Dentro de la lista: sin tipo de activo, un id o un codigo nulos y un kp que no cabe en su columna.
+        GenerationSelection wrong = new GenerationSelection(null, null, 2L, new BigDecimal("1234567890.000"), null, null,
+                Arrays.asList(UUID.randomUUID(), null), Arrays.asList("RG-01", null), null);
+        Set<String> paths = validator.validate(new GeneratePreventiveTasksRequest(null, null, null, List.of(wrong), null)).stream()
+                .map(violation -> violation.getPropertyPath().toString().replaceAll("\\.?<[^>]*>", ""))
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("selections[0].assetType", "selections[0].fromKp", "selections[0].assetIds[1]", "selections[0].taskTypeCodes[1]"), paths);
+
+        GenerationSelection good = new GenerationSelection(CatenaryAssetType.DISCONNECTOR, null, null, null, null, null, null, null, null);
+        assertEquals(Set.of("selections"), lists(validator.validate(new GeneratePreventiveTasksRequest(null, null, null,
+                java.util.Collections.nCopies(21, good), null))), "Twenty selections at most");
+        List<UUID> tooMany = java.util.stream.Stream.generate(UUID::randomUUID).limit(501).toList();
+        assertEquals(Set.of("selections"), lists(validator.validate(new GeneratePreventiveTasksRequest(null, null, null,
+                List.of(new GenerationSelection(CatenaryAssetType.PROFILE, null, null, null, null, null, tooMany, null, null)), null))),
+                "Five hundred chosen assets at most");
+        assertEquals(Set.of(), validator.validate(new GeneratePreventiveTasksRequest(null, null, null, List.of(good), true)));
     }
 
     @Test

@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.application.service.MasterDataEntityHandler;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetSwitch;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DisconnectorDriveType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.SectionInsulatorInstallation;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetSwitchRepository;
@@ -61,7 +62,8 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
             String sectioning,
             SectionInsulatorInstallation installationType,
             List<SwitchSnapshot> switches,
-            boolean enabled
+            boolean enabled,
+            DisconnectorDriveType driveType
     ) {
 
         /**
@@ -155,6 +157,7 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
                     snapshot.stationId(), snapshot.startKp(), snapshot.endKp(),
                     snapshot.profileSourceId(), snapshot.sectioning(),
                     snapshot.installationType() == null ? null : snapshot.installationType().name(),
+                    snapshot.driveType() == null ? null : snapshot.driveType().name(),
                     snapshot.enabled(), context.sequenceNumber());
         } catch (DataIntegrityViolationException exception) {
             // El choque realista es con uq_catenary_asset_code: alguien creo a mano un activo con ese

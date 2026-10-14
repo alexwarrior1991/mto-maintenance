@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.application.dto.asset;
 
 import com.alejandro.mtomaintenance.application.dto.common.AuditMetadataResponse;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DisconnectorDriveType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.SectionInsulatorInstallation;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 
@@ -13,6 +14,7 @@ import java.util.UUID;
 /**
  * Un activo. {@code enabled} es el valor efectivo; {@code enabledAtSource} (null en los propios) y
  * {@code disabledLocally} dicen por que esta desactivado: en mto-configuration, aqui, o las dos.
+ * {@code driveType}, solo en un seccionador: con motor, a mano o null sin dato (V16).
  */
 public record CatenaryAssetResponse(
         UUID id,
@@ -30,6 +32,7 @@ public record CatenaryAssetResponse(
         TrackKind trackKind,
         Long connectedTrackId,
         SectionInsulatorInstallation installationType,
+        DisconnectorDriveType driveType,
         List<CatenaryAssetSwitchResponse> switches,
         String sourceService,
         String sourceEntityId,

@@ -60,17 +60,53 @@ One unit of work of an order, usually one profile: `sequence`, `assetId` (the pr
 `CANCELLED`), `notes` (works performed), `defectsFound`, `photoRefs`, check items when a task type
 is diagnostic. Added while the order is at most `IN_PROGRESS`; started and completed only with the
 order `IN_PROGRESS` **and** a shift `IN_PROGRESS` on the same track; a check item that requires a
-measure cannot be left without a result. `POST /orders/{id}/tasks/generate` creates one task per
-enabled profile of the section (ordered by kp, idempotent per asset) with the default preventive
-types `RG-01, RG-05, RG-08, RG-10, RG-11, RG-12, RG-13, RP-08` or the ones requested. With
-`assetTypes: [PROFILE, SECTION_INSULATOR]` it also creates one per enabled section insulator touching
-the section — on its track or on another track it connects with (`connectedTrackId`), its kp range
-(its kp and its turnouts) overlapping the section's — between the profiles around it, with `RG-03`
-by default. `RG-03` needs full possession, so those tasks wait for a `FULL` shift (the weekend).
-Requested task types go to everything generated; for different ones per asset type the call is made
-twice, and being idempotent per asset it never duplicates. Disconnectors are not generated: the plan
-has no task type common to all of them. The response counts `skippedProfiles` (profiles that already
-had a task, as before) and `skippedAssets` (every asset that already had one).
+measure cannot be left without a result.
+
+`POST /orders/{id}/tasks/generate` creates the tasks of a preventive order asset by asset
+(`DRAFT` or `PLANNED`), idempotent per asset. Without `selections` it does what it always did: one
+task per enabled profile of the order's section (ordered by kp) and, with `assetTypes`, one per
+enabled `SECTION_INSULATOR` or `DISCONNECTOR` touching it — on its track or on another track it
+connects with (`connectedTrackId`), its kp range overlapping the section's — between the profiles
+around it. With `selections` an order **mixes** work on several tracks: each selection is an asset
+type (`PROFILE`, `SECTION_INSULATOR`, `DISCONNECTOR`) in a scope — another section of the package
+(`sectionId`), a track with an optional kp range (`trackId`, `fromKp`, `toKp`; what is on it or
+connects with it), chosen assets (`assetIds`) or the whole execution package — optionally of a
+station. The order's own asset is then only its anchor: an order on an insulator can generate only
+insulators, one on a disconnector only disconnectors.
+
+- **One order, one execution package.** Its stock project (`EP-<package>`) is the one every material
+  line is reserved against, and the monthly report counts its tasks there; it may cover several
+  tracks of its package. Selections need an order with a package. A section or chosen assets of
+  another package are a 400; what a track or a kp range finds of another package is skipped
+  (`skippedOtherPackage`) — also without selections when the order has a package. An asset without a
+  package (a hole in the master data) is not skipped: its package is unknown.
+- **Default task types per asset**: groups 1, 2 and 4 on a profile (`RG-01, RG-05, RG-08, RG-10,
+  RG-11, RG-12, RG-13, RP-08`), `RG-03` on a section insulator, `RP-06` on a disconnector driven by a
+  motor (`driveType`, from `mto-configuration`, `V16`). A manual disconnector, or one whose drive is
+  unknown, has no type in the plan and is skipped (`skippedWithoutTaskTypes`) unless types are
+  chosen. Types chosen in the request go to everything generated; a selection's own ones win over
+  them. `RG-03` and `RP-06` need full possession, so those tasks wait for a `FULL` shift.
+- **No duplicates.** An asset found by two selections gets one task (the first selection decides);
+  one that already has a task in the order, even cancelled, is skipped (`skippedAssets`,
+  `skippedProfiles` for profiles, as before); and so is one with an open task (`PENDING` or
+  `IN_PROGRESS`) in another preventive order that is not finished (`skippedInOtherOrders`,
+  `otherOrderCodes`). Generations in one package queue behind a PostgreSQL advisory lock
+  (`pg_advisory_xact_lock`, per package, or per order without one), taken also by a task added by
+  hand, so two at once never take the same asset as free.
+- **Order of the tasks**: track by track, in the order the tracks appear in what was asked, and by kp
+  and code inside each: an insulator of another track that connects goes with the track it was found
+  on, between the profiles around it.
+- **Another section must be of the same kind** (`MAIN`/`DIVERTED`) as the order's: the possession a
+  diverted track needs is decided by the order (`ShiftRules.requireCompatiblePossession`). An order
+  that is not on a section is a main-track one.
+- **`dryRun: true`** creates nothing and takes no lock: `assets` says, asset by asset in the order it
+  would be generated, its track, kp, task types and outcome (`CREATE`, `ALREADY_IN_ORDER`,
+  `OTHER_PACKAGE`, `IN_OTHER_ORDER`, `NO_TASK_TYPES`), and the counters and the estimate are those of
+  generating it.
+- Each task keeps the checklist of its own asset type when asked (`withChecklist`, per request or per
+  selection) or when a type is diagnostic, and is worked from a shift on its own track or the
+  connected one: nothing of the shift rules changes. The estimate counts the per-kilometre types once
+  per track: on the order's track over its section, on another over what is done on it.
 
 Completing a task can create defects inline: `workComplete=true` → `RESOLVED` in that shift;
 `workComplete=false` + `repairPlannedDate` → `OPEN`. Completing the last task never closes the
