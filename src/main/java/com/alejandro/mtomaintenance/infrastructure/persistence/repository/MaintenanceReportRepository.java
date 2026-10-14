@@ -15,6 +15,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -61,8 +62,10 @@ public class MaintenanceReportRepository {
      * Activos con una inspeccion o una tarea completada dentro del rango. Los estados van como
      * parametro y no como literal JPQL: Hibernate traduce el literal a {@code 'COMPLETED'::MaintenanceTaskStatus}
      * y ese tipo no existe en PostgreSQL (el enum de la base es {@code maintenance_task_status}).
+     *
+     * @param zone la de los informes: una inspeccion solo tiene fecha, y el rango pasa a dias en ella
      */
-    public Set<UUID> findAssetIdsWorkedBetween(Instant from, Instant to) {
+    public Set<UUID> findAssetIdsWorkedBetween(Instant from, Instant to, ZoneId zone) {
         // Las fechas opcionales se anaden solo cuando vienen: un parametro temporal a null tampoco
         // tiene tipo para PostgreSQL, y el informe de avance se pide casi siempre sin ventana.
         TypedQuery<UUID> inspections = entityManager.createQuery("""
@@ -71,10 +74,10 @@ public class MaintenanceReportRepository {
                 """ + (from == null ? "" : "  and inspection.inspectionDate >= :fromDate\n")
                     + (to == null ? "" : "  and inspection.inspectionDate <= :toDate\n"), UUID.class);
         if (from != null) {
-            inspections.setParameter("fromDate", LocalDate.ofInstant(from, java.time.ZoneOffset.UTC));
+            inspections.setParameter("fromDate", LocalDate.ofInstant(from, zone));
         }
         if (to != null) {
-            inspections.setParameter("toDate", LocalDate.ofInstant(to, java.time.ZoneOffset.UTC));
+            inspections.setParameter("toDate", LocalDate.ofInstant(to, zone));
         }
         Set<UUID> ids = new HashSet<>(inspections.getResultList());
 

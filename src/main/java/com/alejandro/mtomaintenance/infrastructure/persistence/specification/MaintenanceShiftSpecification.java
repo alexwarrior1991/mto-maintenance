@@ -6,6 +6,9 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatu
 import org.springframework.data.jpa.domain.Specification;
 
 import java.time.LocalDate;
+import java.util.Collection;
+import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 public final class MaintenanceShiftSpecification {
@@ -21,14 +24,20 @@ public final class MaintenanceShiftSpecification {
         return SpecificationUtils.associationIdEquals("team", teamId);
     }
 
-    /** Turnos que recorren la via: 'trackIds' es una coleccion, asi que se hace join y no equals. */
-    public static Specification<MaintenanceShift> worksOnTrack(Long trackId) {
-        if (trackId == null) {
+    /**
+     * Turnos que recorren alguna de las vias: 'trackIds' es una coleccion, asi que se hace join y no
+     * equals, y {@code distinct} para que un turno que recorre dos de ellas salga una vez. Varias vias
+     * son las dos de un aislador o un seccionador que las une: se trabaja desde un turno de
+     * cualquiera. Sin vias (o solo nulos) no filtra.
+     */
+    public static Specification<MaintenanceShift> worksOnAnyTrack(Collection<Long> trackIds) {
+        List<Long> tracks = trackIds == null ? List.of() : trackIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (tracks.isEmpty()) {
             return SpecificationUtils.alwaysTrue();
         }
         return (root, query, builder) -> {
             query.distinct(true);
-            return builder.equal(root.join("trackIds"), trackId);
+            return root.join("trackIds").in(tracks);
         };
     }
 

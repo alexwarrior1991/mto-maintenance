@@ -69,6 +69,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
@@ -295,13 +296,16 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         entityManager.flush();
         entityManager.clear();
 
-        List<MaintenanceShift> onB = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnTrack(trackB));
-        List<MaintenanceShift> onC = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnTrack(trackC));
-        List<MaintenanceShift> both = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnTrack(trackA).or(MaintenanceShiftSpecification.worksOnTrack(trackB)));
+        List<MaintenanceShift> onB = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnAnyTrack(List.of(trackB)));
+        List<MaintenanceShift> onC = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnAnyTrack(List.of(trackC)));
+        List<MaintenanceShift> both = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnAnyTrack(List.of(trackA, trackB)));
+        // Las dos vias de un aislador que las une: los turnos de una y de otra, cada uno una vez.
+        List<MaintenanceShift> eitherEnd = shiftRepository.findAll(MaintenanceShiftSpecification.worksOnAnyTrack(Arrays.asList(trackB, null, trackC)));
 
         assertEquals(List.of("SH-AB-" + suffix), onB.stream().map(MaintenanceShift::getCode).toList());
         assertEquals(List.of("SH-C-" + suffix), onC.stream().map(MaintenanceShift::getCode).toList());
         assertEquals(1, both.size(), "Un turno con dos vias no sale dos veces");
+        assertEquals(List.of("SH-AB-" + suffix, "SH-C-" + suffix), eitherEnd.stream().map(MaintenanceShift::getCode).sorted().toList());
         assertEquals(List.of(trackA, trackB), onB.getFirst().getTrackIds().stream().sorted().toList());
     }
 
@@ -606,10 +610,10 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 "Track sections are not reportable assets");
         assertEquals(1, reportRepository.findReportableAssets(executionPackageId, trackId, CatenaryAssetType.PROFILE).size());
         assertTrue(reportRepository.findReportableAssets(executionPackageId, trackId, CatenaryAssetType.DISCONNECTOR).isEmpty());
-        assertTrue(reportRepository.findAssetIdsWorkedBetween(from, to).contains(profile.getId()));
-        assertTrue(reportRepository.findAssetIdsWorkedBetween(null, null).contains(profile.getId()), "No window: everything ever worked");
-        assertTrue(reportRepository.findAssetIdsWorkedBetween(null, to).contains(profile.getId()));
-        assertFalse(reportRepository.findAssetIdsWorkedBetween(to, null).contains(profile.getId()));
+        assertTrue(reportRepository.findAssetIdsWorkedBetween(from, to, java.time.ZoneId.of("UTC")).contains(profile.getId()));
+        assertTrue(reportRepository.findAssetIdsWorkedBetween(null, null, java.time.ZoneId.of("UTC")).contains(profile.getId()), "No window: everything ever worked");
+        assertTrue(reportRepository.findAssetIdsWorkedBetween(null, to, java.time.ZoneId.of("UTC")).contains(profile.getId()));
+        assertFalse(reportRepository.findAssetIdsWorkedBetween(to, null, java.time.ZoneId.of("UTC")).contains(profile.getId()));
     }
 
     @Test

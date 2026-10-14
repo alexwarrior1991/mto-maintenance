@@ -55,6 +55,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -195,14 +196,14 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<MaintenanceShiftResponse> search(LocalDate date, LocalDate dateFrom, LocalDate dateTo, UUID teamId, Long trackId,
+    public PageResponse<MaintenanceShiftResponse> search(LocalDate date, LocalDate dateFrom, LocalDate dateTo, UUID teamId, Collection<Long> trackIds,
                                                          Long executionPackageId, ShiftStatus status, PossessionType possessionType,
                                                          Pageable pageable) {
         LocalDate from = date != null ? date : dateFrom;
         LocalDate to = date != null ? date : dateTo;
         Specification<MaintenanceShift> specification = MaintenanceShiftSpecification.dateBetween(from, to)
                 .and(MaintenanceShiftSpecification.teamIdEquals(teamId))
-                .and(MaintenanceShiftSpecification.worksOnTrack(trackId))
+                .and(MaintenanceShiftSpecification.worksOnAnyTrack(trackIds))
                 .and(MaintenanceShiftSpecification.executionPackageIdEquals(executionPackageId))
                 .and(MaintenanceShiftSpecification.statusEquals(status))
                 .and(MaintenanceShiftSpecification.possessionTypeEquals(possessionType));
