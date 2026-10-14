@@ -6,6 +6,7 @@ import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageReques
 import com.alejandro.mtomaintenance.application.dto.order.AssignOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftRequest;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.application.dto.task.CompleteTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.InlineDefectRequest;
@@ -169,7 +170,8 @@ class DtoValidationTest {
         CompleteTaskRequest complete = new CompleteTaskRequest(UUID.randomUUID(), codes, null, null, true, null,
                 Arrays.asList((InlineDefectRequest) null), Arrays.asList((TaskMaterialRequest) null), codes);
         assertEquals(Set.of("taskTypeCodes", "inlineDefects", "materials", "photoRefs"), lists(validator.validate(complete)));
-        assertEquals(Set.of("taskTypeCodes"), lists(validator.validate(new GeneratePreventiveTasksRequest(codes, null))));
+        assertEquals(Set.of("taskTypeCodes", "assetTypes"), lists(validator.validate(new GeneratePreventiveTasksRequest(codes, null,
+                Arrays.asList(CatenaryAssetType.SECTION_INSULATOR, null)))));
         assertEquals(Set.of("taskTypeCodes", "photoRefs"), lists(validator.validate(new MaintenanceTaskUpdateRequest(null, null, codes, null, null, codes, 0L))));
 
         Set<Long> tracks = new HashSet<>(Arrays.asList(2L, null));

@@ -40,6 +40,30 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     );
 
     /**
+     * Activos habilitados de un tipo que tocan un tramo, en orden de kp: los de la via y los de otra
+     * via que conectan con ella, porque estan sobre las dos. Es la de los aisladores de seccion, que
+     * guardan un rango (su kp y los de sus agujas): entran si ese rango se solapa con el del tramo,
+     * no solo si empieza dentro, y sin kp no se sabe donde estan y no entran. El tipo va como
+     * parametro y no como literal JPQL, por lo mismo que en {@code MaintenanceReportRepository}.
+     */
+    @Query("""
+            select asset
+            from CatenaryAsset asset
+            where asset.type = :type
+              and asset.enabled = true
+              and (asset.trackId = :trackId or asset.connectedTrackId = :trackId)
+              and asset.startKp <= :toKp
+              and asset.endKp >= :fromKp
+            order by asset.startKp asc, asset.code asc
+            """)
+    List<CatenaryAsset> findEnabledByTypeTouchingSection(
+            @Param("type") CatenaryAssetType type,
+            @Param("trackId") Long trackId,
+            @Param("fromKp") BigDecimal fromKp,
+            @Param("toKp") BigDecimal toKp
+    );
+
+    /**
      * Un cerrojo de aviso de PostgreSQL ligado a la transaccion en curso: {@code true} si esta
      * transaccion lo tiene, {@code false} si otra lo tenia ya (no se espera). Se suelta solo al
      * terminar la transaccion. Es lo que reparte un trabajo diario entre varias instancias sin una

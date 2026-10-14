@@ -162,6 +162,31 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
     }
 
     @Test
+    void theInsulatorsTouchingASectionAreTheOnesOfItsTrackAndTheOnesConnectingToItWhoseRangeOverlapsIt() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        long track = System.nanoTime();
+        long nextTrack = track + 1;
+        long farTrack = track + 2;
+        // Empieza antes del tramo y sus agujas llegan dentro: entra por solape, no por su kp.
+        assetRepository.save(insulator("A-" + suffix, track, null, "12790.000", "12860.000"));
+        assetRepository.save(insulator("B-" + suffix, nextTrack, track, "13100.000", "13140.000"));
+        assetRepository.save(insulator("C-" + suffix, track, nextTrack, "12950.000", "12950.000"));
+        assetRepository.save(insulator("OUT-" + suffix, track, null, "13600.000", "13650.000"));
+        assetRepository.save(insulator("FAR-" + suffix, farTrack, null, "13000.000", "13000.000"));
+        assetRepository.save(insulator("NOKP-" + suffix, track, null, null, null));
+        CatenaryAsset disabled = insulator("OFF-" + suffix, track, null, "13000.000", "13000.000");
+        disabled.disableLocally();
+        assetRepository.save(disabled);
+        assetRepository.save(profile("12-2.27-" + suffix, track, "12847.990"));
+        entityManager.flush();
+
+        List<CatenaryAsset> insulators = assetRepository.findEnabledByTypeTouchingSection(CatenaryAssetType.SECTION_INSULATOR, track,
+                new BigDecimal("12800.000"), new BigDecimal("13500.000"));
+
+        assertEquals(List.of("A-" + suffix, "C-" + suffix, "B-" + suffix), insulators.stream().map(CatenaryAsset::getName).toList());
+    }
+
+    @Test
     void masterDataUpsertHonoursTheSequenceWatermarkAndDeactivationAdvancesIt() {
         String sourceId = "prf-" + UUID.randomUUID();
 
@@ -352,6 +377,12 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 .startKp(new BigDecimal(kp)).endKp(new BigDecimal(kp)).build();
     }
 
+    private static CatenaryAsset insulator(String name, long trackId, Long connectedTrackId, String startKp, String endKp) {
+        return CatenaryAsset.builder().code("SIN-" + trackId + "-" + name).name(name).type(CatenaryAssetType.SECTION_INSULATOR)
+                .trackId(trackId).connectedTrackId(connectedTrackId).executionPackageId(6L)
+                .startKp(startKp == null ? null : new BigDecimal(startKp)).endKp(endKp == null ? null : new BigDecimal(endKp)).build();
+    }
+
     private static CatenaryAsset section(String code, long trackId) {
         return CatenaryAsset.builder().code(code).name(code).type(CatenaryAssetType.TRACK_SECTION).trackId(trackId).executionPackageId(6L)
                 .startKp(new BigDecimal("12847.990")).endKp(new BigDecimal("14078.090")).trackKind(TrackKind.MAIN).build();
@@ -527,6 +558,36 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertEquals(List.of(worked.getId()), taskRepository.findByShiftIdOrderBySequenceAsc(shift.getId()).stream().map(MaintenanceTask::getId).toList());
         assertEquals(1, taskRepository.findByShiftIdAndStatusIn(shift.getId(), EnumSet.of(MaintenanceTaskStatus.PENDING, MaintenanceTaskStatus.IN_PROGRESS)).size());
         assertEquals(List.of("DEF-RPT-B-" + suffix), defectRepository.findByOrderIdAndStatus(order.getId(), DefectStatus.OPEN).stream().map(CatenaryDefect::getCode).toList());
+    }
+
+    @Test
+    void theInspectionsOfAShiftComeByDateAndCodeWithWhatTheReportReadsOfThem() {
+        long trackId = System.nanoTime();
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        CatenaryAsset profile = assetRepository.save(profile("12-2.27-" + suffix, trackId, "12847.990"));
+        CatenaryAsset section = assetRepository.save(section("SEC-INS-" + suffix, trackId));
+        MaintenanceShift shift = shiftRepository.save(MaintenanceShift.builder().code("SH-INS-" + suffix).shiftDate(LocalDate.of(2026, 1, 27))
+                .possessionType(PossessionType.FULL).status(ShiftStatus.IN_PROGRESS).trackIds(new LinkedHashSet<>(List.of(trackId))).build());
+        MaintenanceOrder corrective = orderRepository.save(order("MO-INS-" + suffix, section, MaintenanceOrderStatus.DRAFT, MaintenancePriority.HIGH, null));
+        MaintenanceInspection afterMidnight = inspection("INS-B-" + suffix, profile, LocalDate.of(2026, 1, 28), "dana", InspectionResult.MAJOR_DEFECT);
+        afterMidnight.setShift(shift);
+        afterMidnight.setGeneratedOrder(corrective);
+        inspectionRepository.save(afterMidnight);
+        MaintenanceInspection sameNight = inspection("INS-C-" + suffix, profile, LocalDate.of(2026, 1, 27), "dana", InspectionResult.OK);
+        sameNight.setShift(shift);
+        inspectionRepository.save(sameNight);
+        inspectionRepository.save(inspection("INS-A-" + suffix, profile, LocalDate.of(2026, 1, 27), "dana", InspectionResult.OK));
+        entityManager.flush();
+        entityManager.clear();
+
+        List<MaintenanceInspection> ofShift = inspectionRepository.findByShiftIdOrderByInspectionDateAscCodeAsc(shift.getId());
+
+        assertEquals(List.of("INS-C-" + suffix, "INS-B-" + suffix), ofShift.stream().map(MaintenanceInspection::getCode).toList(),
+                "By date, and one without a shift stays out");
+        // Lo que lee el parte llega en la misma sentencia (el grafo), no por carga perezosa.
+        entityManager.clear();
+        assertEquals("12-2.27-" + suffix, ofShift.getFirst().getAsset().getName());
+        assertEquals("MO-INS-" + suffix, ofShift.get(1).getGeneratedOrder().getCode());
     }
 
     /**

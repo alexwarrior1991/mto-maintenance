@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -169,6 +170,66 @@ class ReportExportLayerTest {
 
         assertTrue(printed.contains("Works performed"));
         assertFalse(printed.contains("Order code"), "a column with weight 0 belongs to the workbook only");
+    }
+
+    @Test
+    void anAppendixGoesOnItsOwnSheetWithItsFilterAndAfterTheTotalsInThePdf() throws IOException {
+        ReportDocument base = document(rows(2));
+        ReportDocument.Table inspections = new ReportDocument.Table(
+                List.of(new ReportDocument.Column("Code", 6), new ReportDocument.Column("Date", 5),
+                        new ReportDocument.Column("Result", 6), new ReportDocument.Column("Asset name", 0)),
+                List.of(List.of(ReportValue.text("INS-000040"), ReportValue.date(LocalDate.of(2026, 1, 28)), ReportValue.text("UNSAFE"),
+                                ReportValue.text("SI-W41")),
+                        List.of(ReportValue.text("INS-000041"), ReportValue.date(LocalDate.of(2026, 1, 28)), ReportValue.text("OK"),
+                                ReportValue.text("12-2.27"))));
+        // Mismo nombre que la hoja principal: Excel no admite dos hojas iguales, asi que la segunda se renombra.
+        ReportDocument document = new ReportDocument(base.fileBaseName(), base.sheetName(), base.title(), base.subtitle(), base.layout(),
+                base.generatedAt(), base.header(), base.table(), base.totals(),
+                List.of(new ReportDocument.Appendix("Inspections", inspections),
+                        new ReportDocument.Appendix("Shift report", new ReportDocument.Table(inspections.columns(), List.of()))));
+
+        try (XSSFWorkbook workbook = (XSSFWorkbook) WorkbookFactory.create(new ByteArrayInputStream(xlsx.export(document).content()))) {
+            assertEquals(3, workbook.getNumberOfSheets());
+            XSSFSheet sheet = workbook.getSheet("Inspections");
+            assertNotNull(sheet, "each appendix is its own sheet");
+            assertEquals("Daily shift report SH-000001 — Inspections", sheet.getRow(0).getCell(0).getStringCellValue());
+            int headerRow = 2;
+            assertEquals(List.of("Code", "Date", "Result", "Asset name"), headers(sheet, headerRow), "the workbook carries every column");
+            assertEquals("INS-000041", sheet.getRow(headerRow + 2).getCell(0).getStringCellValue());
+            assertTrue(DateUtil.isCellDateFormatted(sheet.getRow(headerRow + 1).getCell(1)), "a date stays a date in an appendix too");
+            assertEquals("A3:D5", sheet.getCTWorksheet().getAutoFilter().getRef());
+            assertEquals(headerRow + 1, sheet.getPaneInformation().getHorizontalSplitPosition());
+
+            XSSFSheet empty = workbook.getSheet("Shift report (2)");
+            assertNotNull(empty, "a repeated sheet name gets a suffix instead of failing the export");
+            assertEquals("No rows for the requested filters.", empty.getRow(headerRow + 1).getCell(0).getStringCellValue());
+            assertEquals("A3:D3", empty.getCTWorksheet().getAutoFilter().getRef());
+        }
+
+        byte[] bytes = pdf.export(document).content();
+        String printed;
+        try (PdfReader reader = new PdfReader(bytes)) {
+            StringBuilder all = new StringBuilder();
+            for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+                all.append(textOf(bytes, page)).append('\n');
+            }
+            printed = all.toString();
+        }
+        // El extractor devuelve los parrafos antes que las tablas, asi que el orden se mira entre tablas:
+        // las filas del anexo van detras de los totales.
+        assertTrue(printed.contains("Inspections"), printed);
+        assertTrue(printed.indexOf("INS-000040") > printed.indexOf("Tasks completed"), "the appendix comes after the totals: " + printed);
+        assertFalse(printed.contains("SI-W41"), "a column with weight 0 is not printed in an appendix either");
+    }
+
+    @Test
+    void anAppendixNeedsATitleAndColumns() {
+        ReportDocument.Table table = new ReportDocument.Table(List.of(new ReportDocument.Column("Code", 1)), List.of());
+        assertEquals("Inspections", new ReportDocument.Appendix("Inspections", table).title());
+        assertThrows(IllegalArgumentException.class, () -> new ReportDocument.Appendix(" ", table));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ReportDocument.Appendix("Inspections", new ReportDocument.Table(List.of(), List.of())));
+        assertEquals(List.of(), document(rows(1)).appendices(), "a report without appendices has an empty list, not null");
     }
 
     private static String flattened(String text) {

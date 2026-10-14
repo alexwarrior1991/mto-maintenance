@@ -10,6 +10,7 @@ import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftUpdateRequest;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportInspectionResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
@@ -31,6 +32,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectStatus;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspection;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
@@ -39,6 +41,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryDefectRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceShiftRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTaskRepository;
@@ -82,6 +85,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     private final MaintenanceTaskRepository taskRepository;
     private final CatenaryDefectRepository defectRepository;
     private final MaintenanceMaterialUsageRepository materialRepository;
+    private final MaintenanceInspectionRepository inspectionRepository;
     private final MaintenanceShiftMapper mapper;
     private final CatenaryAssetMapper assetMapper;
     private final MaintenanceLookups lookups;
@@ -331,7 +335,31 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         int defectsFound = defectsByTask.values().stream().mapToInt(List::size).sum();
         int defectsResolved = (int) defectRepository.countByResolvedInShiftId(id);
         int profilesReviewed = (int) profileAssets(tasks, MaintenanceTaskStatus.COMPLETED).count();
-        return new ShiftReportResponse(mapper.toResponse(shift), completed, pendingTasks, profilesReviewed, defectsFound, defectsResolved, rows);
+        List<ShiftReportInspectionResponse> inspections = inspectionRepository.findByShiftIdOrderByInspectionDateAscCodeAsc(id).stream()
+                .map(MaintenanceShiftServiceImpl::reportLine)
+                .toList();
+        return new ShiftReportResponse(mapper.toResponse(shift), completed, pendingTasks, profilesReviewed, defectsFound, defectsResolved, rows,
+                inspections.size(), inspections);
+    }
+
+    /** Una inspeccion del turno en su parte: lo que se miro, donde, que salio y que abrio. */
+    private static ShiftReportInspectionResponse reportLine(MaintenanceInspection inspection) {
+        CatenaryAsset asset = inspection.getAsset();
+        return new ShiftReportInspectionResponse(
+                inspection.getId(),
+                inspection.getCode(),
+                inspection.getInspectionDate(),
+                asset.getCode(),
+                asset.getName(),
+                asset.getType(),
+                inspection.getTrackId() != null ? inspection.getTrackId() : asset.getTrackId(),
+                inspection.getKp() != null ? inspection.getKp() : asset.getStartKp(),
+                inspection.getInspectionKind(),
+                inspection.getResult(),
+                inspection.getInspector(),
+                inspection.getDetectedDefects(),
+                inspection.getGeneratedDefect() == null ? null : inspection.getGeneratedDefect().getCode(),
+                inspection.getGeneratedOrder() == null ? null : inspection.getGeneratedOrder().getCode());
     }
 
     @Override

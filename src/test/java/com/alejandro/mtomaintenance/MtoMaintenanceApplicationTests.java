@@ -240,10 +240,10 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         assertEquals(MaintenanceOrderStatus.DRAFT, order.status());
         assertEquals(trackId, order.trackId());
 
-        GeneratePreventiveTasksResponse generated = taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null));
+        GeneratePreventiveTasksResponse generated = taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null));
         assertEquals(2, generated.createdTasks(), "One task per enabled profile of the section");
         assertEquals(1, generated.estimatedShifts());
-        assertEquals(2, taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null)).skippedProfiles(), "Idempotent per profile");
+        assertEquals(2, taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null)).skippedProfiles(), "Idempotent per profile");
 
         MaterialUsageResponse material = materialService.register(order.id(), new MaterialUsageRequest(UUID.randomUUID(), "GA70", UUID.randomUUID(),
                 new BigDecimal("4"), "ud", null, null));

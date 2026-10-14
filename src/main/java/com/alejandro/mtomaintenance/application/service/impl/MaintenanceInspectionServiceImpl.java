@@ -36,6 +36,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspectionItem;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryDefectRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
@@ -85,6 +86,10 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
         if (originOrder != null && originOrder.isTerminal()) {
             throw new InvalidTransitionException("Order " + originOrder.getCode() + " is " + originOrder.getStatus() + " and cannot receive inspections");
         }
+        MaintenanceShift shift = request.shiftId() == null ? null : lookups.shift(request.shiftId());
+        if (shift != null) {
+            ShiftRules.requireRecordsInspectionsOf(shift, asset);
+        }
 
         MaintenanceInspection inspection = MaintenanceInspection.builder()
                 .code(codeGenerator.nextInspectionCode())
@@ -101,7 +106,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
                 .detectedDefects(request.detectedDefects())
                 .recommendedActions(request.recommendedActions())
                 .originOrder(originOrder)
-                .shift(request.shiftId() == null ? null : lookups.shift(request.shiftId()))
+                .shift(shift)
                 .build();
 
         // La plantilla activa del tipo de activo: un seccionador y un aislador de seccion tienen la

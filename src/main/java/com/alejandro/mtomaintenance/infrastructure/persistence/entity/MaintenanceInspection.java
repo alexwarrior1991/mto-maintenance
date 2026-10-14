@@ -46,7 +46,8 @@ import java.util.List;
                 @Index(name = "idx_maintenance_inspection_result_date", columnList = "result, inspection_date"),
                 @Index(name = "idx_maintenance_inspection_asset", columnList = "asset_id"),
                 @Index(name = "idx_maintenance_inspection_track", columnList = "track_id"),
-                @Index(name = "idx_maintenance_inspection_origin_order", columnList = "origin_order_id")
+                @Index(name = "idx_maintenance_inspection_origin_order", columnList = "origin_order_id"),
+                @Index(name = "idx_maintenance_inspection_shift", columnList = "shift_id")
         }
 )
 @Getter

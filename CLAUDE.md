@@ -97,7 +97,8 @@ insulator, not an asset of its own, so there is no new `CatenaryAssetType`. A `M
 (`PREVENTIVE`, `CORRECTIVE`, `INSPECTION`, `URGENT`) targets one asset and moves
 `DRAFT → PLANNED → ASSIGNED → IN_PROGRESS → COMPLETED` (or `CANCELLED`); `URGENT` is the only type
 that jumps `DRAFT → IN_PROGRESS` and is born `CRITICAL`. A preventive order on a `TRACK_SECTION`
-generates one `MaintenanceTask` per enabled `PROFILE` in the range (`POST /orders/{id}/tasks/generate`),
+generates one `MaintenanceTask` per enabled `PROFILE` in the range (`POST /orders/{id}/tasks/generate`;
+with `assetTypes` also one per `SECTION_INSULATOR` touching it, its own track's or one connecting to it, `RG-03` by default),
 each carrying the `MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan,
 with standard minutes that feed `WorkloadEstimator`). Tasks are executed inside a
 `MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one or more tracks): a task can
@@ -105,7 +106,8 @@ only be completed with the order and a shift covering its track both `IN_PROGRES
 full possession cannot be done in a `PARTIAL` shift, and a `DIVERTED` section only accepts `FULL`
 shifts. Completing a task can record `CatenaryDefect`s inline (`RESOLVED` in the shift if the work
 was finished, `OPEN` with `repairPlannedDate` if not). A `MaintenanceInspection` copies the active
-`InspectionTemplate` of the asset type into its items, and can create a defect and a corrective
+`InspectionTemplate` of the asset type into its items (recorded in a shift, one `IN_PROGRESS` or
+`CLOSED` on its asset's track or the connected one, it appears in that shift's report), and can create a defect and a corrective
 order (both idempotent). Every material line (`MaintenanceMaterialUsage`) is reserved in
 `mto-stock` when the order is planned, consumed when it is completed and released when it is
 cancelled; a failure leaves the line `FAILED` (stock did not answer) or `REJECTED` (it said no, with
@@ -206,7 +208,8 @@ with `app.stock.enabled=false`.
 The three reports (`GET /shifts/{id}/report`, `/reports/progress`, `/reports/monthly`) take
 `?format=json|xlsx|pdf`, `json` by default: same routes, same `MAINTENANCE_READ` rule, unchanged JSON
 contract. Each report is turned into one format-neutral `ReportDocument`
-(`application/dto/export`: header pairs, an optional table, totals, typed `ReportValue`s) by its
+(`application/dto/export`: header pairs, an optional table, totals, titled appendix tables — the
+shift's inspections, a sheet of their own in the .xlsx —, typed `ReportValue`s) by its
 layout in `application/service/impl`, and `ReportExportServiceImpl` hands it to the `ReportExporter`
 of the requested format. The exporters are `@Component`s indexed by format at startup — the same
 registry-by-key as the master-data handlers, failing the startup on a duplicate or a missing one — so

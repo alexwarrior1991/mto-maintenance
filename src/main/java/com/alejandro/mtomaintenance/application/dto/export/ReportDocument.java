@@ -22,6 +22,11 @@ import java.util.List;
  *
  * <p>{@code generatedAt} llega ya en la zona del informe, igual que {@link ReportValue.Timestamp}:
  * los exportadores escriben fechas, no las situan.</p>
+ *
+ * <p>{@code appendices} son tablas de otra cosa que acompañan al informe: las inspecciones del
+ * turno no son tareas y no caben en sus columnas. Van despues de los totales, cada una con su
+ * titulo: en el .xlsx en su propia hoja, con su autofiltro, y en el PDF a continuacion. Casi todos
+ * los informes no tienen ninguno.</p>
  */
 public record ReportDocument(
         String fileBaseName,
@@ -32,12 +37,38 @@ public record ReportDocument(
         LocalDateTime generatedAt,
         List<Field> header,
         Table table,
-        List<Field> totals
+        List<Field> totals,
+        List<Appendix> appendices
 ) {
 
     public ReportDocument {
         header = List.copyOf(header);
         totals = List.copyOf(totals);
+        appendices = appendices == null ? List.of() : List.copyOf(appendices);
+    }
+
+    /** Un informe sin anexos, que son casi todos. */
+    public ReportDocument(String fileBaseName, String sheetName, String title, String subtitle, Layout layout, LocalDateTime generatedAt,
+                          List<Field> header, Table table, List<Field> totals) {
+        this(fileBaseName, sheetName, title, subtitle, layout, generatedAt, header, table, totals, List.of());
+    }
+
+    /**
+     * Una tabla aparte con su titulo, que tambien es el nombre de su hoja en el .xlsx.
+     *
+     * <p>La tabla es obligatoria y puede no tener filas: un turno sin inspecciones las enseña igual,
+     * con la nota de que no hay, en vez de dejar al lector preguntandose si la seccion se perdio.</p>
+     */
+    public record Appendix(String title, Table table) {
+
+        public Appendix {
+            if (title == null || title.isBlank()) {
+                throw new IllegalArgumentException("A report appendix needs a title");
+            }
+            if (table == null || table.columns().isEmpty()) {
+                throw new IllegalArgumentException("Report appendix '" + title + "' needs a table with columns");
+            }
+        }
     }
 
     /** Orientacion del papel. Solo la mira el PDF: una hoja de calculo no tiene pagina. */
