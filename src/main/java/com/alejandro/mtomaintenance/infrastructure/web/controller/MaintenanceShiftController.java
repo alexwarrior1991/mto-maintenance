@@ -146,6 +146,12 @@ public class MaintenanceShiftController {
         return ResponseEntity.ok(taskService.assignToShift(id, taskId));
     }
 
+    @Operation(summary = "Take an open task out of the shift", tags = "Tasks", description = "The task goes back to its order, pending and without shift, as an unfinished one does when the shift closes. A completed or cancelled task stays: it is what was done in the shift.")
+    @PostMapping("/{id}/tasks/{taskId}/unassign")
+    public ResponseEntity<MaintenanceTaskResponse> unassignTask(@PathVariable UUID id, @PathVariable UUID taskId) {
+        return ResponseEntity.ok(taskService.unassignFromShift(id, taskId));
+    }
+
     @Operation(summary = "Daily report of the shift", tags = "Reports", description = "Header of the shift plus one row per task (profile) worked: works performed, defects found, materials, times, completion and repair date.")
     @ApiResponse(responseCode = "200", description = "The report as JSON, as a workbook or as a printable PDF", content = {
             @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ShiftReportResponse.class)),

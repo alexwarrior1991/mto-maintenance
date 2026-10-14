@@ -129,7 +129,10 @@ opened to isolate the work zone (as many `DISCONNECTOR` assets as the cut needs,
 earthing points, parking place, the `trackIds` it covers (one or more tracks of the same night; a
 second execution package is a second shift), kp range, personnel, equipment, observations.
 States `PLANNED → IN_PROGRESS → CLOSED`, `CANCELLED` before closing. Closing requires the actual
-times and returns to `PENDING` (without shift) the tasks that were not completed.
+times and returns to `PENDING` (without shift) the tasks that were not completed. While the shift is
+`PLANNED` or `IN_PROGRESS` one open task can be taken out the same way
+(`POST /shifts/{id}/tasks/{taskId}/unassign`): a wrong assignment, or one that would stop the shift
+from losing a track or going partial; a completed or cancelled task stays in the shift it was worked in.
 
 Window rules: a task's profile must be on one of the shift's tracks (an insulator or a disconnector
 that joins two tracks is on both, `connectedTrackId`, as in the reports by track; the asset summary

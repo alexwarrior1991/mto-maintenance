@@ -147,4 +147,14 @@ public class MaintenanceTask extends VersionedEntity {
     public boolean isDiagnostic() {
         return taskTypes.stream().anyMatch(MaintenanceTaskType::getDiagnostic);
     }
+
+    /**
+     * Sale de su turno y vuelve a la cola de su orden, sin cancelarse: pendiente y sin turno. Conserva
+     * {@code startedAt}, porque se empezo. Lo hacen cerrar o cancelar el turno con lo no terminado, y
+     * sacarla del turno a mano.
+     */
+    public void returnToOrder() {
+        shift = null;
+        status = MaintenanceTaskStatus.PENDING;
+    }
 }
