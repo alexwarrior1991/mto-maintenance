@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderReques
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderResponse;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
+import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
@@ -57,6 +58,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 import java.math.BigDecimal;
@@ -65,6 +67,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.mock;
@@ -140,6 +143,21 @@ class RestControllerLayerTest {
         assertSame(profiles, controller.profiles(shiftId, null).getBody());
         assertEquals(List.of(), controller.tasks(shiftId, MaintenanceTaskStatus.COMPLETED).getBody());
         verify(taskService).findByShift(shiftId, MaintenanceTaskStatus.COMPLETED);
+    }
+
+    @Test
+    void shiftControllerTakesATaskOutOfTheShiftWithAPost() throws NoSuchMethodException {
+        MaintenanceTaskService taskService = mock(MaintenanceTaskService.class);
+        MaintenanceShiftController controller = new MaintenanceShiftController(mock(MaintenanceShiftService.class), taskService, mock(ReportExportService.class));
+        UUID shiftId = UUID.randomUUID();
+        UUID taskId = UUID.randomUUID();
+        MaintenanceTaskResponse released = mock(MaintenanceTaskResponse.class);
+        when(taskService.unassignFromShift(shiftId, taskId)).thenReturn(released);
+
+        assertSame(released, controller.unassignTask(shiftId, taskId).getBody());
+        // Un POST, como asignar: con maintenance-write. Un DELETE pediria maintenance-delete.
+        PostMapping mapping = MaintenanceShiftController.class.getMethod("unassignTask", UUID.class, UUID.class).getAnnotation(PostMapping.class);
+        assertArrayEquals(new String[] {"/{id}/tasks/{taskId}/unassign"}, mapping.value());
     }
 
     private static void assertController(Class<?> controller, String basePath, String tag) {

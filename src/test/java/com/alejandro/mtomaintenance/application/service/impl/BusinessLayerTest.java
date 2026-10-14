@@ -1793,6 +1793,7 @@ class BusinessLayerTest {
         ShiftException withoutItsTrack = assertThrows(ShiftException.class,
                 () -> fixture.service.update(shift.getId(), shiftUpdate(Set.of(1L), null)));
         assertTrue(withoutItsTrack.getMessage().contains("Task " + onTrack2.getSequence()), withoutItsTrack.getMessage());
+        assertTrue(withoutItsTrack.getMessage().endsWith("(POST /shifts/{id}/tasks/{taskId}/unassign)"), "It says how to take it out");
         shift.getTrackIds().addAll(Set.of(1L, 2L));
         assertThrows(ShiftException.class, () -> fixture.service.update(shift.getId(), shiftUpdate(null, PossessionType.PARTIAL)),
                 "RG-03 needs full possession");
@@ -2280,6 +2281,50 @@ class BusinessLayerTest {
 
         assertEquals(planned, pending.getShift());
         assertEquals(MaintenanceTaskStatus.PENDING, pending.getStatus(), "Assigning a task to a planned shift does not start it");
+    }
+
+    @Test
+    void takingAnOpenTaskOutOfItsShiftSendsItBackToItsOrderAndLeavesWhatWasDone() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceShift shift = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        MaintenanceTask pending = task(order, MaintenanceTaskStatus.PENDING);
+        pending.setShift(shift);
+        MaintenanceTask started = task(order, MaintenanceTaskStatus.IN_PROGRESS);
+        started.setShift(shift);
+        Instant startedAt = Instant.parse("2026-01-31T19:41:00Z");
+        started.setStartedAt(startedAt);
+        MaintenanceTask done = task(order, MaintenanceTaskStatus.COMPLETED);
+        done.setShift(shift);
+        for (MaintenanceTask each : List.of(pending, started, done)) {
+            when(fixture.repository.findByIdAndShiftId(each.getId(), shift.getId())).thenReturn(Optional.of(each));
+        }
+
+        fixture.service.unassignFromShift(shift.getId(), pending.getId());
+        fixture.service.unassignFromShift(shift.getId(), started.getId());
+
+        assertNull(pending.getShift());
+        assertEquals(MaintenanceTaskStatus.PENDING, pending.getStatus());
+        assertNull(started.getShift());
+        assertEquals(MaintenanceTaskStatus.PENDING, started.getStatus(), "A started task goes back to the queue, as on closing the shift");
+        assertEquals(startedAt, started.getStartedAt(), "It was started: the time stays");
+        InvalidTransitionException completed = assertThrows(InvalidTransitionException.class,
+                () -> fixture.service.unassignFromShift(shift.getId(), done.getId()));
+        assertTrue(completed.getMessage().contains("only an open task"), completed.getMessage());
+        assertEquals(shift, done.getShift(), "What was done in the shift stays in it");
+
+        UUID elsewhere = UUID.randomUUID();
+        when(fixture.repository.findByIdAndShiftId(elsewhere, shift.getId())).thenReturn(Optional.empty());
+        assertThrows(NotFoundException.class, () -> fixture.service.unassignFromShift(shift.getId(), elsewhere), "A task of another shift is not this one's");
+
+        MaintenanceShift closed = shift(2L, PossessionType.FULL, ShiftStatus.CLOSED);
+        when(fixture.lookups.shift(closed.getId())).thenReturn(closed);
+        MaintenanceTask left = task(order, MaintenanceTaskStatus.PENDING);
+        left.setShift(closed);
+        when(fixture.repository.findByIdAndShiftId(left.getId(), closed.getId())).thenReturn(Optional.of(left));
+        assertThrows(InvalidTransitionException.class, () -> fixture.service.unassignFromShift(closed.getId(), left.getId()));
+        assertEquals(closed, left.getShift());
     }
 
     @Test

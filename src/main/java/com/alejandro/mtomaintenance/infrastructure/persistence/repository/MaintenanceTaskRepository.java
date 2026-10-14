@@ -21,6 +21,8 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
 
     Optional<MaintenanceTask> findByIdAndOrderId(UUID id, UUID orderId);
 
+    Optional<MaintenanceTask> findByIdAndShiftId(UUID id, UUID shiftId);
+
     List<MaintenanceTask> findByOrderIdOrderBySequenceAsc(UUID orderId);
 
     List<MaintenanceTask> findByShiftIdOrderBySequenceAsc(UUID shiftId);

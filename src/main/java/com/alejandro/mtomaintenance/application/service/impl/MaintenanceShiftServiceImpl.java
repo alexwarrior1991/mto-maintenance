@@ -420,8 +420,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
 
     private void releaseOpenTasks(MaintenanceShift shift) {
         for (MaintenanceTask task : taskRepository.findByShiftIdAndStatusIn(shift.getId(), EnumSet.of(MaintenanceTaskStatus.PENDING, MaintenanceTaskStatus.IN_PROGRESS))) {
-            task.setShift(null);
-            task.setStatus(MaintenanceTaskStatus.PENDING);
+            task.returnToOrder();
             taskRepository.save(task);
         }
     }
@@ -459,7 +458,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
             } catch (ShiftException doesNotFit) {
                 throw new ShiftException("Task " + task.getSequence() + " of order " + task.getOrder().getCode()
                         + " is assigned to shift " + shift.getCode() + " and would no longer fit: " + doesNotFit.getMessage()
-                        + ". Take it out of the shift first");
+                        + ". Take it out of the shift first (POST /shifts/{id}/tasks/{taskId}/unassign)");
             }
         }
     }

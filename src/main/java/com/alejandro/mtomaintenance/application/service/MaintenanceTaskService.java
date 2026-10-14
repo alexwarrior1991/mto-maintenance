@@ -44,6 +44,12 @@ public interface MaintenanceTaskService {
     /** Asigna una tarea a un turno comprobando via y ventana de posesion. */
     MaintenanceTaskResponse assignToShift(UUID shiftId, UUID taskId);
 
+    /**
+     * Saca del turno una tarea abierta: vuelve a su orden pendiente y sin turno, como lo no terminado al
+     * cerrar. Una terminada o cancelada se queda, porque es lo que se hizo en el.
+     */
+    MaintenanceTaskResponse unassignFromShift(UUID shiftId, UUID taskId);
+
     /** Tareas del turno, opcionalmente solo las de un estado (COMPLETED = perfiles revisados). */
     List<MaintenanceTaskResponse> findByShift(UUID shiftId, MaintenanceTaskStatus status);
 }

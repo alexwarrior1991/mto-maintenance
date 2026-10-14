@@ -416,6 +416,21 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     }
 
     @Override
+    @Transactional
+    public MaintenanceTaskResponse unassignFromShift(UUID shiftId, UUID taskId) {
+        MaintenanceShift shift = lookups.shift(shiftId);
+        MaintenanceTask task = repository.findByIdAndShiftId(taskId, shiftId).orElseThrow(() -> new NotFoundException("Maintenance task", taskId));
+        if (!ShiftStateMachine.allowsUpdate(shift.getStatus())) {
+            throw new InvalidTransitionException("Shift " + shift.getCode() + " is " + shift.getStatus() + " and its tasks no longer change");
+        }
+        if (!task.isOpen()) {
+            throw new InvalidTransitionException("Task " + task.getSequence() + " is " + task.getStatus() + "; only an open task is taken out of a shift");
+        }
+        task.returnToOrder();
+        return mapper.toResponse(repository.save(task));
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public List<MaintenanceTaskResponse> findByShift(UUID shiftId, MaintenanceTaskStatus status) {
         lookups.shift(shiftId);

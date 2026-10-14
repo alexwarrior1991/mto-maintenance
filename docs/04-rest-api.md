@@ -31,6 +31,9 @@ GET/PUT         /shifts/{id}                  POST /shifts/{id}/start | /close |
 GET             /shifts/{id}/tasks?status= | /profiles?status= | /report?format= | /revisions
                                               /profiles: PROFILE assets of the shift's tasks by kp (default status=COMPLETED = reviewed)
 POST            /shifts/{id}/tasks/{taskId}   assigns a task to the shift (track and window rules)
+POST            /shifts/{id}/tasks/{taskId}/unassign
+                                              takes an open task out of the shift: back to its order, PENDING and without
+                                              shift (as on closing); a completed or cancelled one stays (409 TRN-001)
 
 GET/POST        /orders                       status, type, priority, assetId, assetType, trackId, stationId, executionPackageId,
                                               plannedFrom, plannedTo, actualStartFrom, actualStartTo, assignedUser, teamId, code
@@ -258,4 +261,4 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | `GET` | `MAINTENANCE_READ` |
 | `POST`, `PUT` | `MAINTENANCE_WRITE` |
 | `DELETE`, and `PUT /assets/{id}` with `enabled=false` (the same decision) | `MAINTENANCE_DELETE` (method security on the `PUT`, on top of `MAINTENANCE_WRITE`) |
-| `cancel` **of an order**, `complete` of an order with `force=true`, `resolve`, `close`, `discard` of a defect | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security); cancelling a shift or a task only needs `MAINTENANCE_WRITE` |
+| `cancel` **of an order**, `complete` of an order with `force=true`, `resolve`, `close`, `discard` of a defect | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security); cancelling a shift or a task, and taking a task out of a shift (`POST .../unassign`), only need `MAINTENANCE_WRITE` |
