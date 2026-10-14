@@ -61,8 +61,16 @@ One unit of work of an order, usually one profile: `sequence`, `assetId` (the pr
 is diagnostic. Added while the order is at most `IN_PROGRESS`; started and completed only with the
 order `IN_PROGRESS` **and** a shift `IN_PROGRESS` on the same track; a check item that requires a
 measure cannot be left without a result. `POST /orders/{id}/tasks/generate` creates one task per
-enabled profile of the section (ordered by kp, idempotent per profile) with the default preventive
-types `RG-01, RG-05, RG-08, RG-10, RG-11, RG-12, RG-13, RP-08` or the ones requested.
+enabled profile of the section (ordered by kp, idempotent per asset) with the default preventive
+types `RG-01, RG-05, RG-08, RG-10, RG-11, RG-12, RG-13, RP-08` or the ones requested. With
+`assetTypes: [PROFILE, SECTION_INSULATOR]` it also creates one per enabled section insulator touching
+the section — on its track or on another track it connects with (`connectedTrackId`), its kp range
+(its kp and its turnouts) overlapping the section's — between the profiles around it, with `RG-03`
+by default. `RG-03` needs full possession, so those tasks wait for a `FULL` shift (the weekend).
+Requested task types go to everything generated; for different ones per asset type the call is made
+twice, and being idempotent per asset it never duplicates. Disconnectors are not generated: the plan
+has no task type common to all of them. The response counts `skippedProfiles` (profiles that already
+had a task, as before) and `skippedAssets` (every asset that already had one).
 
 Completing a task can create defects inline: `workComplete=true` → `RESOLVED` in that shift;
 `workComplete=false` + `repairPlannedDate` → `OPEN`. Completing the last task never closes the
@@ -94,7 +102,10 @@ full possession cannot be assigned to or completed in a `PARTIAL` shift; a `DIVE
 accepts `FULL` shifts. The same rules hold when a shift with tasks already assigned is changed:
 removing a track one of its open tasks is on, or making it `PARTIAL` under a task that needs full
 possession or a `DIVERTED` section, is 409 `SHF-001` naming the task. The profiles reviewed in a shift are the `PROFILE` assets of its `COMPLETED`
-tasks (`GET /shifts/{id}/profiles`). Teams (`A` Rishpon, `B` Mishmar) carry the execution packages they cover.
+tasks (`GET /shifts/{id}/profiles`). An inspection can be recorded in a shift (`shiftId`): the shift
+must be `IN_PROGRESS` or `CLOSED` (one done after midnight is often written down at the end) and work
+on the asset's track or the one it connects with, or it is 409 `SHF-001`. The shift report lists those
+inspections (`inspectionsRecorded`, `inspections[]`) after its task rows. Teams (`A` Rishpon, `B` Mishmar) carry the execution packages they cover.
 
 ## Inspections (`MaintenanceInspection`) and templates
 

@@ -81,7 +81,11 @@ class XlsxReportExporter implements ReportExporter {
         // guardarlo en un campo del bean lo compartiria entre peticiones y corromperia los ficheros.
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet(WorkbookUtil.createSafeSheetName(document.sheetName()));
-            write(sheet, new XlsxStyles(workbook), document);
+            XlsxStyles styles = new XlsxStyles(workbook);
+            write(sheet, styles, document);
+            for (ReportDocument.Appendix appendix : document.appendices()) {
+                writeAppendix(workbook.createSheet(sheetName(workbook, appendix.title())), styles, document, appendix);
+            }
 
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             workbook.write(bytes);
@@ -114,6 +118,32 @@ class XlsxReportExporter implements ReportExporter {
             rowIndex++;
             writeFields(sheet, styles, columns, document.totals(), rowIndex);
         }
+    }
+
+    /**
+     * Un anexo en su propia hoja: el titulo del informe con el del anexo, y su tabla con los
+     * encabezados congelados y su autofiltro, como la principal. En la misma hoja, debajo de los
+     * totales, no podria tener ni lo uno ni lo otro: una hoja solo congela un panel y solo lleva un
+     * autofiltro, y los dos son ya de la tabla principal.
+     */
+    private static void writeAppendix(Sheet sheet, XlsxStyles styles, ReportDocument document, ReportDocument.Appendix appendix) {
+        Columns columns = Columns.of(appendix.table());
+        for (int column = 0; column < columns.chars().length; column++) {
+            sheet.setColumnWidth(column, columns.chars()[column] * WIDTH_UNIT);
+        }
+        int rowIndex = writeText(sheet, 0, document.title() + " — " + appendix.title(), styles.title);
+        writeTable(sheet, styles, columns, appendix.table(), rowIndex + 1);
+    }
+
+    /** El titulo del anexo como nombre de hoja, saneado y sin repetir uno que ya exista (Excel no admite dos iguales). */
+    private static String sheetName(Workbook workbook, String title) {
+        String base = WorkbookUtil.createSafeSheetName(title);
+        String name = base;
+        for (int suffix = 2; workbook.getSheet(name) != null; suffix++) {
+            String tail = " (" + suffix + ")";
+            name = base.substring(0, Math.min(base.length(), 31 - tail.length())) + tail;
+        }
+        return name;
     }
 
     /** La fecha de generacion se añade aqui, y no en las disposiciones, para que la lleven los tres. */
@@ -289,13 +319,16 @@ class XlsxReportExporter implements ReportExporter {
             if (!document.hasTable()) {
                 return new Columns(new int[] {LABEL_CHARS, VALUE_CHARS}, new boolean[] {false, false});
             }
+            return of(document.table());
+        }
 
-            List<ReportDocument.Column> columns = document.table().columns();
+        static Columns of(ReportDocument.Table table) {
+            List<ReportDocument.Column> columns = table.columns();
             int[] measured = new int[columns.size()];
             for (int column = 0; column < columns.size(); column++) {
                 measured[column] = columns.get(column).header().length();
             }
-            for (List<ReportValue> row : document.table().rows()) {
+            for (List<ReportValue> row : table.rows()) {
                 for (int column = 0; column < measured.length; column++) {
                     measured[column] = Math.max(measured[column], displayLength(row.get(column)));
                 }

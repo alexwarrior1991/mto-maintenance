@@ -4,6 +4,7 @@ import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryRe
 import com.alejandro.mtomaintenance.application.dto.export.ReportDocument;
 import com.alejandro.mtomaintenance.application.dto.export.ReportValue;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportInspectionResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamSummaryResponse;
@@ -33,8 +34,10 @@ final class ShiftReportLayout {
             new ReportDocument.Column("Order", 0),
             new ReportDocument.Column("Execution package", 0),
             new ReportDocument.Column("Track", 0),
-            new ReportDocument.Column("Profile", 8),
-            new ReportDocument.Column("Profile name", 0),
+            // "Asset" y no "Profile": una fila puede ser un aislador de seccion generado con RG-03.
+            // El JSON sigue llamandolos profileCode/profileName, que es lo que leen los clientes.
+            new ReportDocument.Column("Asset", 8),
+            new ReportDocument.Column("Asset name", 0),
             new ReportDocument.Column("Kp", 6),
             new ReportDocument.Column("Sectioning", 5),
             // Las agujas del aislador de seccion, con su tangente ('W31 1:9'). Peso 0: en una hoja
@@ -56,12 +59,34 @@ final class ShiftReportLayout {
             // valor ya viaja en el documento y solo cambia como lo pinta cada exportador.
             new ReportDocument.Column("Photos", 7));
 
+    private static final String INSPECTIONS = "Inspections";
+
+    /**
+     * Las inspecciones registradas en el turno, en su anexo. Se imprimen todas menos el nombre largo
+     * del activo y el tipo, que el codigo ya dice ({@code SIN-}, {@code PRF-}).
+     */
+    private static final List<ReportDocument.Column> INSPECTION_COLUMNS = List.of(
+            new ReportDocument.Column("Code", 6),
+            new ReportDocument.Column("Date", 5),
+            new ReportDocument.Column("Asset", 7),
+            new ReportDocument.Column("Asset name", 0),
+            new ReportDocument.Column("Type", 0),
+            new ReportDocument.Column("Track", 3),
+            new ReportDocument.Column("Kp", 5),
+            new ReportDocument.Column("Kind", 4),
+            new ReportDocument.Column("Result", 6),
+            new ReportDocument.Column("Inspector", 7),
+            new ReportDocument.Column("Findings", 20),
+            new ReportDocument.Column("Defect", 6),
+            new ReportDocument.Column("Corrective order", 6));
+
     private ShiftReportLayout() {
     }
 
     static ReportDocument of(ShiftReportResponse report, ReportTime time) {
         MaintenanceShiftResponse shift = report.shift();
         List<List<ReportValue>> rows = report.rows().stream().map(each -> row(each, time)).toList();
+        List<List<ReportValue>> inspections = report.inspections().stream().map(ShiftReportLayout::inspection).toList();
 
         return new ReportDocument(
                 ReportLayouts.fileBaseName(REPORT, ReportLayouts.text(shift.shiftDate()), shift.code()),
@@ -72,7 +97,8 @@ final class ShiftReportLayout {
                 time.generated(),
                 header(shift, time),
                 new ReportDocument.Table(COLUMNS, rows),
-                totals(report));
+                totals(report),
+                List.of(new ReportDocument.Appendix(INSPECTIONS, new ReportDocument.Table(INSPECTION_COLUMNS, inspections))));
     }
 
     private static String subtitle(MaintenanceShiftResponse shift) {
@@ -119,7 +145,25 @@ final class ShiftReportLayout {
                 new ReportDocument.Field("Tasks pending", ReportValue.count(report.tasksPending())),
                 new ReportDocument.Field("Profiles reviewed", ReportValue.count(report.profilesReviewed())),
                 new ReportDocument.Field("Defects found", ReportValue.count(report.defectsFound())),
-                new ReportDocument.Field("Defects resolved", ReportValue.count(report.defectsResolved())));
+                new ReportDocument.Field("Defects resolved", ReportValue.count(report.defectsResolved())),
+                new ReportDocument.Field("Inspections recorded", ReportValue.count(report.inspectionsRecorded())));
+    }
+
+    private static List<ReportValue> inspection(ShiftReportInspectionResponse inspection) {
+        return List.of(
+                ReportValue.text(inspection.code()),
+                ReportValue.date(inspection.inspectionDate()),
+                ReportValue.text(inspection.assetCode()),
+                ReportValue.text(inspection.assetName()),
+                ReportValue.text(inspection.assetType()),
+                ReportValue.count(inspection.trackId()),
+                ReportValue.decimal(inspection.kp(), 3),
+                ReportValue.text(inspection.inspectionKind()),
+                ReportValue.text(inspection.result()),
+                ReportValue.text(inspection.inspector()),
+                ReportValue.text(inspection.detectedDefects()),
+                ReportValue.text(inspection.generatedDefectCode()),
+                ReportValue.text(inspection.generatedOrderCode()));
     }
 
     private static List<ReportValue> row(ShiftReportRowResponse row, ReportTime time) {

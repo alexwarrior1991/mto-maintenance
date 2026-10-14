@@ -49,7 +49,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -66,6 +70,16 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     /** Lo que se hace en cada perfil de via principal: grupos 1, 2 y 4 del plan. */
     static final List<String> DEFAULT_PREVENTIVE_TASK_TYPES =
             List.of("RG-01", "RG-05", "RG-08", "RG-10", "RG-11", "RG-12", "RG-13", "RP-08");
+
+    /**
+     * Lo que se hace en cada aislador de seccion: RG-03 del plan. Pide posesion total, asi que sus
+     * tareas esperan a un turno FULL (el fin de semana), como el resto del grupo 3.
+     */
+    static final List<String> DEFAULT_INSULATOR_TASK_TYPES = List.of("RG-03");
+
+    /** Los activos de un tramo que se generan uno a uno; un seccionador no tiene un tipo comun en el plan. */
+    private static final Set<CatenaryAssetType> GENERATED_ASSET_TYPES =
+            EnumSet.of(CatenaryAssetType.PROFILE, CatenaryAssetType.SECTION_INSULATOR);
 
     private final MaintenanceTaskRepository repository;
     private final CatenaryAssetRepository assetRepository;
@@ -167,43 +181,83 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
             throw new ValidationException("Track section " + section.getCode() + " has no track or kp range");
         }
 
-        List<String> codes = request.taskTypeCodes() == null || request.taskTypeCodes().isEmpty()
-                ? DEFAULT_PREVENTIVE_TASK_TYPES
-                : request.taskTypeCodes();
-        Set<MaintenanceTaskType> taskTypes = lookups.taskTypes(codes);
-        boolean withChecklist = Boolean.TRUE.equals(request.withChecklist())
-                || taskTypes.stream().anyMatch(MaintenanceTaskType::getDiagnostic);
+        Set<CatenaryAssetType> assetTypes = generatedAssetTypes(request.assetTypes());
+        // Con tipos pedidos, valen para todo lo generado; sin ellos, cada activo lleva los del plan
+        // para el suyo. Para tipos distintos por activo se genera dos veces: es idempotente por activo.
+        boolean explicitTypes = request.taskTypeCodes() != null && !request.taskTypeCodes().isEmpty();
+        Map<CatenaryAssetType, Set<MaintenanceTaskType>> taskTypesByAsset = new EnumMap<>(CatenaryAssetType.class);
+        Set<MaintenanceTaskType> requested = explicitTypes ? lookups.taskTypes(request.taskTypeCodes()) : null;
+        for (CatenaryAssetType type : assetTypes) {
+            taskTypesByAsset.put(type, explicitTypes ? requested : lookups.taskTypes(defaultTaskTypes(type)));
+        }
 
-        List<CatenaryAsset> profiles = assetRepository.findEnabledByTypeOnTrackBetween(
-                CatenaryAssetType.PROFILE, section.getTrackId(), section.getStartKp(), section.getEndKp());
+        List<CatenaryAsset> assets = new ArrayList<>();
+        if (assetTypes.contains(CatenaryAssetType.PROFILE)) {
+            assets.addAll(assetRepository.findEnabledByTypeOnTrackBetween(
+                    CatenaryAssetType.PROFILE, section.getTrackId(), section.getStartKp(), section.getEndKp()));
+        }
+        if (assetTypes.contains(CatenaryAssetType.SECTION_INSULATOR)) {
+            assets.addAll(assetRepository.findEnabledByTypeTouchingSection(
+                    CatenaryAssetType.SECTION_INSULATOR, section.getTrackId(), section.getStartKp(), section.getEndKp()));
+        }
+        // En el orden en que se recorre la via de noche: un aislador entre los perfiles que lo rodean.
+        assets.sort(Comparator.comparing(CatenaryAsset::getStartKp).thenComparing(CatenaryAsset::getCode));
+
         List<UUID> alreadyCovered = repository.findAssetIdsByOrderId(orderId);
         int sequence = repository.findMaxSequence(orderId);
         int created = 0;
+        int skippedProfiles = 0;
         int skipped = 0;
 
-        for (CatenaryAsset profile : profiles) {
-            if (alreadyCovered.contains(profile.getId())) {
+        for (CatenaryAsset asset : assets) {
+            if (alreadyCovered.contains(asset.getId())) {
                 skipped++;
+                if (asset.getType() == CatenaryAssetType.PROFILE) {
+                    skippedProfiles++;
+                }
                 continue;
             }
+            Set<MaintenanceTaskType> taskTypes = taskTypesByAsset.get(asset.getType());
             MaintenanceTask task = MaintenanceTask.builder()
                     .order(order)
                     .sequence(++sequence)
-                    .description("Preventive maintenance of profile " + profile.getName() + " (kp " + profile.getStartKp() + ")")
-                    .asset(profile)
+                    .description("Preventive maintenance of " + describe(asset.getType()) + " " + asset.getName() + " (kp " + asset.getStartKp() + ")")
+                    .asset(asset)
                     .taskTypes(new java.util.LinkedHashSet<>(taskTypes))
                     .build();
-            if (withChecklist) {
-                attachChecklist(task, profile);
+            if (Boolean.TRUE.equals(request.withChecklist()) || taskTypes.stream().anyMatch(MaintenanceTaskType::getDiagnostic)) {
+                attachChecklist(task, asset);
             }
             order.getTasks().add(repository.save(task));
             created++;
         }
-        LOGGER.info("Preventive tasks generated for order {}: created={}, skipped={}, profiles={}", order.getCode(), created, skipped, profiles.size());
+        LOGGER.info("Preventive tasks generated for order {}: created={}, skipped={}, assets={} ({})",
+                order.getCode(), created, skipped, assets.size(), assetTypes);
 
         WorkloadEstimate estimate = workloadEstimator.estimate(order);
-        return new GeneratePreventiveTasksResponse(created, skipped, order.getTasks().size(),
-                estimate.estimatedMinutes(), estimate.estimatedShifts());
+        return new GeneratePreventiveTasksResponse(created, skippedProfiles, order.getTasks().size(),
+                estimate.estimatedMinutes(), estimate.estimatedShifts(), skipped);
+    }
+
+    /** Sin tipos de activo, los perfiles, que es lo que hacia antes de admitirlos; un seccionador o un tramo no se generan. */
+    private static Set<CatenaryAssetType> generatedAssetTypes(List<CatenaryAssetType> requested) {
+        if (requested == null || requested.isEmpty()) {
+            return EnumSet.of(CatenaryAssetType.PROFILE);
+        }
+        Set<CatenaryAssetType> types = EnumSet.copyOf(requested);
+        if (!GENERATED_ASSET_TYPES.containsAll(types)) {
+            throw new ValidationException("assetTypes: only " + GENERATED_ASSET_TYPES + " are generated one by one along a section, not "
+                    + types.stream().filter(type -> !GENERATED_ASSET_TYPES.contains(type)).toList());
+        }
+        return types;
+    }
+
+    private static List<String> defaultTaskTypes(CatenaryAssetType type) {
+        return type == CatenaryAssetType.SECTION_INSULATOR ? DEFAULT_INSULATOR_TASK_TYPES : DEFAULT_PREVENTIVE_TASK_TYPES;
+    }
+
+    private static String describe(CatenaryAssetType type) {
+        return type == CatenaryAssetType.SECTION_INSULATOR ? "section insulator" : "profile";
     }
 
     @Override

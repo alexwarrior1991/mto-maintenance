@@ -37,7 +37,9 @@ GET/POST        /orders                       status, type, priority, assetId, a
 GET/PUT         /orders/{id}
 POST            /orders/{id}/plan | /assign | /start | /complete | /cancel
 GET             /orders/{id}/history | /revisions
-GET/POST        /orders/{id}/tasks            POST /orders/{id}/tasks/generate
+GET/POST        /orders/{id}/tasks            POST /orders/{id}/tasks/generate {taskTypeCodes, withChecklist, assetTypes}
+                                              assetTypes: PROFILE (default) and/or SECTION_INSULATOR (RG-03 by default; also
+                                              the ones of another track that connect with the section's); any other is 400
 GET/PUT         /orders/{id}/tasks/{taskId}   POST .../start | /complete | /cancel
 PUT             /orders/{id}/tasks/{taskId}/check-items/{itemId}
 GET/POST        /orders/{id}/materials        PUT .../{usageId}   POST .../{usageId}/sync   DELETE .../{usageId}
@@ -66,8 +68,8 @@ the parameter is absent; the download is an ordinary URL, so it can be linked or
 | `format` | `Content-Type` | Notes |
 |---|---|---|
 | `json`, absent | `application/json` | Unchanged |
-| `xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | One sheet, header pairs above the table, frozen and filtered header, real dates and numbers |
-| `pdf` | `application/pdf` | A4 landscape (shift, progress) or portrait (monthly), header repeated on every page |
+| `xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | One sheet, header pairs above the table, frozen and filtered header, real dates and numbers; the shift report adds an `Inspections` sheet |
+| `pdf` | `application/pdf` | A4 landscape (shift, progress) or portrait (monthly), header repeated on every page; the shift report's inspections follow its totals |
 
 The value is case insensitive; an unknown one is `400 VAL-001`. The file arrives as
 `Content-Disposition: attachment` with a stable, sortable ASCII name — `shift-report-<date>-<code>`,
@@ -88,6 +90,11 @@ Two deliberate differences from the JSON:
   The workbook carries all of them, `switches` included — the turnouts of a section insulator with
   their rate (`W31 1:9`, and `W31 1:9 (out of service)` for one that is disabled in
   `mto-configuration`), empty on every other row.
+- The shift report's inspections are an appendix: in the workbook a sheet of their own (`Inspections`,
+  with its frozen and filtered header, and the note when there are none), in the PDF a titled table
+  after the totals without the asset name and type, which the code already says. The totals carry
+  `Inspections recorded`. The task table's `Profile` column reads `Asset`, because a row can be a
+  section insulator; the JSON keeps `profileCode`/`profileName`.
 - `photoRefs` are printed as text in both formats. They are references that resolve to nothing until
   the photo storage in `05-development-roadmap.md` exists, but they are the only record that the
   photo was taken, so dropping them would lose what the paper report used to carry.
@@ -177,7 +184,7 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 405 `REQ-405` | The route exists but not for that method; the `Allow` header lists the ones it takes |
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset; changing a field of a synchronized asset that only `mto-configuration` changes (sending it with the value it already has is accepted); `enabled=true` on an asset disabled at the source |
-| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them |
+| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them, and an inspection recorded in a shift that is not in progress or closed, or that does not work on its asset's track nor on the one it connects with |
 | 409 `MAT-001` | Over-consumption (also taking `allowOverConsumption` off a line consumed above plan), duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
 | 409 `<AGG>-409` | Duplicated code |

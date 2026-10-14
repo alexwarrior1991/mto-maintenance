@@ -5,7 +5,10 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
+
+import java.util.List;
 
 /**
  * Ventanas de ejecucion del plan OCS: entre semana se corta la via principal entre dos
@@ -29,11 +32,38 @@ final class ShiftRules {
                 ? asset.getTrackId()
                 : task.getOrder().getTrackId();
         Long connectedTrack = asset == null ? null : asset.getConnectedTrackId();
-        if (taskTrack != null && !shift.worksOn(taskTrack) && (connectedTrack == null || !shift.worksOn(connectedTrack))) {
-            throw new ShiftException("Shift " + shift.getCode() + " works on tracks " + shift.getTrackIds().stream().sorted().toList()
+        if (!covers(shift, taskTrack, connectedTrack)) {
+            throw new ShiftException("Shift " + shift.getCode() + " works on tracks " + tracksOf(shift)
                     + " but the task belongs to track " + taskTrack
                     + (connectedTrack == null ? "" : " and connects with track " + connectedTrack));
         }
+    }
+
+    /**
+     * Una inspeccion registrada en un turno sale en su parte, asi que tiene que ser de esa noche y de
+     * esas vias: un turno en curso o cerrado (la de madrugada se apunta a menudo al terminar) que
+     * recorra la via de su activo, o la otra si el activo une dos. Uno planificado o cancelado no se
+     * ha trabajado, y uno de otra via pondria la inspeccion en el parte de quien no la hizo.
+     */
+    static void requireRecordsInspectionsOf(MaintenanceShift shift, CatenaryAsset asset) {
+        if (shift.getStatus() != ShiftStatus.IN_PROGRESS && shift.getStatus() != ShiftStatus.CLOSED) {
+            throw new ShiftException("Shift " + shift.getCode() + " is " + shift.getStatus()
+                    + "; an inspection is recorded in a shift in progress or closed");
+        }
+        if (!covers(shift, asset.getTrackId(), asset.getConnectedTrackId())) {
+            throw new ShiftException("Shift " + shift.getCode() + " works on tracks " + tracksOf(shift)
+                    + " but asset " + asset.getCode() + " is on track " + asset.getTrackId()
+                    + (asset.getConnectedTrackId() == null ? "" : " and connects with track " + asset.getConnectedTrackId()));
+        }
+    }
+
+    /** Sin via no hay nada que comprobar; con ella, vale la suya o la conectada. */
+    private static boolean covers(MaintenanceShift shift, Long track, Long connectedTrack) {
+        return track == null || shift.worksOn(track) || (connectedTrack != null && shift.worksOn(connectedTrack));
+    }
+
+    private static List<Long> tracksOf(MaintenanceShift shift) {
+        return shift.getTrackIds().stream().sorted().toList();
     }
 
     static void requireCompatiblePossession(MaintenanceShift shift, MaintenanceTask task) {

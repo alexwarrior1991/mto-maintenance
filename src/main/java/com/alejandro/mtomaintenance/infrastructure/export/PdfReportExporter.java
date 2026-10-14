@@ -108,6 +108,13 @@ class PdfReportExporter implements ReportExporter {
         if (!document.totals().isEmpty()) {
             pdf.add(fields(document.totals()));
         }
+
+        // Los anexos van seguidos y no en paginas aparte: las inspecciones de un turno son unas
+        // pocas lineas, y una pagina casi en blanco por cada una seria papel tirado en el terreno.
+        for (ReportDocument.Appendix appendix : document.appendices()) {
+            pdf.add(paragraph(appendix.title(), ReportFonts.SECTION, SPACING / 2));
+            pdf.add(table(appendix.table()));
+        }
     }
 
     private static Paragraph paragraph(String text, Font font, float spacingAfter) {

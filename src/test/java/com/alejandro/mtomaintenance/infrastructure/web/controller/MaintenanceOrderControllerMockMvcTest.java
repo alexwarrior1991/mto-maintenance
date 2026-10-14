@@ -429,7 +429,7 @@ class MaintenanceOrderControllerMockMvcTest {
         verify(taskService, never()).generatePreventiveTasks(any(), any());
 
         // Sin cuerpo genera con los tipos por defecto, como hasta ahora.
-        when(taskService.generatePreventiveTasks(eq(orderId), any())).thenReturn(new GeneratePreventiveTasksResponse(3, 0, 3, java.math.BigDecimal.TEN, 1));
+        when(taskService.generatePreventiveTasks(eq(orderId), any())).thenReturn(new GeneratePreventiveTasksResponse(3, 0, 3, java.math.BigDecimal.TEN, 1, 0));
         mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.createdTasks").value(3));

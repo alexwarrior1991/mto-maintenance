@@ -197,10 +197,10 @@ public class MaintenanceOrderController {
     }
 
     @Operation(summary = "Generate preventive tasks profile by profile", tags = "Tasks",
-            description = "One task per enabled PROFILE of the order's track section, ordered by kp, with the given task types (default: groups 1, 2 and 4). Idempotent per profile.")
+            description = "One task per enabled PROFILE of the order's track section (and, with assetTypes, per SECTION_INSULATOR on it or connecting to it), ordered by kp, with the given task types (default: groups 1, 2 and 4 on a profile, RG-03 on an insulator). Idempotent per asset.")
     @PostMapping("/{id}/tasks/generate")
     public ResponseEntity<GeneratePreventiveTasksResponse> generateTasks(@PathVariable UUID id, @Valid @RequestBody(required = false) GeneratePreventiveTasksRequest request) {
-        return ResponseEntity.ok(taskService.generatePreventiveTasks(id, request == null ? new GeneratePreventiveTasksRequest(null, null) : request));
+        return ResponseEntity.ok(taskService.generatePreventiveTasks(id, request == null ? new GeneratePreventiveTasksRequest(null, null, null) : request));
     }
 
     @Operation(summary = "Get task", tags = "Tasks")

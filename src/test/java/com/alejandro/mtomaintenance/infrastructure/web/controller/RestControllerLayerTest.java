@@ -98,14 +98,14 @@ class RestControllerLayerTest {
         MaintenanceOrderRequest request = new MaintenanceOrderRequest("Preventive T2", null, MaintenanceOrderType.PREVENTIVE, null, assetId, null, null, null, null);
         MaintenanceOrderResponse order = orderResponse(orderId);
         PageResponse<MaintenanceOrderResponse> page = new PageResponse<>(List.of(order), new PageMetadataResponse(0, 20, 1, 1, true, true));
-        GeneratePreventiveTasksResponse generated = new GeneratePreventiveTasksResponse(23, 0, 23, new BigDecimal("1266.00"), 5);
+        GeneratePreventiveTasksResponse generated = new GeneratePreventiveTasksResponse(23, 0, 23, new BigDecimal("1266.00"), 5, 0);
         LocalDate from = LocalDate.of(2026, 1, 1);
         LocalDate to = LocalDate.of(2026, 1, 31);
 
         when(orderService.create(request)).thenReturn(order);
         when(orderService.search(MaintenanceOrderStatus.PLANNED, null, MaintenancePriority.HIGH, null, null, 2L, null, null, from, to, null, null, null, null, null, pageable)).thenReturn(page);
         when(orderService.cancel(orderId, new CancelOrderRequest("rain"))).thenReturn(order);
-        when(taskService.generatePreventiveTasks(orderId, new GeneratePreventiveTasksRequest(null, null))).thenReturn(generated);
+        when(taskService.generatePreventiveTasks(orderId, new GeneratePreventiveTasksRequest(null, null, null))).thenReturn(generated);
 
         var createResponse = controller.create(request);
         var searchResponse = controller.search(MaintenanceOrderStatus.PLANNED, null, MaintenancePriority.HIGH, null, null, 2L, null, null, from, to, null, null, null, null, null, pageable);

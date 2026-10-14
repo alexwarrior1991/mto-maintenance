@@ -26,6 +26,8 @@ final class ReportFonts {
 
     static final Font TITLE = new Font(HELVETICA_BOLD, 13f);
     static final Font SUBTITLE = new Font(HELVETICA, 9f, Font.NORMAL, Color.DARK_GRAY);
+    /** El titulo de un anexo: por debajo del del informe, por encima de las etiquetas. */
+    static final Font SECTION = new Font(HELVETICA_BOLD, 10f);
     static final Font LABEL = new Font(HELVETICA_BOLD, 7.5f);
     static final Font VALUE = new Font(HELVETICA, 7.5f);
     static final Font TABLE_HEADER = new Font(HELVETICA_BOLD, 7f);

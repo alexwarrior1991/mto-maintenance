@@ -40,7 +40,8 @@ yearly reset.
 Indexes follow the API filters: asset `(track_id, start_kp)`, `(type, enabled)`; order
 `(status, planned_date)`, `(asset_id, status)`, `(track_id, start_kp)`, `(type, priority)`; task
 `(shift_id)`, `(asset_id, status)`, `(order_id, status)`; shift `(shift_date, team_id)`,
-`maintenance_shift_track (track_id)`, `maintenance_shift_disconnector (disconnector_id)`; inspection `(result, inspection_date)`; defect `(severity, status)`,
+`maintenance_shift_track (track_id)`, `maintenance_shift_disconnector (disconnector_id)`; inspection `(result, inspection_date)`,
+`(shift_id)` (`V15`, the inspections of a shift's report); defect `(severity, status)`,
 `(detected_at)`; material `(stock_sync_status)`.
 
 `preventive_due_at(last_completed, interval_days)` is a SQL function used by the

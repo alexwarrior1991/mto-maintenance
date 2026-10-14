@@ -47,6 +47,7 @@ import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportInspectionResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
@@ -168,6 +169,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -510,7 +512,7 @@ class BusinessLayerTest {
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("540")));
 
-        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null));
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null));
 
         assertEquals(1, response.createdTasks());
         assertEquals(1, response.skippedProfiles());
@@ -523,15 +525,100 @@ class BusinessLayerTest {
     }
 
     @Test
+    void theInsulatorsOfTheSectionAreGeneratedWithRg03BetweenTheProfilesAroundThemWhenAsked() {
+        // Un fin de semana con posesion total: los perfiles de la via y los aisladores que la tocan,
+        // tambien el de la via de al lado que conecta con esta, en el orden en que se recorren.
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        CatenaryAsset first = profile("12-2.27", "12847.990");
+        CatenaryAsset second = profile("12-2.28", "12899.290");
+        CatenaryAsset own = insulator("SI-W31", 2L, null, "12850.000", "12890.000");
+        CatenaryAsset fromNextTrack = insulator("SI-W41", 3L, 2L, "12920.000", "12960.000");
+        BigDecimal from = order.getAsset().getStartKp();
+        BigDecimal to = order.getAsset().getEndKp();
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledByTypeOnTrackBetween(CatenaryAssetType.PROFILE, 2L, from, to)).thenReturn(List.of(first, second));
+        when(fixture.assetRepository.findEnabledByTypeTouchingSection(CatenaryAssetType.SECTION_INSULATOR, 2L, from, to))
+                .thenReturn(List.of(own, fromNextTrack));
+        when(fixture.repository.findAssetIdsByOrderId(order.getId())).thenReturn(List.of());
+        when(fixture.repository.findMaxSequence(order.getId())).thenReturn(0);
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypes());
+        when(fixture.lookups.activeTemplate(any())).thenReturn(Optional.of(template("RUNNERS", "BODY")));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("300")));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, true,
+                List.of(CatenaryAssetType.PROFILE, CatenaryAssetType.SECTION_INSULATOR)));
+
+        assertEquals(4, response.createdTasks());
+        assertEquals(0, response.skippedAssets());
+        ArgumentCaptor<MaintenanceTask> saved = ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(fixture.repository, times(4)).save(saved.capture());
+        List<MaintenanceTask> tasks = saved.getAllValues();
+        assertEquals(List.of(first, own, second, fromNextTrack), tasks.stream().map(MaintenanceTask::getAsset).toList(), "By kp along the track");
+        assertEquals(List.of(1, 2, 3, 4), tasks.stream().map(MaintenanceTask::getSequence).toList());
+        assertEquals(Set.of("RG-03"), codesOf(tasks.get(1)), "An insulator gets RG-03, not the profile's types");
+        assertTrue(tasks.get(1).requiresFullPossession(), "So it waits for a FULL shift");
+        assertEquals(Set.of("RG-01", "RG-12"), codesOf(tasks.get(0)));
+        assertEquals("Preventive maintenance of section insulator SI-W41 (kp 12920.000)", tasks.get(3).getDescription());
+        assertEquals(2, tasks.get(3).getCheckItems().size(), "Its checklist is the template of its own type");
+        verify(fixture.lookups).activeTemplate(fromNextTrack);
+    }
+
+    @Test
+    void generatingAgainSkipsWhatAlreadyHasATaskAndChosenTypesGoToEverything() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        CatenaryAsset profile = profile("12-2.27", "12847.990");
+        CatenaryAsset covered = insulator("SI-W31", 2L, null, "12850.000", "12890.000");
+        CatenaryAsset fresh = insulator("SI-W41", 2L, 3L, "12920.000", "12960.000");
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledByTypeTouchingSection(eq(CatenaryAssetType.SECTION_INSULATOR), eq(2L), any(), any()))
+                .thenReturn(List.of(covered, fresh));
+        when(fixture.repository.findAssetIdsByOrderId(order.getId())).thenReturn(List.of(profile.getId(), covered.getId()));
+        when(fixture.repository.findMaxSequence(order.getId())).thenReturn(7);
+        when(fixture.lookups.taskTypes(List.of("RG-03", "RP-02"))).thenReturn(taskTypes("RG-03", "RP-02"));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
+
+        // Solo aisladores, con los tipos elegidos: el perfil ni se pide.
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(List.of("RG-03", "RP-02"), null, List.of(CatenaryAssetType.SECTION_INSULATOR)));
+
+        assertEquals(1, response.createdTasks());
+        assertEquals(1, response.skippedAssets());
+        assertEquals(0, response.skippedProfiles(), "Only profiles count there, as before");
+        MaintenanceTask created = fixture.savedTask();
+        assertEquals(fresh, created.getAsset());
+        assertEquals(8, created.getSequence());
+        assertEquals(Set.of("RG-03", "RP-02"), codesOf(created));
+        verify(fixture.assetRepository, never()).findEnabledByTypeOnTrackBetween(any(), any(), any(), any());
+        verify(fixture.lookups, never()).taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES);
+    }
+
+    @Test
+    void onlyProfilesAndInsulatorsAreGeneratedOneByOneAlongASection() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+
+        ValidationException rejected = assertThrows(ValidationException.class, () -> fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(null, null, List.of(CatenaryAssetType.PROFILE, CatenaryAssetType.DISCONNECTOR))));
+
+        assertTrue(rejected.getMessage().startsWith("assetTypes"), rejected.getMessage());
+        assertTrue(rejected.getMessage().contains("DISCONNECTOR"), rejected.getMessage());
+        verify(fixture.repository, never()).save(any());
+    }
+
+    @Test
     void generatingTasksNeedsAPreventiveOrderOnATrackSection() {
         TaskFixture fixture = new TaskFixture();
         MaintenanceOrder corrective = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
         when(fixture.lookups.order(corrective.getId())).thenReturn(corrective);
-        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(corrective.getId(), new GeneratePreventiveTasksRequest(null, null)));
+        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(corrective.getId(), new GeneratePreventiveTasksRequest(null, null, null)));
 
         MaintenanceOrder inProgress = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
         when(fixture.lookups.order(inProgress.getId())).thenReturn(inProgress);
-        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(inProgress.getId(), new GeneratePreventiveTasksRequest(null, null)));
+        assertThrows(InvalidTransitionException.class, () -> fixture.service.generatePreventiveTasks(inProgress.getId(), new GeneratePreventiveTasksRequest(null, null, null)));
     }
 
     @Test
@@ -1509,6 +1596,45 @@ class BusinessLayerTest {
         assertEquals(2, report.profilesReviewed());
         assertEquals(2, report.defectsFound());
         assertEquals(1, report.defectsResolved());
+        assertEquals(0, report.inspectionsRecorded());
+        assertEquals(List.of(), report.inspections());
+    }
+
+    @Test
+    void theShiftReportListsTheInspectionsRecordedInTheShiftWithWhatTheyOpened() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(Set.of(2L, 3L), PossessionType.FULL, ShiftStatus.CLOSED);
+        MaintenanceInspection unsafe = inspection(InspectionResult.UNSAFE);
+        unsafe.setAsset(insulator("SI-W41", 3L, 2L, "12920.000", "12960.000"));
+        unsafe.setTrackId(3L);
+        unsafe.setKp(new BigDecimal("12921.500"));
+        unsafe.setInspector("dana");
+        unsafe.setGeneratedDefect(CatenaryDefect.builder().code("DEF-000007").build());
+        unsafe.setGeneratedOrder(MaintenanceOrder.builder().code("MO-000031").build());
+        MaintenanceInspection ok = inspection(InspectionResult.OK);
+        ok.setDetectedDefects(null);
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        when(fixture.taskRepository.findByShiftIdOrderBySequenceAsc(shift.getId())).thenReturn(List.of());
+        when(fixture.inspectionRepository.findByShiftIdOrderByInspectionDateAscCodeAsc(shift.getId())).thenReturn(List.of(unsafe, ok));
+
+        ShiftReportResponse report = fixture.service.report(shift.getId());
+
+        assertEquals(2, report.inspectionsRecorded(), "The service counts them, the clients do not add");
+        ShiftReportInspectionResponse first = report.inspections().getFirst();
+        assertEquals("INS-UNSAFE", first.code());
+        assertEquals("SIN-SI-W41", first.assetCode());
+        assertEquals(CatenaryAssetType.SECTION_INSULATOR, first.assetType());
+        assertEquals(3L, first.trackId());
+        assertEquals(new BigDecimal("12921.500"), first.kp(), "The kp written in the inspection, not the asset's");
+        assertEquals(InspectionResult.UNSAFE, first.result());
+        assertEquals("Cracked insulator", first.detectedDefects());
+        assertEquals("DEF-000007", first.generatedDefectCode());
+        assertEquals("MO-000031", first.generatedOrderCode());
+        ShiftReportInspectionResponse second = report.inspections().get(1);
+        assertEquals(2L, second.trackId(), "Without its own track it is the asset's");
+        assertEquals(new BigDecimal("13499.290"), second.kp());
+        assertNull(second.generatedDefectCode());
+        assertEquals(List.of(), report.rows());
     }
 
     // ------------------------------------------------------------------ teams
@@ -1569,6 +1695,38 @@ class BusinessLayerTest {
         when(fixture.lookups.order(cancelled.getId())).thenReturn(cancelled);
         assertThrows(InvalidTransitionException.class, () -> fixture.service.create(new MaintenanceInspectionRequest(asset.getId(),
                 LocalDate.of(2026, 1, 28), null, null, InspectionResult.OK, null, null, null, null, cancelled.getId(), null)));
+    }
+
+    @Test
+    void anInspectionIsRecordedInAShiftThatWorkedOnItsTrackOrTheOneItConnectsWith() {
+        // Sale en el parte de ese turno: tiene que ser de esa noche (en curso o ya cerrado) y de sus vias.
+        InspectionFixture fixture = new InspectionFixture();
+        CatenaryAsset insulator = insulator("SI-W41", 3L, 2L, "12920.000", "12960.000");
+        when(fixture.lookups.enabledAsset(insulator.getId())).thenReturn(insulator);
+        when(fixture.codeGenerator.nextInspectionCode()).thenReturn("INS-000040");
+        MaintenanceShift onConnected = shift(2L, PossessionType.FULL, ShiftStatus.CLOSED);
+        MaintenanceShift onOther = shift(5L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        MaintenanceShift planned = shift(3L, PossessionType.FULL, ShiftStatus.PLANNED);
+        MaintenanceShift cancelled = shift(3L, PossessionType.FULL, ShiftStatus.CANCELLED);
+        Stream.of(onConnected, onOther, planned, cancelled).forEach(shift -> when(fixture.lookups.shift(shift.getId())).thenReturn(shift));
+
+        fixture.service.create(inspectionIn(insulator, onConnected));
+
+        ArgumentCaptor<MaintenanceInspection> captor = ArgumentCaptor.forClass(MaintenanceInspection.class);
+        verify(fixture.repository).save(captor.capture());
+        assertSame(onConnected, captor.getValue().getShift(), "A closed shift on the track it connects with records it");
+
+        ShiftException otherTrack = assertThrows(ShiftException.class, () -> fixture.service.create(inspectionIn(insulator, onOther)));
+        assertTrue(otherTrack.getMessage().contains("is on track 3 and connects with track 2"), otherTrack.getMessage());
+        ShiftException notWorked = assertThrows(ShiftException.class, () -> fixture.service.create(inspectionIn(insulator, planned)));
+        assertTrue(notWorked.getMessage().contains("is PLANNED"), notWorked.getMessage());
+        assertThrows(ShiftException.class, () -> fixture.service.create(inspectionIn(insulator, cancelled)));
+        verify(fixture.repository, times(1)).save(any());
+    }
+
+    private static MaintenanceInspectionRequest inspectionIn(CatenaryAsset asset, MaintenanceShift shift) {
+        return new MaintenanceInspectionRequest(asset.getId(), LocalDate.of(2026, 1, 28), "dana", null, InspectionResult.OK,
+                null, null, null, null, null, shift.getId());
     }
 
     @Test
@@ -2956,6 +3114,32 @@ class BusinessLayerTest {
         assertEquals(new ReportValue.Text("PLANNED"), headerField(document, "Status"));
         assertTrue(document.table().rows().isEmpty(), "a shift with no tasks still has a table to head");
         assertEquals(19, document.table().columns().size());
+        assertEquals("Asset", document.table().columns().get(4).header(), "a row can be an insulator, not only a profile");
+        // Sin inspecciones el anexo sigue estando, vacio: el lector ve que no hubo, no que se perdio.
+        assertEquals(List.of("Inspections"), document.appendices().stream().map(ReportDocument.Appendix::title).toList());
+        assertTrue(document.appendices().getFirst().table().rows().isEmpty());
+    }
+
+    @Test
+    void theShiftLayoutPutsTheInspectionsOfTheShiftInTheirOwnAppendixAndCountsThem() {
+        ShiftReportResponse base = shiftReport(ShiftStatus.CLOSED, List.of(shiftReportRow()));
+        ShiftReportInspectionResponse inspection = new ShiftReportInspectionResponse(UUID.randomUUID(), "INS-000040", LocalDate.of(2026, 1, 28),
+                "SIN-41", "SI-W41", CatenaryAssetType.SECTION_INSULATOR, 3L, new BigDecimal("12921.500"), InspectionKind.VISUAL,
+                InspectionResult.UNSAFE, "dana", "Runner burnt", "DEF-000007", "MO-000031");
+        ShiftReportResponse report = new ShiftReportResponse(base.shift(), base.tasksCompleted(), base.tasksPending(), base.profilesReviewed(),
+                base.defectsFound(), base.defectsResolved(), base.rows(), 1, List.of(inspection));
+
+        ReportDocument document = ShiftReportLayout.of(report, AT_UTC);
+
+        ReportDocument.Table table = document.appendices().getFirst().table();
+        assertEquals(List.of("Code", "Date", "Asset", "Asset name", "Type", "Track", "Kp", "Kind", "Result", "Inspector", "Findings",
+                "Defect", "Corrective order"), table.columns().stream().map(ReportDocument.Column::header).toList());
+        List<ReportValue> row = table.rows().getFirst();
+        assertEquals(new ReportValue.Text("INS-000040"), row.get(0));
+        assertEquals(new ReportValue.Text("SECTION_INSULATOR"), row.get(4));
+        assertEquals(new ReportValue.Text("UNSAFE"), row.get(8));
+        assertEquals(new ReportValue.Text("MO-000031"), row.get(12));
+        assertEquals(new ReportValue.Count(1), totalField(document, "Inspections recorded"));
     }
 
     @Test
@@ -3045,6 +3229,13 @@ class BusinessLayerTest {
         }
     }
 
+    private static ReportValue totalField(ReportDocument document, String label) {
+        return document.totals().stream()
+                .filter(field -> field.label().equals(label))
+                .map(ReportDocument.Field::value)
+                .findFirst().orElse(ReportValue.EMPTY);
+    }
+
     private static ReportValue headerField(ReportDocument document, String label) {
         return document.header().stream()
                 .filter(field -> field.label().equals(label))
@@ -3065,7 +3256,7 @@ class BusinessLayerTest {
                 List.of(), "PT-14", "Rishpon depot", 6L, List.of(2L),
                 new BigDecimal("12847.990"), new BigDecimal("14078.090"),
                 "3 linemen", "Laser", status, null, null, null);
-        return new ShiftReportResponse(shift, rows.size(), 0, rows.size(), 0, 0, rows);
+        return new ShiftReportResponse(shift, rows.size(), 0, rows.size(), 0, 0, rows, 0, List.of());
     }
 
     private static ShiftReportRowResponse shiftReportRow() {
@@ -3419,6 +3610,7 @@ class BusinessLayerTest {
         final MaintenanceTaskRepository taskRepository = mock(MaintenanceTaskRepository.class);
         final CatenaryDefectRepository defectRepository = mock(CatenaryDefectRepository.class);
         final MaintenanceMaterialUsageRepository materialRepository = mock(MaintenanceMaterialUsageRepository.class);
+        final MaintenanceInspectionRepository inspectionRepository = mock(MaintenanceInspectionRepository.class);
         final MaintenanceLookups lookups = mock(MaintenanceLookups.class);
         final MaintenanceCodeGenerator codeGenerator = mock(MaintenanceCodeGenerator.class);
         final RecordingEventPublisher events = new RecordingEventPublisher();
@@ -3432,7 +3624,7 @@ class BusinessLayerTest {
                 return new CatenaryAssetSummaryResponse(asset.getId(), asset.getCode(), asset.getName(), asset.getType(), asset.getTrackId(),
                         asset.getStartKp(), asset.getEndKp(), asset.getSectioning(), asset.getEnabled(), asset.getConnectedTrackId());
             });
-            service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository,
+            service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository, inspectionRepository,
                     mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events);
         }
 
@@ -3593,6 +3785,18 @@ class BusinessLayerTest {
                 .executionPackageId(6L).startKp(new BigDecimal(kp)).endKp(new BigDecimal(kp)).build();
         ReflectionTestUtils.setField(asset, "id", UUID.randomUUID());
         return asset;
+    }
+
+    private static CatenaryAsset insulator(String name, Long trackId, Long connectedTrackId, String startKp, String endKp) {
+        CatenaryAsset asset = CatenaryAsset.builder().code("SIN-" + name).name(name).type(CatenaryAssetType.SECTION_INSULATOR)
+                .trackId(trackId).connectedTrackId(connectedTrackId).executionPackageId(6L)
+                .startKp(new BigDecimal(startKp)).endKp(new BigDecimal(endKp)).build();
+        ReflectionTestUtils.setField(asset, "id", UUID.randomUUID());
+        return asset;
+    }
+
+    private static Set<String> codesOf(MaintenanceTask task) {
+        return task.getTaskTypes().stream().map(MaintenanceTaskType::getCode).collect(Collectors.toSet());
     }
 
     private static CatenaryAsset disconnector(String name) {
