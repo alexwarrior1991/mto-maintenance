@@ -13,6 +13,15 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Alta de un defecto en un activo (tambien se registran al completar una tarea, en {@code inlineDefects}).
+ *
+ * <p>Ejemplo, {@code POST /defects}:</p>
+ * <pre>{@code
+ * {"assetId": "…(PRF-4321)", "severity": "LOW", "description": "Pendola danada en 13-2.01",
+ *  "detectedAt": "2026-01-27T22:40:00Z", "startKp": 13007.290, "endKp": 13007.290, "photoRefs": ["IMG_0412.jpg"]}
+ * }</pre>
+ */
 public record CatenaryDefectRequest(
         @NotNull UUID assetId,
         @NotNull DefectSeverity severity,

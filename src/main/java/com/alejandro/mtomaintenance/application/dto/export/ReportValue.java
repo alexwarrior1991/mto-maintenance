@@ -23,6 +23,12 @@ import java.util.List;
  * <p>No lleva alineacion ni ancho: los dos se deducen del tipo del valor (un numero a la derecha, un
  * texto a la izquierda) y del contenido de la columna. Ponerlos aqui obligaria a cada disposicion a
  * repetir una decision que ya esta tomada, y permitiria que se contradijeran.</p>
+ *
+ * <p>Ejemplo, la celda del kp del perfil 13-2.01 en una fila de {@code ShiftReportLayout}, un numero con tres
+ * decimales y no un texto:</p>
+ * <pre>{@code
+ * ReportValue kp = ReportValue.decimal(new BigDecimal("13007.290"), 3);
+ * }</pre>
  */
 public sealed interface ReportValue {
 

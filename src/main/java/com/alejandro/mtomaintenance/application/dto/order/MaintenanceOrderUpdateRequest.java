@@ -8,7 +8,15 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
 
-/** En DRAFT/PLANNED se aplica todo; despues solo description, priority y closingNotes. */
+/**
+ * En DRAFT/PLANNED se aplica todo; despues solo description, priority y closingNotes.
+ *
+ * <p>Ejemplo, {@code PATCH /orders/{id}} con {@code Content-Type: application/merge-patch+json}
+ * ({@code null} vacia el campo, {@code version} es la leida):</p>
+ * <pre>{@code
+ * {"priority": "HIGH", "description": null, "version": 3}
+ * }</pre>
+ */
 public record MaintenanceOrderUpdateRequest(
         @Size(max = 255) String title,
         String description,

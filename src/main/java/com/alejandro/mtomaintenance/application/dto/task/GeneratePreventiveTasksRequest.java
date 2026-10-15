@@ -13,6 +13,11 @@ import java.util.List;
  * <p>Sin {@code selections}, lo de siempre: los activos del tramo de la orden. Con ellas, lo que dice
  * cada una, en cualquier via del EP de la orden.</p>
  *
+ * <p>Ejemplo, {@code POST /orders/{id}/tasks/generate}:</p>
+ * <pre>{@code
+ * {"assetTypes": ["PROFILE", "SECTION_INSULATOR", "DISCONNECTOR"], "withChecklist": true, "dryRun": true}
+ * }</pre>
+ *
  * @param taskTypeCodes los tipos de todas las tareas generadas; sin codigos, los de cada activo: grupos
  *                      1, 2 y 4 en un perfil de via principal, {@code RG-03} en un aislador de seccion
  *                      y {@code RP-06} en un seccionador con motor

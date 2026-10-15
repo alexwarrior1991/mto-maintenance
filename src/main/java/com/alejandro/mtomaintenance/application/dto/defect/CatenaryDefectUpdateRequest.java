@@ -7,6 +7,14 @@ import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.util.List;
 
+/**
+ * Modificacion de un defecto que no esta cerrado ni descartado; su estado cambia con resolve, close y discard.
+ *
+ * <p>Ejemplo, {@code PATCH /defects/{id}} con {@code Content-Type: application/merge-patch+json}:</p>
+ * <pre>{@code
+ * {"technicalNotes": "Resistencia de contacto 180 uOhm (max 100)", "repairPlannedDate": "2026-01-29", "version": 1}
+ * }</pre>
+ */
 public record CatenaryDefectUpdateRequest(
         DefectSeverity severity,
         String description,

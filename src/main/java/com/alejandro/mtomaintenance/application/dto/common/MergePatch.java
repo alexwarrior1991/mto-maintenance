@@ -7,6 +7,12 @@ import java.util.Set;
  * modificacion leido y validado como en el PUT, y {@code cleared}, los campos que venian a
  * {@code null}. Ausente es no tocar, como en el PUT; {@code null} es vaciar, que el PUT no sabe decir.
  * Cada servicio vacia solo lo que admite: vaciar un campo obligatorio es 400.
+ *
+ * <p>Ejemplo, {@code PATCH /orders/{id}} con {@code application/merge-patch+json} sobre MO-000001 en DRAFT:
+ * {@code values} lleva {@code plannedDate} y {@code version}, y {@code cleared} es {@code ["teamId"]}:</p>
+ * <pre>{@code
+ * {"plannedDate": "2026-01-27", "teamId": null, "version": 3}
+ * }</pre>
  */
 public record MergePatch<T>(T values, Set<String> cleared) {
 

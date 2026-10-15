@@ -15,6 +15,14 @@ import java.util.UUID;
  * para que el consumidor sepa quien hizo el cambio y bajo que peticion o mensaje. En el contrato solo
  * se anaden claves: renombrar o quitar una rompe al consumidor.</p>
  *
+ * <p>Ejemplo, el sobre de {@code shift.closed} que escribe {@code AsynchronousMessageFactory} en el outbox y sale
+ * con la clave {@code mto.maintenance.shift.closed}:</p>
+ * <pre>{@code
+ * {"operationId": "…", "referenceId": "shift-…", "origin": "mto-maintenance", "eventType": "MAINTENANCE_SHIFT_CLOSED",
+ *  "data": {"entityName": "shift", "eventName": "closed", "values": {"code": "SH-000001", "netWorkMinutes": 290, …}, …},
+ *  "actor": {"username": "mantenimiento.responsable", "kind": "PERSON", …}, "correlationId": "…", …}
+ * }</pre>
+ *
  * @param actor         quien pidio la operacion, clasificado por este servicio; nunca nulo en lo que
  *                      se publica, pero opcional en el contrato
  * @param correlationId el {@code X-Correlation-Id} de la peticion, o el identificador del mensaje de

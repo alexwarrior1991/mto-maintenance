@@ -10,6 +10,17 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Una inspeccion, con sus puntos de checklist y lo que ha generado (defecto y orden correctiva).
+ *
+ * <p>Ejemplo, {@code GET /inspections/{id}}:</p>
+ * <pre>{@code
+ * {"code": "INS-000004", "asset": {"code": "DSC-77", "name": "HSA-NS5", …}, "trackId": 2, "kp": 14025.600,
+ *  "inspectionDate": "2026-01-28", "inspectionKind": "TECHNICAL", "result": "UNSAFE", "shiftId": "…(SH-000001)",
+ *  "generatedDefectId": "…(DEF-000003)", "generatedOrderId": "…(MO-000002)",
+ *  "items": [{"code": "CONTINUITY", "maxValue": 100.000, "measuredValue": 180.000, "itemResult": "DEFECT", …}], …}
+ * }</pre>
+ */
 public record MaintenanceInspectionResponse(
         UUID id,
         String code,

@@ -18,6 +18,14 @@ import java.util.UUID;
  * viaja en la cabecera {@code messageSignature}, firmada sobre los bytes reales; ver
  * {@code com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataMessageHeaders}.</p>
  *
+ * <p>Ejemplo, el cuerpo de un perfil modificado tal como llega a {@code MasterDataEventConsumer}, con la cabecera
+ * {@code sequenceNumber} al lado:</p>
+ * <pre>{@code
+ * {"operationId": "…", "referenceId": "profile-4321", "origin": "mto-configuration", "creationDate": "2026-01-26T07:00:00Z",
+ *  "eventType": "MASTER_DATA_PROFILE_UPDATED", "data": {"entityName": "profile", "entityId": "4321", "operation": "UPDATED",
+ *  "values": {"profileId": "13-2.01", "kp": 13007.290, …}}, "messageHash": "…"}
+ * }</pre>
+ *
  * @param operationId  identificador de la operación de negocio que originó el evento; es lo que
  *                     correlaciona la traza de punta a punta
  * @param referenceId  referencia legible del agregado, {@code <entidad>-<id>}

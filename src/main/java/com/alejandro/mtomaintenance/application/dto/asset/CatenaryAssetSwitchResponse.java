@@ -6,6 +6,12 @@ import java.util.UUID;
 /**
  * Aguja por la que un aislador de sección conecta con una vía: en el plano, {@code W31 1:9}.
  *
+ * <p>Ejemplo, dentro de {@code CatenaryAssetResponse.switches} (SIN-311, HER-SI-21/2, que une la via 21 con la 2):</p>
+ * <pre>{@code
+ * {"id": "0195a…", "code": "W33", "kp": 13925.400, "turnoutDenominator": 9, "turnoutRate": "1:9", "trackId": 2,
+ *  "enabled": true}
+ * }</pre>
+ *
  * @param turnoutDenominator el {@code 9} de {@code 1:9}. El numerador siempre es 1, así que se
  *                           guarda sólo el denominador, que además se puede ordenar y comparar
  * @param turnoutRate        el mismo dato como está escrito en el plano ({@code "1:9"}), para no

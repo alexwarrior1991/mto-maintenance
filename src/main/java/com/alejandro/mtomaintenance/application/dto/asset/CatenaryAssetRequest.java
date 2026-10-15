@@ -10,7 +10,15 @@ import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 
-/** Alta de un tramo de via (TRACK_SECTION). El resto de tipos nace de los eventos de mto-configuration. */
+/**
+ * Alta de un tramo de via (TRACK_SECTION). El resto de tipos nace de los eventos de mto-configuration.
+ *
+ * <p>Ejemplo, {@code POST /assets}:</p>
+ * <pre>{@code
+ * {"code": "SEC-T2-RAAN-HER", "name": "Raanana - Herzliya, via 2", "executionPackageId": 6, "trackId": 2,
+ *  "startKp": 12847.990, "endKp": 14078.090, "trackKind": "MAIN", "preventiveIntervalDays": 180}
+ * }</pre>
+ */
 public record CatenaryAssetRequest(
         @NotBlank @Size(max = 64) String code,
         @NotBlank @Size(max = 255) String name,

@@ -21,6 +21,13 @@ import java.util.UUID;
  *     <li>ninguno: todo el EP de la orden.</li>
  * </ul>
  *
+ * <p>Ejemplo, dentro de {@code GeneratePreventiveTasksRequest.selections}, un elemento por alcance:</p>
+ * <pre>{@code
+ * {"assetType": "PROFILE", "sectionId": "…(SEC-T2-RAAN-HER)"}
+ * {"assetType": "SECTION_INSULATOR", "trackId": 2, "fromKp": 12847.990, "toKp": 14078.090}
+ * {"assetType": "DISCONNECTOR", "assetIds": ["…(DSC-77)"], "taskTypeCodes": ["RP-06"], "withChecklist": false}
+ * }</pre>
+ *
  * @param stationId     filtra cualquier alcance salvo {@code assetIds}
  * @param taskTypeCodes los tipos de lo que genera esta seleccion; sin ellos, los de la peticion, y sin
  *                      esos, los del plan para cada activo

@@ -11,6 +11,17 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Un defecto, con el activo resumido, su origen (inspeccion, tarea u orden) y su resolucion.
+ *
+ * <p>Ejemplo, {@code GET /defects/{id}}:</p>
+ * <pre>{@code
+ * {"code": "DEF-000003", "asset": {"code": "DSC-77", "name": "HSA-NS5", …}, "inspectionId": "…(INS-000004)",
+ *  "orderId": "…(MO-000002)", "severity": "CRITICAL", "status": "IN_PROGRESS",
+ *  "description": "Seccionador HSA-NS5 inoperable", "detectedAt": "2026-01-28T00:00:00Z", "resolvedAt": null,
+ *  "trackId": 2, "startKp": 14025.600, "version": 1, …}
+ * }</pre>
+ */
 public record CatenaryDefectResponse(
         UUID id,
         String code,

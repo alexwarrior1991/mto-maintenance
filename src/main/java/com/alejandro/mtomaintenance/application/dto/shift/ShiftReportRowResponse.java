@@ -8,6 +8,16 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Una fila del parte diario del turno: una tarea trabajada (un perfil, un aislador...).
+ *
+ * <p>Ejemplo, un elemento de {@code ShiftReportResponse.rows} (la fila de un aislador trae {@code "switches": ["W33 1:9"]}):</p>
+ * <pre>{@code
+ * {"number": 3, "orderCode": "MO-000001", "profileCode": "PRF-4321", "profileName": "13-2.01", "kp": 13007.290,
+ *  "sectioning": "A/S", "switches": [], "taskTypeCodes": ["RG-01", "RG-11", "RG-12"],
+ *  "materials": ["1.000000 UNIT DROPPER-STD"], "status": "COMPLETED", "workComplete": true, …}
+ * }</pre>
+ */
 public record ShiftReportRowResponse(
         int number,
         UUID taskId,
