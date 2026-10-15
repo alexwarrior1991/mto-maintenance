@@ -30,6 +30,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * Lo que encaja en lo que se pide generar en un preventivo, y lo que pasa con cada activo. No crea
@@ -194,11 +195,9 @@ class PreventiveTaskSelector {
         }
         List<String> codes = chosen(request.taskTypeCodes());
         boolean withChecklist = Boolean.TRUE.equals(request.withChecklist());
-        List<Scope> scopes = new ArrayList<>();
-        for (CatenaryAssetType type : legacyAssetTypes(request.assetTypes())) {
-            scopes.add(new Scope(type, section.getTrackId(), onSection(type, section), codes, withChecklist));
-        }
-        return scopes;
+        return legacyAssetTypes(request.assetTypes()).stream()
+                .map(type -> new Scope(type, section.getTrackId(), onSection(type, section), codes, withChecklist))
+                .toList();
     }
 
     /** Sin tipos de activo, los perfiles, que es lo que hacia antes de admitirlos; un tramo no se genera. */
@@ -236,12 +235,10 @@ class PreventiveTaskSelector {
                     + "mixes only assets of its own; generate its section without selections");
         }
         List<String> requestCodes = chosen(request.taskTypeCodes());
-        List<Scope> scopes = new ArrayList<>();
         List<GenerationSelection> selections = request.selections();
-        for (int index = 0; index < selections.size(); index++) {
-            scopes.add(scope(order, selections.get(index), "selections[" + index + "].", requestCodes, request.withChecklist()));
-        }
-        return scopes;
+        return IntStream.range(0, selections.size())
+                .mapToObj(index -> scope(order, selections.get(index), "selections[" + index + "].", requestCodes, request.withChecklist()))
+                .toList();
     }
 
     private Scope scope(MaintenanceOrder order, GenerationSelection selection, String field, List<String> requestCodes,
