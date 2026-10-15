@@ -11,6 +11,13 @@ import java.util.Map;
  * {@code totalTasks} y la estimacion cuentan las tareas que se crearian, y {@code assets} trae cada
  * activo con lo que pasaria con el.
  *
+ * <p>Ejemplo, {@code POST /orders/{id}/tasks/generate}:</p>
+ * <pre>{@code
+ * {"createdTasks": 26, "totalTasks": 26, "estimatedMinutes": 1122.38, "estimatedShifts": 5,
+ *  "createdByAssetType": {"PROFILE": 23, "SECTION_INSULATOR": 2, "DISCONNECTOR": 1},
+ *  "skippedOtherPackage": 1, "skippedWithoutTaskTypes": 1, "dryRun": true, "assets": [{"code": "PRF-4321", …}, …], …}
+ * }</pre>
+ *
  * @param skippedProfiles         los perfiles que ya tenian tarea en la orden
  * @param skippedAssets           todos los activos que ya tenian tarea en la orden: con solo perfiles
  *                                es lo mismo que {@code skippedProfiles}

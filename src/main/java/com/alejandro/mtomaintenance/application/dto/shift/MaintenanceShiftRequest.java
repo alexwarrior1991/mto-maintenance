@@ -12,6 +12,16 @@ import java.time.LocalDate;
 import java.util.UUID;
 import java.util.Set;
 
+/**
+ * Alta de un turno nocturno: fecha, equipo, ventana, posesion, vias y seccionadores de bloqueo.
+ *
+ * <p>Ejemplo, {@code POST /shifts}:</p>
+ * <pre>{@code
+ * {"shiftDate": "2026-01-27", "teamId": "…(Team A)", "possessionType": "PARTIAL", "plannedStart": "2026-01-27T19:00:00Z",
+ *  "plannedEnd": "2026-01-28T03:00:00Z", "blockingDisconnectorIds": ["…(DSC-77)", "…(DSC-81)", "…(DSC-84)"],
+ *  "executionPackageId": 6, "trackIds": [2], "startKp": 12847.990, "endKp": 14078.090}
+ * }</pre>
+ */
 public record MaintenanceShiftRequest(
         @NotNull LocalDate shiftDate,
         UUID teamId,

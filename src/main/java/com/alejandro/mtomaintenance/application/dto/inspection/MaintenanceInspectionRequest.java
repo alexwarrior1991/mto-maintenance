@@ -10,6 +10,16 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
 
+/**
+ * Alta de una inspeccion de un activo; sus puntos se copian de la plantilla activa de su tipo.
+ *
+ * <p>Ejemplo, {@code POST /inspections}:</p>
+ * <pre>{@code
+ * {"assetId": "…(DSC-77)", "inspectionDate": "2026-01-28", "inspector": "T. Tecnico", "inspectionKind": "TECHNICAL",
+ *  "result": "UNSAFE", "detectedDefects": "Contactos principales quemados", "recommendedActions": "Sustituir el seccionador",
+ *  "shiftId": "…(SH-000001)"}
+ * }</pre>
+ */
 public record MaintenanceInspectionRequest(
         @NotNull UUID assetId,
         @NotNull LocalDate inspectionDate,

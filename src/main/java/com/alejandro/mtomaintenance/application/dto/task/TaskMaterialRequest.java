@@ -9,7 +9,14 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.util.UUID;
 
-/** Material usado en el perfil: se registra como linea de material de la orden atada a la tarea. */
+/**
+ * Material usado en el perfil: se registra como linea de material de la orden atada a la tarea.
+ *
+ * <p>Ejemplo, dentro de {@code CompleteTaskRequest.materials}:</p>
+ * <pre>{@code
+ * {"materialCode": "DROPPER-STD", "warehouseId": "…(Rishpon)", "quantity": 1, "unit": "UNIT"}
+ * }</pre>
+ */
 public record TaskMaterialRequest(
         UUID materialId,
         @Size(max = 64) String materialCode,

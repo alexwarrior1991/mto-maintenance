@@ -9,6 +9,13 @@ import java.util.UUID;
 /**
  * El activo tal como lo llevan una orden, una tarea, una inspeccion o un defecto.
  *
+ * <p>Ejemplo, dentro de {@code MaintenanceInspectionResponse.asset} (igual en orden, tarea y defecto):</p>
+ * <pre>{@code
+ * {"id": "…(DSC-77)", "code": "DSC-77", "name": "HSA-NS5", "type": "DISCONNECTOR", "trackId": 2, "startKp": 14025.600,
+ *  "endKp": 14025.600, "sectioning": null, "enabled": true, "connectedTrackId": null, "executionPackageId": 6,
+ *  "stationId": 4, "driveType": "MOTOR"}
+ * }</pre>
+ *
  * @param connectedTrackId la otra via de un aislador de seccion o de un seccionador que une dos: se
  *                         trabaja desde un turno de cualquiera de las dos ({@code ShiftRules}), y el
  *                         cliente la necesita para ofrecer esos turnos

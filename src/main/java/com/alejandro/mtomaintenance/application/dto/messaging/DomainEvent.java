@@ -18,6 +18,13 @@ import java.util.regex.Pattern;
  * se rechaza al construirlo, antes de que llegue al outbox. Los valores nulos si viajan: para el
  * consumidor «no tiene equipo» es informacion.</p>
  *
+ * <p>Ejemplo, el {@code data} de {@code shift.closed}, que construye {@code MaintenanceEvents.shiftClosed} al cerrar
+ * el turno:</p>
+ * <pre>{@code
+ * {"entityName": "shift", "entityId": "…", "eventName": "closed",
+ *  "values": {"code": "SH-000001", "status": "CLOSED", "trackIds": [2], "executionPackageId": 6, "netWorkMinutes": 290, …}}
+ * }</pre>
+ *
  * @param entityName lo que cambio, en minusculas y con guiones ({@code order}, {@code defect})
  * @param entityId   su identificador, como texto
  * @param eventName  que paso, en minusculas y con guiones ({@code created}, {@code status-changed})

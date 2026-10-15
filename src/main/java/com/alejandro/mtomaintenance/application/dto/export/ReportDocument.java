@@ -27,6 +27,12 @@ import java.util.List;
  * turno no son tareas y no caben en sus columnas. Van despues de los totales, cada una con su
  * titulo: en el .xlsx en su propia hoja, con su autofiltro, y en el PDF a continuacion. Casi todos
  * los informes no tienen ninguno.</p>
+ *
+ * <p>Ejemplo, el parte del turno SH-000001 tal como lo construye {@code ShiftReportLayout.of}:</p>
+ * <pre>{@code
+ * new ReportDocument("shift-report-2026-01-27-SH-000001", "Shift report", "Daily shift report SH-000001", subtitle(shift),
+ *         Layout.LANDSCAPE, time.generated(), header(shift, time), new Table(COLUMNS, rows), totals(report), appendices)
+ * }</pre>
  */
 public record ReportDocument(
         String fileBaseName,

@@ -7,6 +7,13 @@ package com.alejandro.mtomaintenance.application.dto.messaging;
  * RabbitMQ; el servicio de inbox trabaja solo con este record y no conoce el transporte. Si mañana
  * el mismo evento llega por otro canal, el inbox no cambia.</p>
  *
+ * <p>Ejemplo, lo que {@code InboxMessageCommandFactory.from} saca de un {@code profile} UPDATED de mto-configuration:</p>
+ * <pre>{@code
+ * new InboxMessageCommand(operationId, "mto-configuration", "MASTER_DATA_PROFILE_UPDATED", "profile", "4321",
+ *         "mto.master-data.exchange", "mto.master-data.profile.updated", "mto.maintenance.master-data.queue",
+ *         sha256(payload), payload, 1842L)
+ * }</pre>
+ *
  * @param messageId    clave de idempotencia; obligatoria y nunca truncada
  * @param sourceService servicio emisor; obligatorio, forma parte de la clave única
  * @param eventType    tipo de evento, si el mensaje lo trae

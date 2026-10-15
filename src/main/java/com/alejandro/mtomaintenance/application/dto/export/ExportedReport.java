@@ -19,6 +19,12 @@ package com.alejandro.mtomaintenance.application.dto.export;
  *
  * <p>El record lleva un {@code byte[]}, asi que su {@code equals} compara la referencia del array y
  * no el contenido. Nada depende de esa igualdad; el dia que dependa hay que escribirla a mano.</p>
+ *
+ * <p>Ejemplo, lo que construye {@code XlsxReportExporter} para {@code GET /shifts/{id}/report?format=xlsx} y
+ * {@code ReportDownloads} sirve como adjunto con {@code ReportMediaTypes.XLSX} de {@code Content-Type}:</p>
+ * <pre>{@code
+ * new ExportedReport("shift-report-2026-01-27-SH-000001.xlsx", ReportMediaTypes.XLSX, bytes.toByteArray())
+ * }</pre>
  */
 public record ExportedReport(String fileName, String contentType, byte[] content) {
 }

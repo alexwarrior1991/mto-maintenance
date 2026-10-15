@@ -11,6 +11,15 @@ import java.time.LocalDate;
 import java.util.UUID;
 import java.util.Set;
 
+/**
+ * Edicion de un turno, por PUT o por PATCH, con la version leida.
+ *
+ * <p>Ejemplo, {@code PATCH /shifts/{id}} con {@code Content-Type: application/merge-patch+json}
+ * ({@code null} vacia el campo):</p>
+ * <pre>{@code
+ * {"blockingDisconnectorIds": ["…(DSC-77)", "…(DSC-81)", "…(DSC-84)"], "earthingPoints": null, "version": 1}
+ * }</pre>
+ */
 public record MaintenanceShiftUpdateRequest(
         LocalDate shiftDate,
         UUID teamId,

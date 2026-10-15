@@ -9,6 +9,12 @@ import java.util.Objects;
  * en el outbox dentro de la transaccion de negocio, que es el unico momento en el que el token de
  * quien la pidio sigue a mano; segundos despues, cuando el relay publica, ese contexto ya no existe.</p>
  *
+ * <p>Ejemplo, el {@code actor} de {@code shift.closed}, que {@code MessageContextResolver} saca del token con
+ * {@code MessageActor.of(sub, username)}:</p>
+ * <pre>{@code
+ * {"id": "…", "username": "mantenimiento.responsable", "kind": "PERSON"}
+ * }</pre>
+ *
  * @param id       el {@code sub} del token; nulo sin usuario
  * @param username el {@code preferred_username}; nulo sin usuario
  * @param kind     como lo clasifico este servicio

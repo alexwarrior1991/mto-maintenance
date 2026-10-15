@@ -13,6 +13,12 @@ import io.swagger.v3.oas.annotations.media.Schema;
  * unidades de este material». Aun así, los campos de auditoría del recurso
  * ({@code createdAt}/{@code updatedAt}/{@code createdBy}/{@code updatedBy}) vienen vacíos: no se
  * copian al historial porque el «quién y cuándo» de cada revisión ya está en {@code revision}.</p>
+ *
+ * <p>Ejemplo, un elemento del {@code content} de {@code GET /orders/{id}/revisions}:</p>
+ * <pre>{@code
+ * {"revision": {"revision": 42, "operation": "UPDATED", "author": "mantenimiento.responsable", "source": "HTTP", …},
+ *  "entity": {"id": "…", "code": "MO-000001", "status": "PLANNED", "version": 3, …}}
+ * }</pre>
  */
 @Schema(description = "One history entry: the entity as it was at a revision, plus that revision's metadata")
 public record EntityRevisionResponse<T>(

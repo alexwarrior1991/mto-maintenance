@@ -9,7 +9,14 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.util.UUID;
 
-/** materialId o materialCode: con codigo se resuelve el id contra mto-stock. */
+/**
+ * materialId o materialCode: con codigo se resuelve el id contra mto-stock.
+ *
+ * <p>Ejemplo, {@code POST /orders/{id}/materials}:</p>
+ * <pre>{@code
+ * {"materialCode": "DROPPER-STD", "warehouseId": "…(Rishpon)", "plannedQuantity": 6, "unit": "UNIT"}
+ * }</pre>
+ */
 public record MaterialUsageRequest(
         UUID materialId,
         @Size(max = 64) String materialCode,

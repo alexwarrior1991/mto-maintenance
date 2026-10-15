@@ -14,6 +14,12 @@ import java.math.BigDecimal;
  * reenvia el activo entero) y un cambio es 409. {@code enabled=false}
  * desactiva aqui (y lo conserva aunque lleguen eventos); {@code true} quita esa desactivacion, y es
  * 409 si el activo esta desactivado en mto-configuration.
+ *
+ * <p>Ejemplo, {@code PATCH /assets/{id}} (PRF-4321) con {@code Content-Type: application/merge-patch+json};
+ * {@code null} vacia la descripcion:</p>
+ * <pre>{@code
+ * {"description": null, "preventiveIntervalDays": 90, "version": 4}
+ * }</pre>
  */
 public record CatenaryAssetUpdateRequest(
         @Size(max = 255) String name,

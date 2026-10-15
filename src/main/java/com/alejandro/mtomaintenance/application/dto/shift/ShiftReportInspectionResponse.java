@@ -12,6 +12,13 @@ import java.util.UUID;
  * Una inspeccion registrada en el turno, tal como sale en su parte: no es una tarea, asi que va en
  * su propia lista y no entre las filas.
  *
+ * <p>Ejemplo, un elemento de {@code ShiftReportResponse.inspections}:</p>
+ * <pre>{@code
+ * {"code": "INS-000004", "inspectionDate": "2026-01-28", "assetCode": "DSC-77", "assetName": "HSA-NS5",
+ *  "assetType": "DISCONNECTOR", "trackId": 2, "inspectionKind": "TECHNICAL", "result": "UNSAFE",
+ *  "generatedDefectCode": "DEF-000003", "generatedOrderCode": "MO-000002", …}
+ * }</pre>
+ *
  * @param trackId           la de la inspeccion, que es la de su activo al registrarla
  * @param kp                la de la inspeccion: la que se escribio, o la del activo
  * @param detectedDefects   lo observado, en texto libre
