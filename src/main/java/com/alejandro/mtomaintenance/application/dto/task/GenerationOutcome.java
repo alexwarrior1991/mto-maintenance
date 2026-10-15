@@ -15,6 +15,10 @@ public enum GenerationOutcome {
     /** Tiene una tarea abierta en otra orden preventiva que no ha terminado. */
     IN_OTHER_ORDER,
 
-    /** El plan no le da tipo de tarea (un seccionador sin motor) y no se eligio ninguno. */
+    /**
+     * El plan no le da tipo de tarea y no se eligio ninguno. Desde que todo seccionador lleva RP-07 los
+     * tipos por defecto no dejan ningun activo sin tipo, asi que no sale; sigue en el contrato porque los
+     * clientes lo conocen.
+     */
     NO_TASK_TYPES
 }

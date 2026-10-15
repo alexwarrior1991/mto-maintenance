@@ -81,11 +81,17 @@ insulators, one on a disconnector only disconnectors.
   (`skippedOtherPackage`) — also without selections when the order has a package. An asset without a
   package (a hole in the master data) is not skipped: its package is unknown.
 - **Default task types per asset**: groups 1, 2 and 4 on a profile (`RG-01, RG-05, RG-08, RG-10,
-  RG-11, RG-12, RG-13, RP-08`), `RG-03` on a section insulator, `RP-06` on a disconnector driven by a
-  motor (`driveType`, from `mto-configuration`, `V16`). A manual disconnector, or one whose drive is
-  unknown, has no type in the plan and is skipped (`skippedWithoutTaskTypes`) unless types are
-  chosen. Types chosen in the request go to everything generated; a selection's own ones win over
-  them. `RG-03` and `RP-06` need full possession, so those tasks wait for a `FULL` shift.
+  RG-11, RG-12, RG-13, RP-08`), `RG-03` and `RP-02` on a section insulator plus `RG-04` and `RP-03`
+  when it has turnouts (its `switches`, also the out-of-service ones, which are still on the
+  drawing: most insulators connect two tracks through one, and its turnouts are checked with it),
+  `RP-07` (catenary isolators: the disconnector itself) on every disconnector, plus `RP-06` (its
+  remote drive test) when it is driven by a motor (`driveType`, `V16`) and `RG-06` (catenary automatic
+  valves) when it is a surge arrester (`disconnectorFunction` `SurgeA`, `V17`), both from
+  `mto-configuration`. No generated asset is left without a type, so `NO_TASK_TYPES` /
+  `skippedWithoutTaskTypes` no longer happen with the defaults (they stay in the contract). Types
+  chosen in the request go to everything generated, instead of the defaults; a selection's own ones
+  win over them. The insulator types, `RP-06` and `RP-07` need full possession, so those tasks wait
+  for a `FULL` shift; `RG-06` does not.
 - **No duplicates.** An asset found by two selections gets one task (the first selection decides);
   one that already has a task in the order, even cancelled, is skipped (`skippedAssets`,
   `skippedProfiles` for profiles, as before); and so is one with an open task (`PENDING` or

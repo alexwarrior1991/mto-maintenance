@@ -15,7 +15,7 @@ import java.util.Map;
  * <pre>{@code
  * {"createdTasks": 26, "totalTasks": 26, "estimatedMinutes": 1122.38, "estimatedShifts": 5,
  *  "createdByAssetType": {"PROFILE": 23, "SECTION_INSULATOR": 2, "DISCONNECTOR": 1},
- *  "skippedOtherPackage": 1, "skippedWithoutTaskTypes": 1, "dryRun": true, "assets": [{"code": "PRF-4321", …}, …], …}
+ *  "skippedOtherPackage": 1, "skippedWithoutTaskTypes": 0, "dryRun": true, "assets": [{"code": "PRF-4321", …}, …], …}
  * }</pre>
  *
  * @param skippedProfiles         los perfiles que ya tenian tarea en la orden
@@ -25,8 +25,8 @@ import java.util.Map;
  * @param skippedInOtherOrders    los que tienen una tarea abierta en otra orden preventiva abierta
  * @param otherOrderCodes         esas ordenes
  * @param skippedOtherPackage     los de otro EP que la orden, que van en otra orden
- * @param skippedWithoutTaskTypes los que el plan deja sin tipo de tarea (un seccionador sin motor) sin
- *                                tipos elegidos
+ * @param skippedWithoutTaskTypes los que el plan deja sin tipo de tarea sin tipos elegidos; con los
+ *                                tipos por defecto de hoy, ninguno
  * @param assets                  con {@code dryRun}, cada activo en el orden en que se generaria; si no,
  *                                vacio
  */

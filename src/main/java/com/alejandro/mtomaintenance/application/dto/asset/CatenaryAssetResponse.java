@@ -14,12 +14,15 @@ import java.util.UUID;
 /**
  * Un activo. {@code enabled} es el valor efectivo; {@code enabledAtSource} (null en los propios) y
  * {@code disabledLocally} dicen por que esta desactivado: en mto-configuration, aqui, o las dos.
- * {@code driveType}, solo en un seccionador: con motor, a mano o null sin dato (V16).
+ * {@code driveType}, solo en un seccionador: con motor, a mano o null sin dato (V16); y
+ * {@code disconnectorFunction}, su funcion en el plano, el codigo de mto-configuration tal cual
+ * ({@code SurgeA} es una autovalvula) o null sin dato (V17).
  *
  * <p>Ejemplo, {@code GET /assets/{id}} (un seccionador llegado de mto-configuration):</p>
  * <pre>{@code
  * {"id": "…(DSC-77)", "code": "DSC-77", "name": "HSA-NS5", "type": "DISCONNECTOR", "executionPackageId": 6, "trackId": 2,
- *  "stationId": 4, "startKp": 14025.600, "endKp": 14025.600, "driveType": "MOTOR", "switches": [],
+ *  "stationId": 4, "startKp": 14025.600, "endKp": 14025.600, "driveType": "MOTOR", "disconnectorFunction": "Disc/IO",
+ *  "switches": [],
  *  "sourceService": "mto-configuration", "sourceEntityId": "77", "enabled": true, "enabledAtSource": true,
  *  "disabledLocally": false, "version": 3, …}
  * }</pre>
@@ -41,6 +44,7 @@ public record CatenaryAssetResponse(
         Long connectedTrackId,
         SectionInsulatorInstallation installationType,
         DisconnectorDriveType driveType,
+        String disconnectorFunction,
         List<CatenaryAssetSwitchResponse> switches,
         String sourceService,
         String sourceEntityId,

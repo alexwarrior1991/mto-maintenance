@@ -74,16 +74,37 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
             List.of("RG-01", "RG-05", "RG-08", "RG-10", "RG-11", "RG-12", "RG-13", "RP-08");
 
     /**
-     * Lo que se hace en cada aislador de seccion: RG-03 del plan. Pide posesion total, asi que sus
-     * tareas esperan a un turno FULL (el fin de semana), como el resto del grupo 3.
+     * Lo que se hace en cada aislador de seccion sin agujas (uno {@code IN_TRACK}, en medio de una via):
+     * RG-03 y RP-02 del plan, la revision general y la particular del aislador. Piden posesion total,
+     * asi que sus tareas esperan a un turno FULL (el fin de semana), como el resto del grupo 3.
      */
-    static final List<String> DEFAULT_INSULATOR_TASK_TYPES = List.of("RG-03");
+    static final List<String> DEFAULT_INSULATOR_TASK_TYPES = List.of("RG-03", "RP-02");
 
     /**
-     * Lo que se hace en cada seccionador con motor: RP-06 del plan, que pide posesion total. Uno manual,
-     * o sin dato de su accionamiento, no tiene tipo en el plan: solo se genera con tipos elegidos.
+     * Lo que se hace en un aislador con agujas, que son la mayoria: lo de cualquier aislador y RG-04 y
+     * RP-03, la revision general y la particular de sus agujas, porque se revisan con el. Tambien piden
+     * posesion total.
      */
-    static final List<String> DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES = List.of("RP-06");
+    static final List<String> DEFAULT_INSULATOR_WITH_SWITCHES_TASK_TYPES = List.of("RG-03", "RG-04", "RP-02", "RP-03");
+
+    /**
+     * Lo que se hace en cada seccionador: RP-07 del plan (Catenary isolators: el seccionador mismo,
+     * cuchillas, mordazas, alineacion y dos maniobras). Pide posesion total. Es todo lo de uno manual o
+     * sin dato de su accionamiento.
+     */
+    static final List<String> DEFAULT_DISCONNECTOR_TASK_TYPES = List.of("RP-07");
+
+    /** Uno con motor lleva ademas RP-06, la prueba de su accionamiento a distancia. Tambien total. */
+    static final List<String> DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES = List.of("RP-06", "RP-07");
+
+    /**
+     * Lo que se suma en una autovalvula: RG-06 (Catenary automatic valves). Que lo es lo dice su funcion
+     * en el plano, {@link #SURGE_ARRESTER_FUNCTION}.
+     */
+    static final String SURGE_ARRESTER_TASK_TYPE = "RG-06";
+
+    /** El codigo de la LOV DisconnectorFunction de mto-configuration para una autovalvula (Surge A). */
+    static final String SURGE_ARRESTER_FUNCTION = "SurgeA";
 
     private final MaintenanceTaskRepository repository;
     private final CatenaryAssetRepository assetRepository;

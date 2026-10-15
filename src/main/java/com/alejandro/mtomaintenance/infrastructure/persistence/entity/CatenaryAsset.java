@@ -146,6 +146,15 @@ public class CatenaryAsset extends VersionedEntity {
     private DisconnectorDriveType driveType;
 
     /**
+     * La funcion de un seccionador en el plano (V17): el codigo de la LOV {@code DisconnectorFunction}
+     * de mto-configuration tal cual llega ({@code Disc/IO}, {@code SurgeA}...), o {@code null} sin dato.
+     * Solo lo lleva un {@code DISCONNECTOR} y solo lo escribe el upsert de datos maestros.
+     */
+    @Size(max = 40)
+    @Column(name = "disconnector_function", length = 40)
+    private String disconnectorFunction;
+
+    /**
      * Agujas por las que el aislador conecta con la vía, en orden físico a lo largo de ella.
      *
      * <p><b>Sin cascade ni orphanRemoval, a propósito.</b> Esta colección es sólo de lectura: las

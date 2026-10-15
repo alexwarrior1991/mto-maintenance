@@ -201,8 +201,9 @@ public class MaintenanceOrderController {
                     + "SECTION_INSULATOR or DISCONNECTOR on it or connecting to it). With selections, what each one says (an asset type in "
                     + "a section, a track with an optional kp range, chosen assets or the whole execution package, optionally of a station), "
                     + "on any track of the order's execution package. Default task types per asset: groups 1, 2 and 4 on a profile, RG-03 "
-                    + "on an insulator, RP-06 on a motor disconnector. Skips what already has a task in the order, what belongs to another "
-                    + "package and what has an open task in another open preventive order. dryRun previews without creating anything.")
+                    + "and RP-02 on an insulator (and RG-04 and RP-03 when it has turnouts), RP-07 on a disconnector (and RP-06 with a "
+                    + "motor, RG-06 on a surge arrester). Skips what already has a task in the order, what belongs to another package "
+                    + "and what has an open task in another open preventive order. dryRun previews without creating anything.")
     @PostMapping("/{id}/tasks/generate")
     public ResponseEntity<GeneratePreventiveTasksResponse> generateTasks(@PathVariable UUID id, @Valid @RequestBody(required = false) GeneratePreventiveTasksRequest request) {
         return ResponseEntity.ok(taskService.generatePreventiveTasks(id, request == null ? new GeneratePreventiveTasksRequest(null, null, null, null, null) : request));

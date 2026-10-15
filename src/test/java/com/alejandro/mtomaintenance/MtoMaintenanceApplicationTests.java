@@ -56,6 +56,7 @@ import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetSwitch;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DisconnectorDriveType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
@@ -71,6 +72,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncS
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import com.alejandro.mtomaintenance.infrastructure.messaging.outbox.OutboxMessageRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetSwitchRepository;
 import org.springframework.data.domain.PageRequest;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -133,6 +135,9 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
 
     @Autowired
     private CatenaryAssetRepository assetRepository;
+
+    @Autowired
+    private CatenaryAssetSwitchRepository switchRepository;
 
     @Autowired
     private MaintenanceOrderService orderService;
@@ -234,6 +239,11 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         assetRepository.save(CatenaryAsset.builder().code("DSC-E2E-" + suffix).name("HSA-E2E-" + suffix).type(CatenaryAssetType.DISCONNECTOR)
                 .trackId(trackId + 1).executionPackageId(6L).startKp(new BigDecimal("13000.000")).endKp(new BigDecimal("13000.000"))
                 .driveType(DisconnectorDriveType.MOTOR).build());
+        CatenaryAsset insulator = assetRepository.save(CatenaryAsset.builder().code("SIN-E2E-" + suffix).name("SI-E2E-" + suffix)
+                .type(CatenaryAssetType.SECTION_INSULATOR).trackId(trackId + 1).connectedTrackId(trackId + 2).executionPackageId(6L)
+                .startKp(new BigDecimal("13100.000")).endKp(new BigDecimal("13140.000")).build());
+        switchRepository.save(CatenaryAssetSwitch.builder().asset(insulator).code("W31").kp(new BigDecimal("13100.000"))
+                .turnoutDenominator(9).trackId(trackId + 1).build());
         CatenaryAsset disabled = profile("12-2.29-" + suffix, trackId, "12950.000");
         disabled.disableLocally();
         assetRepository.save(disabled);
@@ -255,7 +265,12 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
                 List.of(new GenerationSelection(CatenaryAssetType.DISCONNECTOR, null, trackId + 1, null, null, null, null, null, null)), true));
         assertEquals(1, preview.createdTasks());
         assertEquals(3, preview.totalTasks());
-        assertEquals(List.of("RP-06"), preview.assets().getFirst().taskTypeCodes(), "A motor disconnector gets RP-06 from the real catalogue");
+        assertEquals(List.of("RP-06", "RP-07"), preview.assets().getFirst().taskTypeCodes(),
+                "A motor disconnector gets RP-06 and RP-07 from the real catalogue");
+        GeneratePreventiveTasksResponse insulators = taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null,
+                List.of(new GenerationSelection(CatenaryAssetType.SECTION_INSULATOR, null, trackId + 1, null, null, null, null, null, null)), true));
+        assertEquals(List.of("RG-03", "RG-04", "RP-02", "RP-03"), insulators.assets().getFirst().taskTypeCodes(),
+                "An insulator with a turnout gets the revisions of its turnouts too, read from its switches in the generation's transaction");
         assertEquals(2, taskService.findByOrder(order.id()).size(), "A preview creates nothing");
 
         MaterialUsageResponse material = materialService.register(order.id(), new MaterialUsageRequest(UUID.randomUUID(), "GA70", UUID.randomUUID(),

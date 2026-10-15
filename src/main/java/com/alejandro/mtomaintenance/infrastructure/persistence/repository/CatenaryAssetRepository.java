@@ -114,7 +114,8 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
      * cuando no es la del poste. Con el, {@link #inheritLocationOfDisconnector} y
      * {@link #propagateLocationToDisconnectors} le pasan el paquete de su perfil, pero no su via.</p>
      *
-     * <p>{@code driveType} es el accionamiento de un seccionador (V16); null en todo lo demas.</p>
+     * <p>{@code driveType} es el accionamiento de un seccionador (V16) y {@code disconnectorFunction}, su
+     * funcion en el plano (V17); null en todo lo demas.</p>
      *
      * <p>Todas las escrituras nativas de esta interfaz suben {@code version}: Hibernate no las ve, y
      * sin eso un PUT que leyo antes del evento lo pisaria sin que nadie se enterase.</p>
@@ -123,14 +124,14 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
     @Query(value = """
             insert into catenary_asset (
                 id, code, name, type, execution_package_id, track_id, own_track, connected_track_id, station_id,
-                start_kp, end_kp, profile_source_id, sectioning, installation_type, drive_type,
+                start_kp, end_kp, profile_source_id, sectioning, installation_type, drive_type, disconnector_function,
                 source_service, source_entity_id, source_sequence_number, enabled_at_source, enabled,
                 created_at, updated_at, created_by, updated_by
             ) values (
                 gen_random_uuid(), :code, :name, cast(:type as catenary_asset_type), :executionPackageId, :trackId,
                 :ownTrack, :connectedTrackId, :stationId, :startKp, :endKp, :profileSourceId, :sectioning,
                 cast(:installationType as section_insulator_installation),
-                cast(:driveType as disconnector_drive_type),
+                cast(:driveType as disconnector_drive_type), :disconnectorFunction,
                 :sourceService, :sourceEntityId, :sourceSequenceNumber, :enabled, :enabled, now(), now(), 'system', 'system'
             ) on conflict (source_service, source_entity_id) do update
                set code = excluded.code,
@@ -146,6 +147,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                    sectioning = excluded.sectioning,
                    installation_type = excluded.installation_type,
                    drive_type = excluded.drive_type,
+                   disconnector_function = excluded.disconnector_function,
                    enabled_at_source = excluded.enabled_at_source,
                    enabled = excluded.enabled_at_source and not catenary_asset.disabled_locally,
                    source_sequence_number = coalesce(
@@ -173,6 +175,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             @Param("sectioning") String sectioning,
             @Param("installationType") String installationType,
             @Param("driveType") String driveType,
+            @Param("disconnectorFunction") String disconnectorFunction,
             @Param("enabled") boolean enabled,
             @Param("sourceSequenceNumber") Long sourceSequenceNumber
     );

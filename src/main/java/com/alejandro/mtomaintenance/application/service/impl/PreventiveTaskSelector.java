@@ -121,17 +121,33 @@ class PreventiveTaskSelector {
     }
 
     /**
-     * Sin tipos elegidos, los del plan para cada activo: los del preventivo en un perfil, RG-03 en un
-     * aislador, RP-06 en un seccionador con motor. Uno manual o sin dato no tiene tipo en el plan.
+     * Sin tipos elegidos, los del plan para cada activo: los del preventivo en un perfil; RG-03 y RP-02
+     * en un aislador, y RG-04 y RP-03 si tiene agujas (sus {@code switches}, tambien las fuera de
+     * servicio, que siguen en el plano); RP-07 en un seccionador, RP-06 ademas si tiene motor y RG-06
+     * ademas si es una autovalvula. Ningun activo generado se queda sin tipo.
      */
     static List<String> defaultTaskTypes(CatenaryAsset asset) {
         return switch (asset.getType()) {
-            case SECTION_INSULATOR -> MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES;
-            case DISCONNECTOR -> asset.getDriveType() == DisconnectorDriveType.MOTOR
-                    ? MaintenanceTaskServiceImpl.DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES
-                    : List.of();
+            case SECTION_INSULATOR -> asset.getSwitches() == null || asset.getSwitches().isEmpty()
+                    ? MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES
+                    : MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_WITH_SWITCHES_TASK_TYPES;
+            case DISCONNECTOR -> disconnectorTaskTypes(asset);
             default -> MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES;
         };
+    }
+
+    /** RP-07, RP-06 con motor y RG-06 en una autovalvula, en el orden del codigo. */
+    private static List<String> disconnectorTaskTypes(CatenaryAsset asset) {
+        List<String> codes = asset.getDriveType() == DisconnectorDriveType.MOTOR
+                ? MaintenanceTaskServiceImpl.DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES
+                : MaintenanceTaskServiceImpl.DEFAULT_DISCONNECTOR_TASK_TYPES;
+        if (!MaintenanceTaskServiceImpl.SURGE_ARRESTER_FUNCTION.equalsIgnoreCase(asset.getDisconnectorFunction())) {
+            return codes;
+        }
+        List<String> withValve = new ArrayList<>();
+        withValve.add(MaintenanceTaskServiceImpl.SURGE_ARRESTER_TASK_TYPE);
+        withValve.addAll(codes);
+        return List.copyOf(withValve);
     }
 
     /** De otro EP que la orden; uno sin EP no se sabe, y no se descarta. */
