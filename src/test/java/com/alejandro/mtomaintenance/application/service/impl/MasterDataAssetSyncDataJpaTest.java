@@ -355,6 +355,37 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         assertNull(asset("si-drive-" + suffix).getDriveType());
     }
 
+    @Test
+    void aDisconnectorKeepsItsFunctionCodeAsItArrivesAndWithoutOneItHasNone() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long suffix = System.nanoTime();
+        String valveId = "d-valve-" + suffix;
+        String blankId = "d-blank-" + suffix;
+        dispatcher.handle(withValue(disconnectorMessage(valveId, suffix), "disconnectorFunction", Map.of("id", 14, "code", " SurgeA ")),
+                new MasterDataEventContext(1L));
+        dispatcher.handle(withValue(disconnectorMessage(blankId, suffix), "disconnectorFunction", Map.of("id", 15, "code", " ")),
+                new MasterDataEventContext(1L));
+        entityManager.clear();
+
+        assertEquals("SurgeA", asset(valveId).getDisconnectorFunction(), "The code of mto-configuration, trimmed");
+        assertNull(asset(blankId).getDisconnectorFunction(), "A blank code is no function");
+
+        // Un evento sin ella (anterior a que se guardara, o porque la han quitado) la quita.
+        dispatcher.handle(disconnectorMessage(valveId, suffix), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertNull(asset(valveId).getDisconnectorFunction());
+    }
+
+    /** El mismo mensaje con una clave mas en {@code values}, como la publica mto-configuration. */
+    private static MasterDataChangedMessage withValue(MasterDataChangedMessage message, String key, Object value) {
+        Map<String, Object> values = new HashMap<>(message.data().values());
+        values.put(key, value);
+        return new MasterDataChangedMessage(message.operationId(), message.referenceId(), message.origin(),
+                message.creationDate(), message.eventType(),
+                new MasterDataChangedEvent(message.data().entityName(), message.data().entityId(),
+                        message.data().operation(), values), message.messageHash());
+    }
+
     /** El mismo mensaje con el accionamiento que publica mto-configuration: {@code MOTOR}, {@code MANUAL} o null. */
     private static MasterDataChangedMessage withDrive(MasterDataChangedMessage message, String driveType) {
         Map<String, Object> values = new HashMap<>(message.data().values());

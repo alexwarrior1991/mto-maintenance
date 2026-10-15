@@ -189,10 +189,24 @@ next event of each disconnector (a republish) sets it.
 
 `catenary_asset` gains `drive_type` (`disconnector_drive_type`: `MOTOR`, `MANUAL`; nullable, also in
 `catenary_asset_aud`), how a disconnector is driven as `mto-configuration` publishes it
-(`driveType`). It decides its default task type when a preventive order is generated: `RP-06`
-(motor disconnectors) only with a motor. `chk_catenary_asset_drive_type` allows it only on a
+(`driveType`). It decides one of its default task types when a preventive order is generated:
+`RP-06` (remote drive test) only with a motor. `chk_catenary_asset_drive_type` allows it only on a
 `DISCONNECTOR`. Written only by the master-data upsert; existing rows stay `NULL` (no data) until the
 next event of each disconnector (a republish).
+
+## Function of a disconnector (`V17`)
+
+`catenary_asset` gains `disconnector_function` (`varchar(40)`, nullable, also in
+`catenary_asset_aud`): the code of the `DisconnectorFunction` LOV of `mto-configuration` exactly as
+its event publishes it (`disconnectorFunction.code`: `Disc/IO`, `LoadB/NS`, `SurgeA`…). A surge
+arrester (`SurgeA`, compared ignoring case) also gets `RG-06` (catenary automatic valves) by default.
+The code is stored, not a flag, because it is the source's data. `chk_catenary_asset_disconnector_function`
+allows it only on a `DISCONNECTOR`. Written only by the master-data upsert; existing rows stay `NULL`
+until the next event of each disconnector (a republish).
+
+`V17` also corrects the description of `RP-07`, seeded in `V3` as "Catenary insulators": the plan calls
+it **catenary isolators**, the disconnector itself (blades, jaws, alignment and two operations), and it
+is now "Catenary isolators (particular revision)".
 
 ## Auditing (`V4`)
 

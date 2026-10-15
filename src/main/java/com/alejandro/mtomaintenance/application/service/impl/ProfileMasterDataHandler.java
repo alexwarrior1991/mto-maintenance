@@ -56,6 +56,7 @@ class ProfileMasterDataHandler extends AbstractAssetMasterDataHandler {
                 null,
                 List.of(),
                 true,
+                null,
                 null
         );
     }

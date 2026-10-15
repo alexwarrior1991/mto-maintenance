@@ -265,11 +265,12 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
                 List.of(new GenerationSelection(CatenaryAssetType.DISCONNECTOR, null, trackId + 1, null, null, null, null, null, null)), true));
         assertEquals(1, preview.createdTasks());
         assertEquals(3, preview.totalTasks());
-        assertEquals(List.of("RP-06"), preview.assets().getFirst().taskTypeCodes(), "A motor disconnector gets RP-06 from the real catalogue");
+        assertEquals(List.of("RP-06", "RP-07"), preview.assets().getFirst().taskTypeCodes(),
+                "A motor disconnector gets RP-06 and RP-07 from the real catalogue");
         GeneratePreventiveTasksResponse insulators = taskService.generatePreventiveTasks(order.id(), new GeneratePreventiveTasksRequest(null, null, null,
                 List.of(new GenerationSelection(CatenaryAssetType.SECTION_INSULATOR, null, trackId + 1, null, null, null, null, null, null)), true));
-        assertEquals(List.of("RG-03", "RP-02", "RP-03"), insulators.assets().getFirst().taskTypeCodes(),
-                "An insulator with a turnout gets the revision of its turnouts too, read from its switches in the generation's transaction");
+        assertEquals(List.of("RG-03", "RG-04", "RP-02", "RP-03"), insulators.assets().getFirst().taskTypeCodes(),
+                "An insulator with a turnout gets the revisions of its turnouts too, read from its switches in the generation's transaction");
         assertEquals(2, taskService.findByOrder(order.id()).size(), "A preview creates nothing");
 
         MaterialUsageResponse material = materialService.register(order.id(), new MaterialUsageRequest(UUID.randomUUID(), "GA70", UUID.randomUUID(),

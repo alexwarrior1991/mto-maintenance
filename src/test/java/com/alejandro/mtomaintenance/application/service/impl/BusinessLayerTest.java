@@ -535,7 +535,7 @@ class BusinessLayerTest {
     void theInsulatorsOfTheSectionAreGeneratedWithTheirRevisionsBetweenTheProfilesAroundThemWhenAsked() {
         // Un fin de semana con posesion total: los perfiles de la via y los aisladores que la tocan,
         // tambien el de la via de al lado que conecta con esta, en el orden en que se recorren. El que
-        // tiene agujas lleva tambien su revision (RP-03); el otro, solo la del aislador.
+        // tiene agujas lleva tambien las de sus agujas (RG-04 y RP-03); el otro, solo las del aislador.
         TaskFixture fixture = new TaskFixture();
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
         CatenaryAsset first = profile("12-2.27", "12847.990");
@@ -551,9 +551,9 @@ class BusinessLayerTest {
         when(fixture.repository.findAssetIdsByOrderId(order.getId())).thenReturn(List.of());
         when(fixture.repository.findMaxSequence(order.getId())).thenReturn(0);
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
-        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(insulatorTypes("RG-03", "RP-02"));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypesOf("RG-03", "RP-02"));
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_WITH_SWITCHES_TASK_TYPES))
-                .thenReturn(insulatorTypes("RG-03", "RP-02", "RP-03"));
+                .thenReturn(fullPossessionTypesOf("RG-03", "RG-04", "RP-02", "RP-03"));
         when(fixture.lookups.activeTemplate(any())).thenReturn(Optional.of(template("RUNNERS", "BODY")));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("300")));
 
@@ -567,8 +567,8 @@ class BusinessLayerTest {
         List<MaintenanceTask> tasks = saved.getAllValues();
         assertEquals(List.of(first, own, second, fromNextTrack), tasks.stream().map(MaintenanceTask::getAsset).toList(), "By kp along the track");
         assertEquals(List.of(1, 2, 3, 4), tasks.stream().map(MaintenanceTask::getSequence).toList());
-        assertEquals(Set.of("RG-03", "RP-02", "RP-03"), codesOf(tasks.get(1)),
-                "An insulator with turnouts gets its own revisions and that of its turnouts, not the profile's types");
+        assertEquals(Set.of("RG-03", "RG-04", "RP-02", "RP-03"), codesOf(tasks.get(1)),
+                "An insulator with turnouts gets its own revisions and those of its turnouts, not the profile's types");
         assertEquals(Set.of("RG-03", "RP-02"), codesOf(tasks.get(3)), "One without turnouts, only its own");
         assertTrue(tasks.get(1).requiresFullPossession(), "So it waits for a FULL shift");
         assertEquals(Set.of("RG-01", "RG-12"), codesOf(tasks.get(0)));
@@ -622,28 +622,43 @@ class BusinessLayerTest {
     }
 
     @Test
-    void theDisconnectorsOfTheSectionGetRp06OnlyWithAMotorAndAManualOneWaitsForChosenTypes() {
+    void everyDisconnectorGetsRp07AndAMotorOneAlsoRp06AndASurgeArresterAlsoRg06() {
         TaskFixture fixture = new TaskFixture();
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
         CatenaryAsset motor = disconnectorAt("HSA-NS5", 2L, "12900.000", DisconnectorDriveType.MOTOR);
         CatenaryAsset manual = disconnectorAt("HSA-NS6", 2L, "13100.000", DisconnectorDriveType.MANUAL);
         CatenaryAsset unknown = disconnectorAt("HSA-NS7", 2L, "13200.000", null);
+        CatenaryAsset valve = disconnectorAt("HSA-SA8", 2L, "13300.000", DisconnectorDriveType.MANUAL);
+        valve.setDisconnectorFunction("SurgeA");
+        CatenaryAsset motorValve = disconnectorAt("HSA-SA9", 2L, "13400.000", DisconnectorDriveType.MOTOR);
+        motorValve.setDisconnectorFunction("surgea");
         when(fixture.lookups.order(order.getId())).thenReturn(order);
         when(fixture.assetRepository.findEnabledByTypeTouchingSection(eq(CatenaryAssetType.DISCONNECTOR), eq(2L), any(), any()))
-                .thenReturn(List.of(motor, manual, unknown));
-        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES)).thenReturn(fullPossessionTypes("RP-06"));
-        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("45")));
+                .thenReturn(List.of(motor, manual, unknown, valve, motorValve));
+        when(fixture.lookups.taskTypes(any())).thenAnswer(call -> {
+            Collection<String> codes = call.getArgument(0);
+            return fullPossessionTypesOf(codes.toArray(String[]::new));
+        });
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("150")));
 
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
                 new GeneratePreventiveTasksRequest(null, null, List.of(CatenaryAssetType.DISCONNECTOR), null, null));
 
-        assertEquals(1, response.createdTasks());
-        assertEquals(2, response.skippedWithoutTaskTypes(), "The plan has no type for a manual one, nor for one whose drive is unknown");
-        assertEquals(Map.of(CatenaryAssetType.DISCONNECTOR, 1), response.createdByAssetType());
-        MaintenanceTask created = fixture.savedTask();
-        assertEquals(motor, created.getAsset());
-        assertEquals("Preventive maintenance of disconnector HSA-NS5 (kp 12900.000)", created.getDescription());
-        assertTrue(created.requiresFullPossession(), "RP-06 waits for a FULL shift");
+        assertEquals(5, response.createdTasks());
+        assertEquals(0, response.skippedWithoutTaskTypes(), "No disconnector is left without a type any more");
+        assertEquals(Map.of(CatenaryAssetType.DISCONNECTOR, 5), response.createdByAssetType());
+        ArgumentCaptor<MaintenanceTask> saved = ArgumentCaptor.forClass(MaintenanceTask.class);
+        verify(fixture.repository, times(5)).save(saved.capture());
+        List<MaintenanceTask> tasks = saved.getAllValues();
+        assertEquals(List.of(motor, manual, unknown, valve, motorValve), tasks.stream().map(MaintenanceTask::getAsset).toList());
+        assertEquals(Set.of("RP-06", "RP-07"), codesOf(tasks.get(0)), "With a motor, its remote drive test too");
+        assertEquals(Set.of("RP-07"), codesOf(tasks.get(1)), "A manual one, the disconnector itself");
+        assertEquals(Set.of("RP-07"), codesOf(tasks.get(2)), "Without the data, the same as a manual one");
+        assertEquals(Set.of("RG-06", "RP-07"), codesOf(tasks.get(3)), "A surge arrester, also RG-06");
+        assertEquals(Set.of("RG-06", "RP-06", "RP-07"), codesOf(tasks.get(4)), "Its code is compared ignoring case");
+        verify(fixture.lookups).taskTypes(List.of("RG-06", "RP-06", "RP-07"));
+        assertEquals("Preventive maintenance of disconnector HSA-NS5 (kp 12900.000)", tasks.get(0).getDescription());
+        assertTrue(tasks.stream().allMatch(MaintenanceTask::requiresFullPossession), "RP-07 waits for a FULL shift");
     }
 
     @Test
@@ -667,8 +682,9 @@ class BusinessLayerTest {
                 .thenReturn(List.of(motor, manual));
         when(fixture.repository.findMaxSequence(order.getId())).thenReturn(0);
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
-        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(insulatorTypes("RG-03", "RP-02"));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypesOf("RG-03", "RP-02"));
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES)).thenReturn(fullPossessionTypes("RP-06"));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_DISCONNECTOR_TASK_TYPES)).thenReturn(fullPossessionTypes("RP-07"));
         when(fixture.lookups.activeTemplate(any())).thenReturn(Optional.of(template("RUNNERS", "BODY")));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("600")));
 
@@ -678,21 +694,22 @@ class BusinessLayerTest {
                         selection(CatenaryAssetType.SECTION_INSULATOR).trackId(13L).build(),
                         selection(CatenaryAssetType.DISCONNECTOR).build()), null));
 
-        assertEquals(5, response.createdTasks());
-        assertEquals(Map.of(CatenaryAssetType.PROFILE, 2, CatenaryAssetType.SECTION_INSULATOR, 2, CatenaryAssetType.DISCONNECTOR, 1),
+        assertEquals(6, response.createdTasks());
+        assertEquals(Map.of(CatenaryAssetType.PROFILE, 2, CatenaryAssetType.SECTION_INSULATOR, 2, CatenaryAssetType.DISCONNECTOR, 2),
                 response.createdByAssetType());
-        assertEquals(1, response.skippedWithoutTaskTypes(), "The manual disconnector");
+        assertEquals(0, response.skippedWithoutTaskTypes(), "The manual disconnector gets RP-07");
         assertFalse(response.dryRun());
         assertEquals(List.of(), response.assets(), "The lines come only with a preview");
         ArgumentCaptor<MaintenanceTask> saved = ArgumentCaptor.forClass(MaintenanceTask.class);
-        verify(fixture.repository, times(5)).save(saved.capture());
+        verify(fixture.repository, times(6)).save(saved.capture());
         List<MaintenanceTask> tasks = saved.getAllValues();
-        assertEquals(List.of(nearProfile, farProfile, connectingTo13, onTrack13, motor), tasks.stream().map(MaintenanceTask::getAsset).toList(),
+        assertEquals(List.of(nearProfile, farProfile, connectingTo13, onTrack13, motor, manual), tasks.stream().map(MaintenanceTask::getAsset).toList(),
                 "Track by track in the order asked for, by kp inside: the insulator of track 12 that connects goes with track 13");
-        assertEquals(List.of(1, 2, 3, 4, 5), tasks.stream().map(MaintenanceTask::getSequence).toList());
+        assertEquals(List.of(1, 2, 3, 4, 5, 6), tasks.stream().map(MaintenanceTask::getSequence).toList());
         assertEquals(Set.of("RG-01", "RG-12"), codesOf(tasks.get(0)));
         assertEquals(Set.of("RG-03", "RP-02"), codesOf(tasks.get(2)));
         assertEquals(Set.of("RP-06"), codesOf(tasks.get(4)));
+        assertEquals(Set.of("RP-07"), codesOf(tasks.get(5)));
         assertTrue(tasks.stream().allMatch(task -> task.getCheckItems().size() == 2), "Each with the checklist of its type");
         verify(fixture.lookups).activeTemplate(motor);
         assertTrue(tasks.stream().allMatch(task -> task.getOrder() == order));
@@ -707,7 +724,7 @@ class BusinessLayerTest {
         when(fixture.lookups.order(order.getId())).thenReturn(order);
         when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.SECTION_INSULATOR, null, null, null, null, 6L))
                 .thenReturn(List.of(anchor, another));
-        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(insulatorTypes("RG-03", "RP-02"));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypesOf("RG-03", "RP-02"));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
 
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(
@@ -832,25 +849,26 @@ class BusinessLayerTest {
         when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.DISCONNECTOR, 2L, null, null, null, null)).thenReturn(List.of(manual));
         when(fixture.repository.findOpenPreventiveTasksElsewhere(any(), eq(order.getId()))).thenReturn(List.of(inOtherOrder(busy.getId(), "MO-000042")));
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-12", "RG-01"));
-        when(fixture.workloadEstimator.estimate(eq(order), any())).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("15")));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_DISCONNECTOR_TASK_TYPES)).thenReturn(fullPossessionTypes("RP-07"));
+        when(fixture.workloadEstimator.estimate(eq(order), any())).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("25")));
 
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(
                 null, null, null, List.of(selection(CatenaryAssetType.PROFILE).trackId(2L).build(),
                 selection(CatenaryAssetType.DISCONNECTOR).trackId(2L).build()), true));
 
         assertTrue(response.dryRun());
-        assertEquals(1, response.createdTasks(), "What would be created");
-        assertEquals(2, response.totalTasks(), "The one there plus the one that would be created");
-        assertEquals(List.of(GenerationOutcome.CREATE, GenerationOutcome.IN_OTHER_ORDER, GenerationOutcome.NO_TASK_TYPES),
+        assertEquals(2, response.createdTasks(), "What would be created");
+        assertEquals(3, response.totalTasks(), "The one there plus the two that would be created");
+        assertEquals(List.of(GenerationOutcome.CREATE, GenerationOutcome.IN_OTHER_ORDER, GenerationOutcome.CREATE),
                 response.assets().stream().map(GenerationPreviewLine::outcome).toList());
         GenerationPreviewLine first = response.assets().getFirst();
         assertEquals(List.of("RG-01", "RG-12"), first.taskTypeCodes());
         assertEquals(new BigDecimal("12900.000"), first.kp());
         assertEquals("MO-000042", response.assets().get(1).otherOrderCode());
-        assertEquals(List.of(), response.assets().get(2).taskTypeCodes());
+        assertEquals(List.of("RP-07"), response.assets().get(2).taskTypeCodes(), "A manual disconnector is no longer skipped");
         ArgumentCaptor<Collection<MaintenanceTask>> planned = ArgumentCaptor.captor();
         verify(fixture.workloadEstimator).estimate(eq(order), planned.capture());
-        assertEquals(List.of(fresh), planned.getValue().stream().map(MaintenanceTask::getAsset).toList());
+        assertEquals(List.of(fresh, manual), planned.getValue().stream().map(MaintenanceTask::getAsset).toList());
         verify(fixture.repository, never()).save(any());
         verify(fixture.repository, never()).advisoryTransactionLock(anyLong());
         assertEquals(1, order.getTasks().size(), "The order is not touched");
@@ -3973,7 +3991,7 @@ class BusinessLayerTest {
                 CatenaryAsset asset = invocation.getArgument(0);
                 return new CatenaryAssetSummaryResponse(asset.getId(), asset.getCode(), asset.getName(), asset.getType(), asset.getTrackId(),
                         asset.getStartKp(), asset.getEndKp(), asset.getSectioning(), asset.getEnabled(), asset.getConnectedTrackId(),
-                        asset.getExecutionPackageId(), asset.getStationId(), asset.getDriveType());
+                        asset.getExecutionPackageId(), asset.getStationId(), asset.getDriveType(), asset.getDisconnectorFunction());
             });
             service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository, inspectionRepository,
                     mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events);
@@ -4402,8 +4420,8 @@ class BusinessLayerTest {
         return types;
     }
 
-    /** Los tipos de un aislador y de sus agujas, que piden posesion total como todo el grupo 3. */
-    private static Set<MaintenanceTaskType> insulatorTypes(String... codes) {
+    /** Tipos que piden posesion total, como los de un aislador, sus agujas y un seccionador. */
+    private static Set<MaintenanceTaskType> fullPossessionTypesOf(String... codes) {
         Set<MaintenanceTaskType> types = new LinkedHashSet<>();
         int index = 0;
         for (String code : codes) {

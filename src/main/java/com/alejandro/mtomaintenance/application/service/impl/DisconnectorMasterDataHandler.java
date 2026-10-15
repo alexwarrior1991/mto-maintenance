@@ -24,6 +24,9 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
 
     static final String CODE_PREFIX = "DSC-";
 
+    /** La columna {@code disconnector_function} (V17), como el codigo de la LOV en el origen. */
+    private static final int MAX_FUNCTION_LENGTH = 40;
+
     DisconnectorMasterDataHandler(CatenaryAssetRepository repository,
                                   CatenaryAssetSwitchRepository switchRepository) {
         super(repository, switchRepository);
@@ -66,9 +69,24 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
                 // todos modos, con true por defecto, para que los tres handlers traten el estado
                 // igual si algun dia el origen lo anade.
                 payload.bool("enabled", true),
-                // Con motor o a mano (V16): decide si RP-06 le va por defecto al generar un preventivo.
-                driveType(payload.string("driveType"))
+                // Con motor o a mano (V16): decide si RP-06 le va por defecto al generar un preventivo,
+                // ademas de RP-07, que lo lleva todo seccionador.
+                driveType(payload.string("driveType")),
+                // Su funcion en el plano (V17): una autovalvula (SurgeA) lleva ademas RG-06.
+                disconnectorFunction(payload.nested("disconnectorFunction").string("code"))
         );
+    }
+
+    /**
+     * El codigo tal cual llega, recortado; en blanco es sin dato. Uno mas largo que la columna no deberia
+     * llegar (el origen tiene el mismo limite), pero se corta en vez de mandar el evento a la DLQ.
+     */
+    private static String disconnectorFunction(String code) {
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+        String trimmed = code.trim();
+        return trimmed.length() > MAX_FUNCTION_LENGTH ? trimmed.substring(0, MAX_FUNCTION_LENGTH) : trimmed;
     }
 
     /** Lectura tolerante: un valor que este lado no conoce se guarda como nada, nunca va a la DLQ. */

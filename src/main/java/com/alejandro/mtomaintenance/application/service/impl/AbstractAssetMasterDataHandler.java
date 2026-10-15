@@ -63,7 +63,8 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
             SectionInsulatorInstallation installationType,
             List<SwitchSnapshot> switches,
             boolean enabled,
-            DisconnectorDriveType driveType
+            DisconnectorDriveType driveType,
+            String disconnectorFunction
     ) {
 
         /**
@@ -158,6 +159,7 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
                     snapshot.profileSourceId(), snapshot.sectioning(),
                     snapshot.installationType() == null ? null : snapshot.installationType().name(),
                     snapshot.driveType() == null ? null : snapshot.driveType().name(),
+                    snapshot.disconnectorFunction(),
                     snapshot.enabled(), context.sequenceNumber());
         } catch (DataIntegrityViolationException exception) {
             // El choque realista es con uq_catenary_asset_code: alguien creo a mano un activo con ese

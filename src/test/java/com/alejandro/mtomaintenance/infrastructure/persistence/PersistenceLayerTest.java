@@ -138,6 +138,8 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertEquals(30, types.size());
         assertEquals("RG-01", types.getFirst().getCode());
         assertTrue(taskTypeRepository.findByCode("RG-03").orElseThrow().getRequiresFullPossession());
+        assertEquals("Catenary isolators (particular revision)", taskTypeRepository.findByCode("RP-07").orElseThrow().getDescription(),
+                "The disconnector itself, not an insulator (V17)");
         assertTrue(taskTypeRepository.findByCode("RP-12").orElseThrow().getRequiresFullPossession());
         assertTrue(taskTypeRepository.findByCode("RP-10").orElseThrow().getDiagnostic());
         assertEquals(3, templateRepository.findAll().size());
@@ -273,6 +275,16 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
             assetRepository.save(profile);
             entityManager.flush();
         }, "chk_catenary_asset_drive_type");
+    }
+
+    @Test
+    void aDisconnectorFunctionIsOnlyForADisconnector() {
+        CatenaryAsset profile = profile("FUN-" + UUID.randomUUID().toString().substring(0, 8), System.nanoTime(), "12900.000");
+        profile.setDisconnectorFunction("SurgeA");
+        assertThrows(PersistenceException.class, () -> {
+            assetRepository.save(profile);
+            entityManager.flush();
+        }, "chk_catenary_asset_disconnector_function");
     }
 
     @Test
@@ -425,7 +437,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
 
     private int upsert(String sourceId, String name, Long sequence) {
         int applied = assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, name, "PROFILE",
-                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, true, sequence);
+                6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, null, true, sequence);
         entityManager.clear();
         return applied;
     }

@@ -94,8 +94,9 @@ GET             /reports/monthly              executionPackageId, month=yyyy-MM,
   track, `fromKp > toKp`, a section or an asset of another package, of another type, disabled or
   unknown.
 - **Default task types**: groups 1, 2 and 4 on a profile; `RG-03` and `RP-02` on a section
-  insulator, and `RP-03` too when it has turnouts (`switches`); `RP-06` on a disconnector with
-  `driveType: MOTOR`; a manual one or one without the data has none. Chosen types replace the
+  insulator, and `RG-04` and `RP-03` too when it has turnouts (`switches`); `RP-07` on every
+  disconnector, plus `RP-06` with `driveType: MOTOR` and `RG-06` when its `disconnectorFunction` is
+  `SurgeA` (a surge arrester). Chosen types replace the
   defaults, they are not added to them. A selection's `taskTypeCodes`/`withChecklist` win over the
   request's.
 - **Skipped, never duplicated**: what already has a task in the order (also cancelled), what belongs

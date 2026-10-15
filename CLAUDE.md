@@ -107,8 +107,9 @@ another package, open in another open preventive order, without a task type), `d
 and generations of one package queue behind an advisory lock. Each task carries the
 `MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan, with standard
 minutes that feed `WorkloadEstimator`; by default groups 1, 2 and 4 on a profile, `RG-03` and
-`RP-02` on an insulator plus `RP-03` when it has turnouts (`switches`), `RP-06` on a disconnector
-whose `driveType` (`V16`) is `MOTOR`, none on a manual one).
+`RP-02` on an insulator plus `RG-04` and `RP-03` when it has turnouts (`switches`), `RP-07` on a
+disconnector plus `RP-06` when its `driveType` (`V16`) is `MOTOR` and `RG-06` when its
+`disconnectorFunction` (`V17`) is `SurgeA`, a surge arrester).
 Tasks are executed inside a `MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one
 or more tracks): a task can
 only be completed with the order and a shift covering its track both `IN_PROGRESS`, a task type that requires
