@@ -93,9 +93,11 @@ GET             /reports/monthly              executionPackageId, month=yyyy-MM,
   (`selections[i].sectionId: …`, `selections[i].assetIds: …`): two scopes, a kp range without a
   track, `fromKp > toKp`, a section or an asset of another package, of another type, disabled or
   unknown.
-- **Default task types**: groups 1, 2 and 4 on a profile, `RG-03` on a section insulator, `RP-06` on
-  a disconnector with `driveType: MOTOR`; a manual one or one without the data has none. A
-  selection's `taskTypeCodes`/`withChecklist` win over the request's.
+- **Default task types**: groups 1, 2 and 4 on a profile; `RG-03` and `RP-02` on a section
+  insulator, and `RP-03` too when it has turnouts (`switches`); `RP-06` on a disconnector with
+  `driveType: MOTOR`; a manual one or one without the data has none. Chosen types replace the
+  defaults, they are not added to them. A selection's `taskTypeCodes`/`withChecklist` win over the
+  request's.
 - **Skipped, never duplicated**: what already has a task in the order (also cancelled), what belongs
   to another package than the order's, what has an open task in another open preventive order, and
   what has no task type. Generations in one package run one after another.

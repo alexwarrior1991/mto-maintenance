@@ -74,10 +74,17 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
             List.of("RG-01", "RG-05", "RG-08", "RG-10", "RG-11", "RG-12", "RG-13", "RP-08");
 
     /**
-     * Lo que se hace en cada aislador de seccion: RG-03 del plan. Pide posesion total, asi que sus
-     * tareas esperan a un turno FULL (el fin de semana), como el resto del grupo 3.
+     * Lo que se hace en cada aislador de seccion sin agujas (uno {@code IN_TRACK}, en medio de una via):
+     * RG-03 y RP-02 del plan, la revision general y la particular del aislador. Piden posesion total,
+     * asi que sus tareas esperan a un turno FULL (el fin de semana), como el resto del grupo 3.
      */
-    static final List<String> DEFAULT_INSULATOR_TASK_TYPES = List.of("RG-03");
+    static final List<String> DEFAULT_INSULATOR_TASK_TYPES = List.of("RG-03", "RP-02");
+
+    /**
+     * Lo que se hace en un aislador con agujas, que son la mayoria: lo de cualquier aislador y RP-03, la
+     * revision de sus agujas, porque se revisan con el. Tambien pide posesion total.
+     */
+    static final List<String> DEFAULT_INSULATOR_WITH_SWITCHES_TASK_TYPES = List.of("RG-03", "RP-02", "RP-03");
 
     /**
      * Lo que se hace en cada seccionador con motor: RP-06 del plan, que pide posesion total. Uno manual,

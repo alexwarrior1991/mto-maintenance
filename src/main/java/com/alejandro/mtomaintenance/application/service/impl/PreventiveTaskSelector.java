@@ -121,12 +121,16 @@ class PreventiveTaskSelector {
     }
 
     /**
-     * Sin tipos elegidos, los del plan para cada activo: los del preventivo en un perfil, RG-03 en un
-     * aislador, RP-06 en un seccionador con motor. Uno manual o sin dato no tiene tipo en el plan.
+     * Sin tipos elegidos, los del plan para cada activo: los del preventivo en un perfil; RG-03 y RP-02
+     * en un aislador, y RP-03 si tiene agujas (sus {@code switches}, tambien las fuera de servicio, que
+     * siguen en el plano); RP-06 en un seccionador con motor. Uno manual o sin dato no tiene tipo en el
+     * plan.
      */
     static List<String> defaultTaskTypes(CatenaryAsset asset) {
         return switch (asset.getType()) {
-            case SECTION_INSULATOR -> MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES;
+            case SECTION_INSULATOR -> asset.getSwitches() == null || asset.getSwitches().isEmpty()
+                    ? MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES
+                    : MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_WITH_SWITCHES_TASK_TYPES;
             case DISCONNECTOR -> asset.getDriveType() == DisconnectorDriveType.MOTOR
                     ? MaintenanceTaskServiceImpl.DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES
                     : List.of();

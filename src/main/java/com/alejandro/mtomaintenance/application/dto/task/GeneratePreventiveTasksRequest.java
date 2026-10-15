@@ -19,8 +19,9 @@ import java.util.List;
  * }</pre>
  *
  * @param taskTypeCodes los tipos de todas las tareas generadas; sin codigos, los de cada activo: grupos
- *                      1, 2 y 4 en un perfil de via principal, {@code RG-03} en un aislador de seccion
- *                      y {@code RP-06} en un seccionador con motor
+ *                      1, 2 y 4 en un perfil de via principal, {@code RG-03} y {@code RP-02} en un
+ *                      aislador de seccion (y {@code RP-03} si tiene agujas) y {@code RP-06} en un
+ *                      seccionador con motor
  * @param assetTypes    sin {@code selections}, que activos del tramo llevan tarea: {@code PROFILE},
  *                      {@code SECTION_INSULATOR} y {@code DISCONNECTOR}; sin ninguno, solo los perfiles
  * @param selections    que generar y donde, una parte cada una; no va junto con {@code assetTypes}

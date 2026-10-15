@@ -104,6 +104,7 @@ import com.alejandro.mtomaintenance.application.service.WorkloadEstimator;
 import com.alejandro.mtomaintenance.domain.model.Quantity;
 import com.alejandro.mtomaintenance.domain.model.WorkloadEstimate;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetSwitch;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CheckItemResult;
@@ -531,14 +532,15 @@ class BusinessLayerTest {
     }
 
     @Test
-    void theInsulatorsOfTheSectionAreGeneratedWithRg03BetweenTheProfilesAroundThemWhenAsked() {
+    void theInsulatorsOfTheSectionAreGeneratedWithTheirRevisionsBetweenTheProfilesAroundThemWhenAsked() {
         // Un fin de semana con posesion total: los perfiles de la via y los aisladores que la tocan,
-        // tambien el de la via de al lado que conecta con esta, en el orden en que se recorren.
+        // tambien el de la via de al lado que conecta con esta, en el orden en que se recorren. El que
+        // tiene agujas lleva tambien su revision (RP-03); el otro, solo la del aislador.
         TaskFixture fixture = new TaskFixture();
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
         CatenaryAsset first = profile("12-2.27", "12847.990");
         CatenaryAsset second = profile("12-2.28", "12899.290");
-        CatenaryAsset own = insulator("SI-W31", 2L, null, "12850.000", "12890.000");
+        CatenaryAsset own = withSwitch(insulator("SI-W31", 2L, null, "12850.000", "12890.000"), "W31");
         CatenaryAsset fromNextTrack = insulator("SI-W41", 3L, 2L, "12920.000", "12960.000");
         BigDecimal from = order.getAsset().getStartKp();
         BigDecimal to = order.getAsset().getEndKp();
@@ -549,7 +551,9 @@ class BusinessLayerTest {
         when(fixture.repository.findAssetIdsByOrderId(order.getId())).thenReturn(List.of());
         when(fixture.repository.findMaxSequence(order.getId())).thenReturn(0);
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
-        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypes());
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(insulatorTypes("RG-03", "RP-02"));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_WITH_SWITCHES_TASK_TYPES))
+                .thenReturn(insulatorTypes("RG-03", "RP-02", "RP-03"));
         when(fixture.lookups.activeTemplate(any())).thenReturn(Optional.of(template("RUNNERS", "BODY")));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("300")));
 
@@ -563,7 +567,9 @@ class BusinessLayerTest {
         List<MaintenanceTask> tasks = saved.getAllValues();
         assertEquals(List.of(first, own, second, fromNextTrack), tasks.stream().map(MaintenanceTask::getAsset).toList(), "By kp along the track");
         assertEquals(List.of(1, 2, 3, 4), tasks.stream().map(MaintenanceTask::getSequence).toList());
-        assertEquals(Set.of("RG-03"), codesOf(tasks.get(1)), "An insulator gets RG-03, not the profile's types");
+        assertEquals(Set.of("RG-03", "RP-02", "RP-03"), codesOf(tasks.get(1)),
+                "An insulator with turnouts gets its own revisions and that of its turnouts, not the profile's types");
+        assertEquals(Set.of("RG-03", "RP-02"), codesOf(tasks.get(3)), "One without turnouts, only its own");
         assertTrue(tasks.get(1).requiresFullPossession(), "So it waits for a FULL shift");
         assertEquals(Set.of("RG-01", "RG-12"), codesOf(tasks.get(0)));
         assertEquals("Preventive maintenance of section insulator SI-W41 (kp 12920.000)", tasks.get(3).getDescription());
@@ -583,12 +589,12 @@ class BusinessLayerTest {
                 .thenReturn(List.of(covered, fresh));
         when(fixture.repository.findAssetIdsByOrderId(order.getId())).thenReturn(List.of(profile.getId(), covered.getId()));
         when(fixture.repository.findMaxSequence(order.getId())).thenReturn(7);
-        when(fixture.lookups.taskTypes(List.of("RG-03", "RP-02"))).thenReturn(taskTypes("RG-03", "RP-02"));
+        when(fixture.lookups.taskTypes(List.of("RG-03", "RG-04"))).thenReturn(taskTypes("RG-03", "RG-04"));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
 
         // Solo aisladores, con los tipos elegidos: el perfil ni se pide.
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
-                new GeneratePreventiveTasksRequest(List.of("RG-03", "RP-02"), null, List.of(CatenaryAssetType.SECTION_INSULATOR), null, null));
+                new GeneratePreventiveTasksRequest(List.of("RG-03", "RG-04"), null, List.of(CatenaryAssetType.SECTION_INSULATOR), null, null));
 
         assertEquals(1, response.createdTasks());
         assertEquals(1, response.skippedAssets());
@@ -596,7 +602,7 @@ class BusinessLayerTest {
         MaintenanceTask created = fixture.savedTask();
         assertEquals(fresh, created.getAsset());
         assertEquals(8, created.getSequence());
-        assertEquals(Set.of("RG-03", "RP-02"), codesOf(created));
+        assertEquals(Set.of("RG-03", "RG-04"), codesOf(created));
         verify(fixture.assetRepository, never()).findEnabledByTypeOnTrackBetween(any(), any(), any(), any());
         verify(fixture.lookups, never()).taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES);
     }
@@ -661,7 +667,7 @@ class BusinessLayerTest {
                 .thenReturn(List.of(motor, manual));
         when(fixture.repository.findMaxSequence(order.getId())).thenReturn(0);
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
-        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypes());
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(insulatorTypes("RG-03", "RP-02"));
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_MOTOR_DISCONNECTOR_TASK_TYPES)).thenReturn(fullPossessionTypes("RP-06"));
         when(fixture.lookups.activeTemplate(any())).thenReturn(Optional.of(template("RUNNERS", "BODY")));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("600")));
@@ -685,7 +691,7 @@ class BusinessLayerTest {
                 "Track by track in the order asked for, by kp inside: the insulator of track 12 that connects goes with track 13");
         assertEquals(List.of(1, 2, 3, 4, 5), tasks.stream().map(MaintenanceTask::getSequence).toList());
         assertEquals(Set.of("RG-01", "RG-12"), codesOf(tasks.get(0)));
-        assertEquals(Set.of("RG-03"), codesOf(tasks.get(2)));
+        assertEquals(Set.of("RG-03", "RP-02"), codesOf(tasks.get(2)));
         assertEquals(Set.of("RP-06"), codesOf(tasks.get(4)));
         assertTrue(tasks.stream().allMatch(task -> task.getCheckItems().size() == 2), "Each with the checklist of its type");
         verify(fixture.lookups).activeTemplate(motor);
@@ -701,7 +707,7 @@ class BusinessLayerTest {
         when(fixture.lookups.order(order.getId())).thenReturn(order);
         when(fixture.assetRepository.findEnabledForGeneration(CatenaryAssetType.SECTION_INSULATOR, null, null, null, null, 6L))
                 .thenReturn(List.of(anchor, another));
-        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(fullPossessionTypes());
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_INSULATOR_TASK_TYPES)).thenReturn(insulatorTypes("RG-03", "RP-02"));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
 
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(
@@ -4141,6 +4147,13 @@ class BusinessLayerTest {
         return asset;
     }
 
+    /** Un aislador con una aguja, como los que conectan dos vias. */
+    private static CatenaryAsset withSwitch(CatenaryAsset insulator, String switchCode) {
+        insulator.getSwitches().add(CatenaryAssetSwitch.builder().asset(insulator).code(switchCode)
+                .kp(insulator.getStartKp()).turnoutDenominator(9).trackId(insulator.getTrackId()).build());
+        return insulator;
+    }
+
     private static Set<String> codesOf(MaintenanceTask task) {
         return task.getTaskTypes().stream().map(MaintenanceTaskType::getCode).collect(Collectors.toSet());
     }
@@ -4386,6 +4399,16 @@ class BusinessLayerTest {
     private static Set<MaintenanceTaskType> fullPossessionTypes() {
         Set<MaintenanceTaskType> types = new LinkedHashSet<>();
         types.add(MaintenanceTaskType.builder().code("RG-03").description("Section insulators").requiresFullPossession(true).orderIndex(3).build());
+        return types;
+    }
+
+    /** Los tipos de un aislador y de sus agujas, que piden posesion total como todo el grupo 3. */
+    private static Set<MaintenanceTaskType> insulatorTypes(String... codes) {
+        Set<MaintenanceTaskType> types = new LinkedHashSet<>();
+        int index = 0;
+        for (String code : codes) {
+            types.add(MaintenanceTaskType.builder().code(code).description(code).requiresFullPossession(true).orderIndex(++index).build());
+        }
         return types;
     }
 
