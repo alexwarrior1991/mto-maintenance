@@ -63,16 +63,18 @@ Los tres perfiles llevan además `notification-inbox` de `mto-notification-api` 
 lo que este servicio publica —una orden urgente, un defecto grave, un material que el almacén
 rechaza, los preventivos a vencer— llega a estas personas como notificación), y el responsable también
 `notification-activity-read`, el registro de actividad del dominio. Los tres llevan también
-`config-read` de `mto-configuration-api` y `stock-read` de
-`mto-stock-api`. Este servicio guarda las vías, estaciones y paquetes de ejecución, y los materiales,
-almacenes y proyectos, solo como ids. Una pantalla (el backoffice, o el front de React) los nombra y
+`config-read` de `mto-configuration-api`, `stock-read` de
+`mto-stock-api` y `resources-read` de `mto-resources-api`. Este servicio guarda las vías, estaciones y
+paquetes de ejecución, los materiales, almacenes y proyectos, y los sitios de aparcamiento solo como
+ids, y la dotación y los vehículos de un turno se eligen entre las personas y la flota de
+`mto-resources`. Una pantalla (el backoffice, o el front de React) los nombra y
 ofrece desplegables leyéndolos de su servicio con el token de la persona, y sin esa lectura
 enseñaría números. Solo es lectura: nadie de mantenimiento modifica la infraestructura ni el
-almacén. Como consecuencia, estas personas ven también Infraestructura, Catálogos y Almacén en
-modo lectura.
+almacén ni el personal. Como consecuencia, estas personas ven también Infraestructura, Catálogos,
+Almacén y Recursos en modo lectura.
 
 Estos composites nombran roles de otros clientes, así que la parcial necesita que las de
-`mto-notification`, `mto-configuration` y `mto-stock` estén aplicadas antes. `mto-platform/keycloak/apply-partials.sh`
+`mto-notification`, `mto-configuration`, `mto-stock` y `mto-resources` estén aplicadas antes. `mto-platform/keycloak/apply-partials.sh`
 las aplica en ese orden, y `scripts/check_realm_consistency.py` lo comprueba. El realm de los tests
 (`src/test/resources/keycloak/mto-maintenance-test-realm.json`) no tiene esos clientes ni los
 necesita: aquí no se comprueba ninguno de sus roles.

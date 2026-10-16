@@ -147,8 +147,9 @@ order goes on, and the line is retried right after the commit.
 
 Keycloak resource server, audience `mto-maintenance-api`. Permissions are client roles, profiles are
 realm composites (`mto-maintenance-viewer`, `-technician`, `-manager`), and the three also carry
-`config-read` and `stock-read` so a screen can name the tracks, stations, materials and warehouses
-this service only stores as ids; see [`keycloak/README.md`](keycloak/README.md).
+`config-read`, `stock-read` and `resources-read` so a screen can name the tracks, stations, materials,
+warehouses and parking sites this service only stores as ids, and pick the crew and vehicles of a
+shift among the people and the fleet of `mto-resources`; see [`keycloak/README.md`](keycloak/README.md).
 
 | Verb / action | Permission |
 |---|---|

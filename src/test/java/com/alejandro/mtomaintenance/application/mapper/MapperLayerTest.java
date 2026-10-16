@@ -24,6 +24,7 @@ import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplat
 import com.alejandro.mtomaintenance.application.dto.inspection.MaintenanceInspectionResponse;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageResponse;
 import com.alejandro.mtomaintenance.application.dto.tasktype.MaintenanceTaskTypeResponse;
+import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamResponse;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamSummaryResponse;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
@@ -268,6 +269,14 @@ class MapperLayerTest {
             assertEquals(team.getId(), teamSummary.id());
             assertEquals("Rishpon", teamSummary.baseName());
             assertEquals(Set.of(6L, 7L), context.getBean(MaintenanceTeamMapper.class).toResponse(team).executionPackageIds());
+            assertNull(context.getBean(MaintenanceTeamMapper.class).toResponse(team).sourceEntityId(), "A local team has no unit");
+
+            // Uno de mto-resources lleva el id de su unidad, con el que una pantalla enlaza su ficha del organigrama.
+            UUID unitId = UUID.randomUUID();
+            MaintenanceTeamResponse synchronizedTeam = context.getBean(MaintenanceTeamMapper.class).toResponse(MaintenanceTeam.builder()
+                    .code("B").name("Team B").sourceService("mto-resources").sourceEntityId(unitId).build());
+            assertTrue(synchronizedTeam.synchronizedFromResources());
+            assertEquals(unitId, synchronizedTeam.sourceEntityId());
         });
     }
 }

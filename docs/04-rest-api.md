@@ -23,9 +23,10 @@ GET             /assets/{id}/orders | /revisions
 
 GET             /task-types | /task-types/{code}     functionalGroup, requiresFullPossession, diagnostic
 GET/POST        /teams        GET/PUT /teams/{id}
-                                              synchronizedFromResources, leader, supervisor, members (linemen, by code),
-                                              defaultVehicleId, executionPackageIds; a synchronized team has no baseName and
-                                              its vehicle is the code of its default vehicle; PUT on one is 409 TEA-001
+                                              synchronizedFromResources, sourceEntityId (its unit in mto-resources), leader,
+                                              supervisor, members (linemen, by code), defaultVehicleId, executionPackageIds; a
+                                              synchronized team has no baseName and its vehicle is the code of its default
+                                              vehicle; PUT on one is 409 TEA-001
 
 GET/POST        /shifts                       date, dateFrom, dateTo, teamId, trackId, executionPackageId, status, possessionType
                                               trackId can be repeated (?trackId=12&trackId=13): the shifts working on any of
