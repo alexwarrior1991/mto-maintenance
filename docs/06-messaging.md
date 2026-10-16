@@ -148,7 +148,7 @@ tested in `MasterDataAssetSyncDataJpaTest`:
 
 `mto-resources` owns the people, the organization tree and the fleet. A shift needs three of its
 entities, the people (`person`), the teams (`team`) and the vehicles (`vehicle`), and keeps of each the
-snapshot it reads (`crew_person`, `maintenance_team`, `fleet_vehicle`, `V18`; `02-domain-model.md`,
+snapshot it reads (`crew_person`, `maintenance_team`, `fleet_vehicle`, `V19`; `02-domain-model.md`,
 "Teams" and "Shift crew and vehicles"). Nothing here calls `mto-resources`; it calls nobody either.
 
 ### Topology
@@ -311,7 +311,7 @@ vehicles of the shift (its `MaintenanceShiftEventHandler`, which reads `code`, `
 `vehicles[].parking`): on the track (a road-only one, on the road) at `started`, parked where
 `vehicles[].parking` says (else at `parkingPlace`) at `closed`, and the same at `cancelled` of a
 shift that had started (`actualStart` set); a shift cancelled before starting moved nothing.
-`shift.cancelled`, `parkingPlace` and the crew and vehicle keys arrived with `V19`, added to the
+`shift.cancelled`, `parkingPlace` and the crew and vehicle keys arrived with `V20`, added to the
 contract without renaming anything; both consumers copy `shift-started.json`, `shift-closed.json`
 and `shift-cancelled.json` as fixtures.
 

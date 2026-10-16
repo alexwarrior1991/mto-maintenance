@@ -38,7 +38,7 @@ public record OperationsProperties(
     public OperationsProperties {
         defaultWait = defaultWait == null ? Duration.ofSeconds(5) : defaultWait;
         maxWait = maxWait == null ? Duration.ofSeconds(10) : maxWait;
-        maxActive = maxActive <= 0 ? 8 : maxActive;
+        maxActive = maxActive <= 0 ? 4 : maxActive;
         heartbeat = heartbeat == null ? Duration.ofSeconds(5) : heartbeat;
         staleAfter = staleAfter == null ? Duration.ofMinutes(1) : staleAfter;
         pollInitial = pollInitial == null ? Duration.ofMillis(200) : pollInitial;

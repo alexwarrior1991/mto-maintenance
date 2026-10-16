@@ -15,7 +15,7 @@ source `HTTP`/`MESSAGING`/`SYSTEM`). Audited: `CatenaryAsset`, `MaintenanceOrder
 `MaintenanceTask` (with `maintenance_task_task_type_aud`), `MaintenanceTaskCheckItem`,
 `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`,
 `MaintenanceMaterialUsage`, `MaintenanceShift` (with its tracks, its blocking disconnectors and,
-since `V19`, its linemen, `maintenance_shift_lineman_aud`) and `MaintenanceShiftVehicle` (`V19`, a
+since `V20`, its linemen, `maintenance_shift_lineman_aud`) and `MaintenanceShiftVehicle` (`V20`, a
 vehicle of a shift with where it was left). Who went out that night and in what is history of the
 shift: its leader, supervisor and linemen are in its revisions, and parking a vehicle at close is a
 revision of that vehicle line, not of the shift.
@@ -27,7 +27,7 @@ and read as "never changed"; the switches' history lives in `mto-configuration`)
 `MaintenanceTaskType`, `InspectionTemplate`/`Item` (catalogues managed by migrations; a team
 synchronized from `mto-resources` is written by native SQL anyway), `CrewPerson` and `FleetVehicle`
 (snapshots of `mto-resources` written only with native SQL, like `CatenaryAssetSwitch`: a twin would
-sit empty; their history lives in `mto-resources`) and `BackgroundOperation` (`V20`: written only by
+sit empty; their history lives in `mto-resources`) and `BackgroundOperation` (`V21`: written only by
 its native statements, its own history, and purged).
 `@Audited` goes on each entity, never on `AuditableEntity`; `JpaEntityModelTest` guards the
 partition and `EnversAuditDataJpaTest` checks the revisions end to end (it disables the test

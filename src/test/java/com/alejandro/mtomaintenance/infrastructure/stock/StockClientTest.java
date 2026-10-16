@@ -4,6 +4,7 @@ import com.alejandro.mtomaintenance.application.dto.stock.StockMaterial;
 import com.alejandro.mtomaintenance.application.dto.stock.StockReservation;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
+import com.alejandro.mtomaintenance.configuration.stock.StockCircuitBreakerExecutorConfiguration;
 import com.alejandro.mtomaintenance.configuration.stock.StockClientConfiguration;
 import com.alejandro.mtomaintenance.configuration.stock.StockProperties;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -15,6 +16,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientAutoConfiguration;
 import org.springframework.boot.security.oauth2.client.autoconfigure.servlet.OAuth2ClientWebSecurityAutoConfiguration;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
+import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JAutoConfiguration;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
 import org.springframework.context.annotation.Bean;
@@ -44,6 +46,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -312,6 +315,69 @@ class StockClientTest {
                     assertTrue(context.getBean(RestClientStockClient.class).findMaterialById(materialId).isPresent());
                     stock.verify();
                 });
+    }
+
+    /**
+     * Con los hilos virtuales activos, la llamada a stock, con el interceptor que pone el token, corre
+     * en un hilo virtual del circuito ({@code stock-circuit-N}); sin ellos, en el pool de plataforma que
+     * trae Spring Cloud CircuitBreaker. Con la autoconfiguracion real de Resilience4j, que es la que
+     * aplica los customizers a la fabrica.
+     */
+    @Test
+    void theStockCallAndItsTokenRunOnAVirtualThreadOnlyWithVirtualThreadsOn() {
+        Thread withVirtualThreads = threadOfAStockCall(true);
+        assertTrue(withVirtualThreads.isVirtual(), withVirtualThreads.getName());
+        assertTrue(withVirtualThreads.getName().startsWith("stock-circuit-"), withVirtualThreads.getName());
+
+        Thread withoutVirtualThreads = threadOfAStockCall(false);
+        assertFalse(withoutVirtualThreads.isVirtual(), withoutVirtualThreads.getName());
+    }
+
+    private static Thread threadOfAStockCall(boolean virtualThreads) {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer stock = MockRestServiceServer.bindTo(builder).build();
+        UUID materialId = UUID.randomUUID();
+        AtomicReference<Thread> thread = new AtomicReference<>();
+        stock.expect(requestTo("http://stock/api/v1/inventory/materials/" + materialId))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer service-account-token"))
+                .andRespond(request -> {
+                    thread.set(Thread.currentThread());
+                    return withSuccess("""
+                            {"id":"%s","code":"GA70","name":"Ga70 dropper","unitOfMeasure":"ud","active":true}"""
+                            .formatted(materialId), MediaType.APPLICATION_JSON).createResponse(request);
+                });
+
+        new WebApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OAuth2ClientAutoConfiguration.class,
+                        OAuth2ClientWebSecurityAutoConfiguration.class, Resilience4JAutoConfiguration.class))
+                .withUserConfiguration(StockClientConfiguration.class, StockCircuitBreakerExecutorConfiguration.class,
+                        ResourceServerSecurity.class)
+                .withBean(RestClient.Builder.class, () -> builder)
+                .withBean(CircuitBreakerRegistry.class, CircuitBreakerRegistry::ofDefaults)
+                .withBean(TimeLimiterRegistry.class, TimeLimiterRegistry::ofDefaults)
+                .withPropertyValues(
+                        "spring.threads.virtual.enabled=" + virtualThreads,
+                        "app.stock.enabled=true",
+                        "app.stock.base-url=http://stock",
+                        "app.stock.client-registration-id=mto-services",
+                        "spring.security.oauth2.client.registration.mto-services.client-id=mto-maintenance-svc",
+                        "spring.security.oauth2.client.registration.mto-services.client-secret=secret",
+                        "spring.security.oauth2.client.registration.mto-services.authorization-grant-type=client_credentials",
+                        "spring.security.oauth2.client.registration.mto-services.provider=keycloak",
+                        "spring.security.oauth2.client.provider.keycloak.token-uri=http://auth/token")
+                .run(context -> {
+                    ClientRegistration registration = context.getBean(ClientRegistrationRepository.class)
+                            .findByRegistrationId("mto-services");
+                    OAuth2AccessToken token = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER,
+                            "service-account-token", Instant.now(), Instant.now().plus(Duration.ofHours(1)));
+                    context.getBean(OAuth2AuthorizedClientService.class).saveAuthorizedClient(
+                            new OAuth2AuthorizedClient(registration, "mto-maintenance", token),
+                            new TestingAuthenticationToken("mto-maintenance", null));
+
+                    assertTrue(context.getBean(RestClientStockClient.class).findMaterialById(materialId).isPresent());
+                    stock.verify();
+                });
+        return thread.get();
     }
 
     /** Como la del servicio: {@code @EnableWebSecurity} y su propia cadena, que es lo que trae el gestor por defecto. */

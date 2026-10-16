@@ -32,7 +32,7 @@ class JpaEntityModelTest {
         // UNICAMENTE el manejador de datos maestros, asi que una gemela _aud se quedaria vacia y se
         // leeria como "nunca cambio". El historial del aislador vive en mto-configuration.
         // OutboxMessage tampoco: la escribe solo el relay y su historia es ella misma (V13). Ni
-        // BackgroundOperation (V20): la escriben sus sentencias nativas y es su propio historico.
+        // BackgroundOperation (V21): la escriben sus sentencias nativas y es su propio historico.
         List<Class<?>> notAudited = List.of(MaintenanceStatusHistory.class, InboxMessage.class, MaintenanceTeam.class,
                 MaintenanceTaskType.class, InspectionTemplate.class, InspectionTemplateItem.class,
                 CatenaryAssetSwitch.class, CrewPerson.class, FleetVehicle.class, BackgroundOperation.class, AuditableEntity.class,

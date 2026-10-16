@@ -1,7 +1,7 @@
 -- La dotacion y los vehiculos de un turno (docs/02-domain-model.md, "Shift crew and vehicles").
 --
 -- Un turno lleva su jefe de equipo, su supervisor, sus linemen (de 2 a 6 para iniciarlo) y sus
--- vehiculos, todos de mto-resources (crew_person, fleet_vehicle de V18). Al cerrar, cada vehiculo dice
+-- vehiculos, todos de mto-resources (crew_person, fleet_vehicle de V19). Al cerrar, cada vehiculo dice
 -- donde se ha podido dejar: no hay base fija. Las tablas nuevas tienen su gemela _aud: el turno se
 -- audita, y quien iba esa noche y en que es historia del turno.
 

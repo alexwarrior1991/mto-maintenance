@@ -132,7 +132,8 @@ The `RG-01…RG-18` (general revision) and `RP-01…RP-12` (particular revision)
 plan, read-only: `functionalGroup` (structural supports, overhead conductors, devices and switches,
 anchorage components, turnouts and section insulators, diagnostics, none),
 `standardMinutesPerUnit` + `unit` (`UNIT`, `SPAN`, `KM`, `DEFECT`, `PROFILE`), `fixedMinutes`
-("60 min + 3/km"), `requiresFullPossession` (groups 3, 5 and `RP-12`), `diagnostic` (group 6).
+("60 min + 3/km"), `requiresFullPossession` (groups 3, 5 and `RP-12`), `diagnostic` (group 6). The
+minutes per unit are those of the plan's task sheet (`V18`, see `03-database.md`).
 
 ## Shifts (`MaintenanceShift`) and teams (`MaintenanceTeam`)
 
@@ -169,7 +170,7 @@ JSON carries them in `shift`).
 
 A team is either **local**, created and edited here (`POST`/`PUT /teams`) with its base and vehicle
 as text and the execution packages it covers (`V3` seeds `A` Rishpon and `B` Mishmar, without
-packages), or **synchronized** from `mto-resources` (`V18`, `synchronizedFromResources`,
+packages), or **synchronized** from `mto-resources` (`V19`, `synchronizedFromResources`,
 `sourceService = mto-resources` + `sourceEntityId`), which owns the people, the organization tree and
 the fleet. A synchronized team carries its leader (the team leader, foreman of its vehicle), its
 supervisor (the head of the nearest supervision above it there), its linemen (`members`; the leader
@@ -191,7 +192,7 @@ says where. Only teams of discipline `MAINTENANCE` arrive; construction ones are
 
 ## Shift crew and vehicles
 
-A shift carries who works that night and in what, all from `mto-resources` (`V19`): its `teamLeader`
+A shift carries who works that night and in what, all from `mto-resources` (`V20`): its `teamLeader`
 (the foreman), its `supervisor` (who has it in charge; one supervisor has several shifts at once), its
 `linemen` and its `vehicles`. They may differ from the team's (a substitute, someone on leave). At
 creation, what the request does not say of a synchronized team is copied from it: leader,
@@ -376,10 +377,10 @@ and `GET /operations/{id}` gives the same body when it ends.
 
 - **The scarce resource is the connection, not the thread.** Tomcat, `@Scheduled` and the RabbitMQ
   listeners run on virtual threads (`spring.threads.virtual.enabled`), so every request waiting on the
-  database holds a Hikari connection and the pool (`spring.datasource.hikari.maximum-pool-size`, 20)
+  database holds a Hikari connection and the pool (`DATABASE_POOL_MAX_SIZE`, 10)
   is the limit of concurrency. A running operation holds one too, so there is a cap of live
   operations (`QUEUED` or `RUNNING` with a fresh beat) for the whole deployment,
-  `app.operations.max-active` (8), chosen with the pool in view and decided inside the `insert` that
+  `app.operations.max-active` (4), chosen with the pool in view and decided inside the `insert` that
   registers the operation, under an advisory lock: with three replicas an in-memory semaphore would
   be three times the cap. Beyond it, 429 `OPS-429` with `Retry-After`.
 - **One at a time per scope.** Operations of one scope (`EP-<package>`, or `order-<id>` without a

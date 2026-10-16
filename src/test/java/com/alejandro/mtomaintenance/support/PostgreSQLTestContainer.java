@@ -40,7 +40,7 @@ public abstract class PostgreSQLTestContainer {
         registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.flyway.enabled", () -> "true");
-        // Cada contexto que Spring cachea entre clases guarda su pool abierto. Con el de produccion (20)
+        // Cada contexto que Spring cachea entre clases guarda su pool abierto. Con el de produccion (10)
         // una docena de contextos pasa de los 100 max_connections de PostgreSQL y los siguientes no
         // arrancan ("too many clients"); a los tests les sobran unas pocas.
         registry.add("spring.datasource.hikari.maximum-pool-size", () -> "5");

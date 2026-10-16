@@ -22,11 +22,10 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
       DATABASE_USERNAME: ${DATABASE_USERNAME:?DATABASE_USERNAME must be set}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD must be set}
-      # Virtual threads: the Hikari pool is the limit of concurrency, and the deployment-wide cap of
-      # background operations is chosen with it in view.
+      DATABASE_POOL_MAX_SIZE: ${DATABASE_POOL_MAX_SIZE:-10}
       SPRING_THREADS_VIRTUAL_ENABLED: ${SPRING_THREADS_VIRTUAL_ENABLED:-true}
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:-20}
-      APP_OPERATIONS_MAX_ACTIVE: ${APP_OPERATIONS_MAX_ACTIVE:-8}
+      # Cada operacion de fondo en marcha retiene una conexion: el tope se elige con el pool a la vista.
+      APP_OPERATIONS_MAX_ACTIVE: ${APP_OPERATIONS_MAX_ACTIVE:-4}
       SPRING_FLYWAY_ENABLED: ${SPRING_FLYWAY_ENABLED:-true}
       SPRING_RABBITMQ_HOST: ${SPRING_RABBITMQ_HOST:-host.docker.internal}
       SPRING_RABBITMQ_PORT: ${SPRING_RABBITMQ_PORT:-5672}

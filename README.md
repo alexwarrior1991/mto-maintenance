@@ -49,7 +49,7 @@ without a token.
 
 Sizing: Tomcat, the schedulers and the listeners run on virtual threads
 (`SPRING_THREADS_VIRTUAL_ENABLED`, `true`), so the limit of concurrency is the database pool,
-`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` (`20`). `APP_OPERATIONS_MAX_ACTIVE` (`8`), the background
+`DATABASE_POOL_MAX_SIZE` (`10`). `APP_OPERATIONS_MAX_ACTIVE` (`4`), the background
 operations alive at once in the whole deployment, each holding a connection while it runs, is chosen
 with it in view, and `APP_STOCK_SYNC_PARALLELISM` (`4`) is how many material lines of one order talk
 to `mto-stock` at once.
@@ -90,8 +90,9 @@ docker compose up -d --build
 
 Flyway, `src/main/resources/db/migration`. Hibernate validates the schema on boot, so every change
 is a new `V<n>__*.sql`. `V1` creates the schema, `V2` the inbox, `V3` seeds the catalogues (task
-types `RG-01…RP-12`, teams A/B, inspection templates), `V4` the Envers tables; `V18` and `V19` the
-snapshots of `mto-resources` and the crew and vehicles of a shift, `V20` the background operations.
+types `RG-01…RP-12`, teams A/B, inspection templates), `V4` the Envers tables; `V18` the minutes of
+the task sheet; `V19` and `V20` the snapshots of `mto-resources` and the crew and vehicles of a
+shift, `V21` the background operations.
 Details in [`docs/03-database.md`](docs/03-database.md).
 
 ## Master data from `mto-configuration`

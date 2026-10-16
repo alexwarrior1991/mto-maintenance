@@ -12,9 +12,9 @@ with millimetre precision), quantities `numeric(19,6)`.
 `functional_group`, `task_unit`, `inspection_kind`, `inspection_result`, `check_item_result`,
 `defect_severity`, `defect_status`, `stock_sync_status`, `inbox_message_status`,
 `section_insulator_installation` (`V7`), `stock_request_type` (`V12`), `disconnector_drive_type` (`V16`),
-`background_operation_status` (`V20`). Values match the Java enums one to one; adding a value is a
+`background_operation_status` (`V21`). Values match the Java enums one to one; adding a value is a
 migration (`ALTER TYPE … ADD VALUE`). The statuses, categories and mobilities of `mto-resources`
-(`V18`) are `varchar` on purpose: they are another service's, and a value added there breaks nothing
+(`V19`) are `varchar` on purpose: they are another service's, and a value added there breaks nothing
 here.
 
 ## Sequences
@@ -27,7 +27,7 @@ yearly reset.
 
 | Table | Purpose | Notable constraints |
 |---|---|---|
-| `maintenance_team` (+ `maintenance_team_execution_package`) | Teams (local, like the seeded A/B, or synchronized from `mto-resources` since `V18`) and the EPs they cover | `uq code` |
+| `maintenance_team` (+ `maintenance_team_execution_package`) | Teams (local, like the seeded A/B, or synchronized from `mto-resources` since `V19`) and the EPs they cover | `uq code` |
 | `maintenance_task_type` | `RG`/`RP` catalogue | `uq code`, minutes ≥ 0 |
 | `inspection_template`, `inspection_template_item` | Checklists per asset type | `uq (asset_type, version)`, `uq (template_id, code)`, `min ≤ max` |
 | `catenary_asset` | Assets | `uq code`, `uq (source_service, source_entity_id)`, source columns together, `start_kp ≤ end_kp`, `track_kind` only and always on `TRACK_SECTION`, interval > 0 |
@@ -55,18 +55,19 @@ Indexes follow the API filters: asset `(track_id, start_kp)`, `(type, enabled)`;
 `inbox_message`: copy of the `mto-stock` table. Unique `(message_id, source_service)`, `payload`
 as `json` (not `jsonb`, so the bytes keep matching `payload_hash`), statuses
 `RECEIVED`/`PROCESSING`/`PROCESSED`/`FAILED`, attempts and last error. One table for both consumed
-channels: `source_service` is `mto-configuration` for the master data and, since `V18`,
+channels: `source_service` is `mto-configuration` for the master data and, since `V19`,
 `mto-resources` for its people, teams and vehicles.
 
 ## Seeds (`V3`)
 
 - `maintenance_team`: `A` (Team A - Rishpon) and `B` (Team B - Mishmar), with their base and vehicle
   as text. No migration seeds their execution packages: `maintenance_team_execution_package` starts
-  empty for them (a local team gets its packages through `POST`/`PUT /teams`), and since `V18` a team
+  empty for them (a local team gets its packages through `POST`/`PUT /teams`), and since `V19` a team
   gets them from `mto-resources` when it is adopted, which also empties its base: a synchronized team
   has none.
-- `maintenance_task_type`: the 30 codes of the OCS plan with functional group, standard minutes,
-  unit, fixed minutes, `requires_full_possession` and `is_diagnostic`.
+- `maintenance_task_type`: the 30 codes of the OCS plan with functional group, standard minutes
+  (those of the task sheet since `V18`), unit, fixed minutes, `requires_full_possession` and
+  `is_diagnostic`.
 - `inspection_template` v1 for `PROFILE` (14 items: pole, foundation, cantilever, insulators,
   steady arm, height, stagger, droppers, wear, …), `DISCONNECTOR` and `SECTION_INSULATOR`.
   Thresholds are indicative; engineering fixes them by inserting a new version and deactivating
@@ -217,7 +218,36 @@ until the next event of each disconnector (a republish).
 it **catenary isolators**, the disconnector itself (blades, jaws, alignment and two operations), and it
 is now "Catenary isolators (particular revision)".
 
-## Snapshots of `mto-resources` (`V18`)
+## Minutes of the task types (`V18`)
+
+`V3` seeded orientative minutes where it had none; the task sheet of the plan
+(`mainteinance_inspection_element`, "Inspection / Verification (minutes)") fixes them, and 19 of the
+30 did not match. `V18` sets `standard_minutes_per_unit` to the sheet's number, keeping each type's
+`unit`, which is how the catalogue already read the ones that matched: per unit (`UNIT`, `SPAN`,
+`PROFILE`, `DEFECT`, counted once per task) the time of the element, and per kilometre (`KM`) per km
+of track, like `RG-08` and `RG-10`, which were 3 in both. `fixed_minutes` is not in the sheet and
+stays.
+
+| Code | Before | Now | | Code | Before | Now |
+|---|---|---|---|---|---|---|
+| `RG-02` | 6 | 4 | | `RP-01` | 10 | 4 |
+| `RG-03` | 30 | 20 | | `RP-02` | 45 | 20 |
+| `RG-04` | 45 | 20 | | `RP-03` | 60 | 20 |
+| `RG-06` | 20 | 15 | | `RP-04` | 30 | 15 |
+| `RG-09` | 20 | 15 | | `RP-05` | 20 | 3 |
+| `RG-12` (per span) | 5 | 3 | | `RP-06` | 45 | 20 |
+| `RG-13` | 5 | 2 | | `RP-07` | 10 | 20 |
+| `RG-14` (per km) | 2 | 3 | | `RP-08` | 5 | 4 |
+| `RG-17` (per km) | 2 | 3 | | `RP-09` (per profile) | 15 | 3 |
+| `RG-18` (per km) | 5 | 45 | | | | |
+
+The other 11 already matched. The "10 km/day" vegetation rate of `RG-02` and `RP-01` is not a time per
+unit and is not carried. Tasks store no minutes, so the estimate of existing orders changes with the
+migration. With the default types, a profile is now 34 min instead of 40 (`RG-08` and `RG-10`, once
+per track, do not change), a section insulator 80 with turnouts and 40 without (180 and 75 before), and
+a disconnector 20 (10 before), plus 20 with a motor (45) and 15 for a surge arrester (20).
+
+## Snapshots of `mto-resources` (`V19`)
 
 The people, teams and vehicles of `mto-resources` (`06-messaging.md`, "Consumed: resources"), kept
 as the snapshot a shift needs, like `catenary_asset` for the infrastructure. All written only with
@@ -248,7 +278,7 @@ Envers would not see those writes, and the history lives in `mto-resources`. The
 - `maintenance_team_execution_package` (from `V1`) is now also written by the team event, replaced
   whole like the members.
 
-## Shift crew and vehicles (`V19`)
+## Shift crew and vehicles (`V20`)
 
 - `maintenance_shift` gains `team_leader_person_id` and `supervisor_person_id` (FKs to `crew_person`,
   `on delete restrict`; partial index on the leader where set), also in `maintenance_shift_aud`.
@@ -267,7 +297,7 @@ The double-booking check (`02-domain-model.md`) reads these tables by `shift_dat
 `(shift_date, team_id)` index of `V1` serves it, and the advisory locks per vehicle and person, not a
 constraint, keep two shifts saved at once apart.
 
-## Background operations (`V20`)
+## Background operations (`V21`)
 
 `background_operation`: the operations answered with 202 (`02-domain-model.md`), the same table as
 `V4` of `mto-resources`, copied like the outbox. `id`, `kind` (`GENERATE_TASKS`), `scope`
@@ -289,6 +319,6 @@ own history, and the purge deletes what finished more than `app.operations.reten
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`
 twins of the nine audited entities plus `maintenance_task_task_type_aud` (and, since `V5`,
-`maintenance_shift_track_aud`, since `V6` `maintenance_shift_disconnector_aud`, and since `V19`
+`maintenance_shift_track_aud`, since `V6` `maintenance_shift_disconnector_aud`, and since `V20`
 `maintenance_shift_vehicle_aud`, the tenth audited entity, and `maintenance_shift_lineman_aud`). See
 `07-auditing.md`.

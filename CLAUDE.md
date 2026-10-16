@@ -48,6 +48,9 @@ cd ../mto-platform && docker compose --profile all up -d && ./keycloak/apply-par
   in every profile, so schema changes always go through a new migration. A migration that changes a
   column on one of the audited tables must change its `<table>_aud` twin in the same migration.
 - Swagger UI: `http://localhost:8083/swagger-ui.html` (`dev` profile); OpenAPI JSON: `/v3/api-docs`.
+- Virtual threads are on (`SPRING_THREADS_VIRTUAL_ENABLED`, see `docs/01-architecture.md`, Threads):
+  the limit is the connection pool (`DATABASE_POOL_MAX_SIZE`, 10), not the threads; `outbox-dispatch`
+  stays one platform thread on purpose.
 - Profiles: `dev`, `test`, `prod`, selected via `SPRING_PROFILES_ACTIVE`. Local port is **8083**
   (`dev`); the container listens on 8080 and `mto-platform` publishes it on 8083.
 
@@ -127,10 +130,10 @@ minutes that feed `WorkloadEstimator`; by default groups 1, 2 and 4 on a profile
 disconnector plus `RP-06` when its `driveType` (`V16`) is `MOTOR` and `RG-06` when its
 `disconnectorFunction` (`V17`) is `SurgeA`, a surge arrester).
 A `MaintenanceTeam` is local (edited here, `A`/`B` seeded) or synchronized from `mto-resources`
-(`V18`: leader, supervisor, linemen, packages and default vehicle; no base), which adopts the local
+(`V19`: leader, supervisor, linemen, packages and default vehicle; no base), which adopts the local
 team of its code on its first event; from then on it is read-only here (`PUT` is 409 `TEA-001`).
 Tasks are executed inside a `MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one
-or more tracks) with its crew and vehicles of `mto-resources` (`V19`, copied from a synchronized team
+or more tracks) with its crew and vehicles of `mto-resources` (`V20`, copied from a synchronized team
 when not given). `ShiftCrew` keeps them in rule, 409 `SHF-001`: at most 6 linemen, the leader not
 among them and not a `WORKER`, everyone active, every vehicle active and available, one that neither
 moves by itself nor is portable with a towing one, the crew within the seats (only when every
@@ -170,7 +173,7 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
   `disabled_locally`; `deactivateByTrack` advances the watermark of what it disables (the sequence of
   `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle` and the
   synchronized team (`upsertFromResources`, watermark = the `sequenceNumber` of the `mto-resources`
-  outbox, not its `version`), and for `background_operation` (`V20`), whose cap and turn per scope
+  outbox, not its `version`), and for `background_operation` (`V21`), whose cap and turn per scope
   are decided by row count inside the writing statement.
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
   `CHECK` that exactly one is set.
@@ -231,7 +234,9 @@ outbox bean exists.
 `StockClient` (interface in `application/service`) is the only door to `mto-stock`.
 `RestClientStockClient` authenticates with the Keycloak service account `mto-maintenance-svc`
 (`client_credentials`, audience `mto-stock-api`) and runs every call inside the Spring Cloud
-circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`). Its token manager
+circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`; with virtual threads
+on, `StockCircuitBreakerExecutorConfiguration` gives each call a virtual thread, because the breaker
+runs it on its own executor, a platform pool the flag does not reach). Its token manager
 is built by `StockClientConfiguration` itself, never taken from the context: the one Spring Security
 registers by default needs an HTTP request in course, and these calls run on the breaker's thread or
 the scheduled retry (`servletRequest cannot be null`, every line `FAILED`). A failure is one
@@ -292,7 +297,7 @@ and the columns the PDF leaves out.
 ### Auditing
 
 Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track, blocking-disconnector and lineman collections),
-`MaintenanceShiftVehicle` (a vehicle of a shift and where it was left, `V19`), `MaintenanceTaskCheckItem`,
+`MaintenanceShiftVehicle` (a vehicle of a shift and where it was left, `V20`), `MaintenanceTaskCheckItem`,
 `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`, `MaintenanceMaterialUsage`.
 Not audited on purpose: `MaintenanceStatusHistory`
 (append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `CrewPerson`
@@ -314,7 +319,7 @@ A background operation keeps its request's source, URI and correlation in its re
 - `PostgreSQLTestContainer` (in `support/`) starts `postgres:17-alpine` with Testcontainers, or uses
   `TEST_DATABASE_URL`/`TEST_DATABASE_USERNAME`/`TEST_DATABASE_PASSWORD` when set (no Docker needed).
   It caps the Hikari pool at 5 connections: every context Spring caches keeps its pool open, and with
-  the production 20 a dozen contexts pass PostgreSQL's 100 `max_connections`.
+  the production 10 a dozen contexts pass PostgreSQL's 100 `max_connections`.
 - `MtoMaintenanceApplicationTests` boots the whole context against a real PostgreSQL and asserts
   every business service bean is present, `spring.threads.virtual.enabled` and that the background
   executor runs on virtual threads with the caller's identity.
