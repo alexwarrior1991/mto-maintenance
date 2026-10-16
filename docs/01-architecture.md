@@ -23,11 +23,12 @@ com.alejandro.mtomaintenance
 ├── infrastructure
 │   ├── persistence.entity | .repository | .specification | .audit
 │   ├── web.controller | web.exception
-│   ├── messaging.rabbitmq  consumer of the master-data channel; names of the own exchange
+│   ├── messaging.rabbitmq  consumers of the master-data and resources channels; names of the own exchange
 │   ├── messaging.outbox    the outbox that publishes the own events (copy of mto-configuration's)
 │   ├── export              XlsxReportExporter (POI) and PdfReportExporter (OpenPDF)
 │   └── stock               RestClientStockClient
-└── configuration           security, rabbitmq, messaging signature, outbox, events (the daily preventive check), stock client, JPA auditing, OpenAPI
+└── configuration           security, rabbitmq, messaging signature, outbox, events (the daily preventive check), async (the
+                            virtual-thread executor and the background operations), stock client and stock sync, JPA auditing, OpenAPI
 ```
 
 Rules that keep the layers honest:
@@ -36,7 +37,8 @@ Rules that keep the layers honest:
 - Services build entities with their Lombok builders and validate invariants through the domain
   package; `DomainGuard.domain(...)` converts an `IllegalArgumentException` into a 400.
 - Repositories with native SQL (`upsertFromMasterData`, `deactivateFromMasterData`,
-  `deactivateByTrack`, the inbox) are the only place where a watermark or an idempotency key is
+  `deactivateByTrack`, the `upsertFromResources` of people, vehicles and teams, the inbox, the
+  background operations) are the only place where a watermark, an idempotency key or a cap is
   checked, and always inside the writing statement.
 - Every state change of an order or a defect goes through `StatusHistoryService`, which records
   who changed what and why.
@@ -50,6 +52,8 @@ Rules that keep the layers honest:
 | Direction | Peer | Mechanism |
 |---|---|---|
 | Inbound | `mto-configuration` | RabbitMQ master-data events → inbox → asset upserts |
+| Inbound | `mto-resources` | RabbitMQ person, team and vehicle events → inbox → snapshot upserts |
+| Outbound | `mto-notification`, `mto-resources` | Own events through the outbox (`mto.maintenance.exchange`); `mto-resources` reads the shifts |
 | Outbound | `mto-stock` | REST, service account `mto-maintenance-svc`, circuit breaker `stock` |
 | Inbound | `mto-gateway` / browser | JWT of the `mto` realm with audience `mto-maintenance-api` |
 
@@ -59,7 +63,12 @@ Rules that keep the layers honest:
   `/api/v1/maintenance/**`; `@PreAuthorize` adds `maintenance-supervise` on the supervision actions.
 - **Errors**: `GlobalExceptionHandler` → `ApiErrorResponse` with a stable `errorCode`
   (`BusinessErrorCodeResolver`): `ORD-404`, `TRN-001`, `AST-001`, `MAT-001`, `INS-001`, `SHF-001`,
-  `STK-001`, `STK-422`, `STK-503`, `VAL-001`, `REQ-VALIDATION`, `AUTH-401/403`.
+  `TEA-001`, `STK-001`, `STK-422`, `STK-503`, `OPS-429`, `VAL-001`, `REQ-VALIDATION`, `AUTH-401/403`.
+  A background operation that fails stores the same status and code (`ApiOperationErrorTranslator`).
+- **Threads**: Tomcat, `@Scheduled` and the RabbitMQ listeners on virtual threads
+  (`spring.threads.virtual.enabled`); the Hikari pool (`maximum-pool-size`) is the limit, and the
+  background work runs on `AsyncConfiguration`'s executor, a virtual thread per task with the
+  caller's `SecurityContext` and MDC.
 - **Pagination**: `PageResponse<T>` with `PageMetadataResponse`.
 - **Observability**: Actuator health/info public; metrics and prometheus behind `ops-metrics`;
   traces exported by OTLP, including the trace propagated in the RabbitMQ headers.

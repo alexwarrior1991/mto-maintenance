@@ -14,13 +14,21 @@ Hibernate Envers, `audit_revision` as the custom revision entity (instant, usern
 source `HTTP`/`MESSAGING`/`SYSTEM`). Audited: `CatenaryAsset`, `MaintenanceOrder`,
 `MaintenanceTask` (with `maintenance_task_task_type_aud`), `MaintenanceTaskCheckItem`,
 `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`,
-`MaintenanceMaterialUsage`, `MaintenanceShift`.
+`MaintenanceMaterialUsage`, `MaintenanceShift` (with its tracks, its blocking disconnectors and,
+since `V19`, its linemen, `maintenance_shift_lineman_aud`) and `MaintenanceShiftVehicle` (`V19`, a
+vehicle of a shift with where it was left). Who went out that night and in what is history of the
+shift: its leader, supervisor and linemen are in its revisions, and parking a vehicle at close is a
+revision of that vehicle line, not of the shift.
 
 Not audited, on purpose: `MaintenanceStatusHistory` (append-only, a twin would duplicate it),
 `InboxMessage` and `CatenaryAssetSwitch` (written only from master data, the twin would sit empty
 and read as "never changed"; the switches' history lives in `mto-configuration`), `OutboxMessage`
 (written only by the outbox; its history is itself), `MaintenanceTeam`,
-`MaintenanceTaskType`, `InspectionTemplate`/`Item` (catalogues managed by migrations).
+`MaintenanceTaskType`, `InspectionTemplate`/`Item` (catalogues managed by migrations; a team
+synchronized from `mto-resources` is written by native SQL anyway), `CrewPerson` and `FleetVehicle`
+(snapshots of `mto-resources` written only with native SQL, like `CatenaryAssetSwitch`: a twin would
+sit empty; their history lives in `mto-resources`) and `BackgroundOperation` (`V20`: written only by
+its native statements, its own history, and purged).
 `@Audited` goes on each entity, never on `AuditableEntity`; `JpaEntityModelTest` guards the
 partition and `EnversAuditDataJpaTest` checks the revisions end to end (it disables the test
 transaction on purpose: Envers writes at commit).
@@ -38,7 +46,23 @@ revision either. An asset that only arrived by master data therefore has no hist
 `@Audited(targetAuditMode = NOT_AUDITED)`, like the blocking disconnectors of a shift, so a
 revision reads the asset as it is now. No request changes the asset of any of them. Before that,
 the history of an order, an inspection or a defect on a profile, a disconnector or a section
-insulator answered 500.
+insulator answered 500. The crew of a shift is read the same way: its `teamLeader` and `supervisor`
+(columns of `maintenance_shift_aud`), its `linemen` (the join is audited, the person is not) and the
+`vehicle` of each `MaintenanceShiftVehicle` are `NOT_AUDITED` targets, so a revision shows the
+snapshot of `mto-resources` as it is now.
+
+The vehicles of a shift are ordered by `id` (`@OrderBy("id ASC")`), not by `createdAt`: Envers
+applies the `@OrderBy` of a collection to its `_aud` table too, and `maintenance_shift_vehicle_aud`
+has no audit columns, so ordering by `createdAt` would make every read of a shift's revision fail.
+What is shown is ordered by fleet code (`MaintenanceShift.vehiclesByCode()`: the response, the
+events and the report).
+
+A background operation (`02-domain-model.md`) writes in another thread after its request has
+answered, and still records the revision as that request: `BackgroundOperationContext` carries what
+the request gave (its `X-Correlation-Id`, method, URI, address, user agent), and
+`AuditRevisionListener` stamps it with source `HTTP`; the `SecurityContext` is copied to the virtual
+thread, so the author is the person who asked. The events it publishes carry the same
+`correlationId` (`MessageContextResolver`).
 
 History is read at `GET /<resource>/{id}/revisions` (`assets`, `orders`, `shifts`, `inspections`,
 `defects`), paged, each entry with the revision metadata and the entity as it was.

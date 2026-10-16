@@ -19,6 +19,17 @@
 - Own events for `mto-notification` through an outbox (`V13`): orders, defects, inspections,
   shifts, material lines, assets disabled here and the daily `preventive.due-soon`, with the
   actor and the correlation of the request (`06-messaging.md`).
+- Teams, crews and vehicles of `mto-resources` (`V18`, `V19`): its people, teams and vehicles
+  consumed through the inbox (`mto.maintenance.resources.queue`), local teams adopted by code and
+  read-only once synchronized (`TEA-001`), the crew and the vehicles of each shift with the
+  `CrewComposition` and `ShiftCrew` rules, where each vehicle was left at close, the crew in the
+  shift events and report, and `shift.cancelled`.
+- Virtual threads and background operations (`V20`): Tomcat, `@Scheduled` and the listeners on
+  virtual threads with the Hikari pool as the limit, `BudgetedOperations` with a deployment-wide cap
+  (`OPS-429`), `Prefer: respond-async` on `tasks/generate` (202, `GET /operations/{id}`), and the
+  generation of a package waiting for its lock without holding a connection.
+- Order transitions talk to `mto-stock` for all their lines at once, on virtual threads, under one
+  deadline; a line cut by it is `FAILED` and retried right after commit.
 
 ## Next
 

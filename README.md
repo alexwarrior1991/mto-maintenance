@@ -8,7 +8,8 @@ It is the third service of the MTO domain, next to
 [`mto-configuration`](https://github.com/alexwarrior1991/mto-configuration) (infrastructure master
 data) and [`mto-stock`](https://github.com/alexwarrior1991/mto-stock) (warehouse), published through
 [`mto-gateway`](https://github.com/alexwarrior1991/mto-gateway) and deployed with
-[`mto-platform`](https://github.com/alexwarrior1991/mto-platform).
+[`mto-platform`](https://github.com/alexwarrior1991/mto-platform). The teams, crews and vehicles of
+its shifts come from `mto-resources` (people, organization and fleet).
 
 Functional and technical documentation lives in [`docs/`](docs/README.md).
 
@@ -17,7 +18,9 @@ Functional and technical documentation lives in [`docs/`](docs/README.md).
 - JDK 25
 - PostgreSQL 17 (any 16+ works; `mto-platform` runs 17)
 - Docker, for the Testcontainers-backed tests and for the local environment
-- RabbitMQ, Keycloak and `mto-stock`, all provided by `mto-platform`
+- RabbitMQ, Keycloak and `mto-stock`, all provided by `mto-platform`; `mto-resources` for the
+  synchronized teams, crews and vehicles (without it, local teams and shifts without a crew work as
+  before)
 
 ## Configuration
 
@@ -38,8 +41,18 @@ no events out), `APP_OUTBOX_ENABLED=false` keeps writing the events and stops pu
 `APP_EVENTS_PREVENTIVE_DUE_SOON_ENABLED=false` switches the daily preventive check off,
 `APP_STOCK_ENABLED=false` starts without `mto-stock` (material lines stay `NOT_REQUESTED`),
 `APP_STOCK_SYNC_RETRY_ENABLED=false` stops retrying the material lines stock did not answer (`FAILED`)
-every `APP_STOCK_SYNC_RETRY_INTERVAL` (`PT5M`), `APP_SECURITY_EXPOSE_API_DOCS=true` publishes Swagger
+every `APP_STOCK_SYNC_RETRY_INTERVAL` (`PT5M`), `APP_STOCK_SYNC_IMMEDIATE_RETRY=false` leaves the lines
+an order transition could not settle within `APP_STOCK_SYNC_DEADLINE` (`15s`) to that round instead
+of retrying them right after commit, `APP_RABBITMQ_RESOURCES_LISTENER_ENABLED=false` stops consuming
+`mto-resources` (its queue is still declared), `APP_SECURITY_EXPOSE_API_DOCS=true` publishes Swagger
 without a token.
+
+Sizing: Tomcat, the schedulers and the listeners run on virtual threads
+(`SPRING_THREADS_VIRTUAL_ENABLED`, `true`), so the limit of concurrency is the database pool,
+`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` (`20`). `APP_OPERATIONS_MAX_ACTIVE` (`8`), the background
+operations alive at once in the whole deployment, each holding a connection while it runs, is chosen
+with it in view, and `APP_STOCK_SYNC_PARALLELISM` (`4`) is how many material lines of one order talk
+to `mto-stock` at once.
 
 ## Spring profiles
 
@@ -77,8 +90,9 @@ docker compose up -d --build
 
 Flyway, `src/main/resources/db/migration`. Hibernate validates the schema on boot, so every change
 is a new `V<n>__*.sql`. `V1` creates the schema, `V2` the inbox, `V3` seeds the catalogues (task
-types `RG-01…RP-12`, teams A/B, inspection templates), `V4` the Envers tables. Details in
-[`docs/03-database.md`](docs/03-database.md).
+types `RG-01…RP-12`, teams A/B, inspection templates), `V4` the Envers tables; `V18` and `V19` the
+snapshots of `mto-resources` and the crew and vehicles of a shift, `V20` the background operations.
+Details in [`docs/03-database.md`](docs/03-database.md).
 
 ## Master data from `mto-configuration`
 
@@ -88,14 +102,27 @@ the service consumes the master-data events of `mto-configuration` through an id
 sections (`TRACK_SECTION`) are created through the API. See
 [`docs/06-messaging.md`](docs/06-messaging.md).
 
+## Teams, crews and vehicles from `mto-resources`
+
+The people, the teams and the vehicles come from `mto-resources` through the same idempotent inbox
+(`mto.maintenance.resources.queue`, bound to `mto.resources.{person,team,vehicle}.*`; this service is
+deployed first, because `mto-resources` publishes with `mandatory=true`). A maintenance team of
+`mto-resources` takes over the local team with the same code and is read-only here from then on (409
+`TEA-001`). A shift carries its team leader, supervisor, linemen and vehicles, copied from a
+synchronized team when not given: at most 6 linemen, and a leader with 2 to 6 linemen to start;
+vehicles available and towed when they do not move by themselves; nobody and no vehicle in two shifts
+of one night (409 `SHF-001`). Closing says where each vehicle was left, and `mto-resources` reads it
+from `shift.closed`. See [`docs/02-domain-model.md`](docs/02-domain-model.md) and
+[`docs/06-messaging.md`](docs/06-messaging.md).
+
 ## Events for `mto-notification`
 
 What happens here that deserves a notice — an order created or moved on, a defect opened or
-resolved, an inspection with a failed item, a shift started or closed, a material line the warehouse
-rejected or did not answer, an asset disabled here, the preventives about to fall due — is
-published as an event on the service's own exchange, `mto.maintenance.exchange`
-(`mto.maintenance.<entity>.<event>`), with who did it and under which `X-Correlation-Id`. The
-event is written in the same transaction as the change, into an outbox (`outbox_message`), and a
+resolved, an inspection with a failed item, a shift started, closed or cancelled (also read by
+`mto-resources`, to move its vehicles), a material line the warehouse rejected or did not answer,
+an asset disabled here, the preventives about to fall due — is published as an event on the
+service's own exchange, `mto.maintenance.exchange` (`mto.maintenance.<entity>.<event>`), with who
+did it and under which `X-Correlation-Id`. The event is written in the same transaction as the change, into an outbox (`outbox_message`), and a
 relay publishes it afterwards waiting for the broker's confirmation, so nothing is announced that
 did not happen and nothing is lost while RabbitMQ is down. `GET/POST /actuator/outbox` shows and
 redrives what is stuck. The contract and one JSON example per event are in
@@ -111,7 +138,9 @@ account `mto-maintenance-svc`, which needs `stock-read` and `stock-write` on `mt
 is left `FAILED`; when it answers no (not enough stock, a warehouse retired...) it is left `REJECTED`
 with the reason. `POST /orders/{id}/materials/{usageId}/sync` retries, and before consuming or
 releasing it asks `mto-stock` how the reservation is, so repeating never consumes twice
-([`docs/02-domain-model.md`](docs/02-domain-model.md)).
+([`docs/02-domain-model.md`](docs/02-domain-model.md)). An order transition talks to `mto-stock` for
+all its lines at once, under one deadline: a line that does not answer in time is left `FAILED`, the
+order goes on, and the line is retried right after the commit.
 
 ## Security
 
@@ -144,7 +173,10 @@ curl -s http://localhost:8083/api/v1/maintenance/orders -H "Authorization: Beare
 Swagger UI at `/swagger-ui.html`, OpenAPI at `/v3/api-docs` (open in `dev`, behind
 `APP_SECURITY_EXPOSE_API_DOCS` elsewhere). The resources and the transition rules are summarised in
 [`docs/04-rest-api.md`](docs/04-rest-api.md); `http/maintenance-api.http` walks through a complete
-preventive shift.
+preventive shift. `POST /orders/{id}/tasks/generate` with `Prefer: respond-async` answers 202 with a
+background operation when it does not finish within its wait (`GET /operations/{id}`, shown to whoever
+asked for it, `maintenance-supervise` or `ops-write`), or 429 `OPS-429` with `Retry-After` when too
+many are running.
 
 ## Actuator and tracing
 

@@ -16,12 +16,14 @@ Read `docs/` in order for the full domain and architecture context: `00-project-
 the source of truth; `03-database.md` documents the schema and should be checked before changing
 persistence code.
 
-⚠️ `mto-stock` and `mto-configuration` are **independent sibling repositories**, not modules of this
-one. Infrastructure master data (stations, tracks, profiles, disconnectors, section insulators)
-belongs to `mto-configuration` and arrives here as events; the materials catalogue and the stock
-belong to `mto-stock` and are reached through its REST API. **Nothing of either is re-modelled
+⚠️ `mto-stock`, `mto-configuration` and `mto-resources` are **independent sibling repositories**, not
+modules of this one. Infrastructure master data (stations, tracks, profiles, disconnectors, section
+insulators) belongs to `mto-configuration` and arrives here as events; the materials catalogue and the
+stock belong to `mto-stock` and are reached through its REST API; the people, the organization and
+the fleet belong to `mto-resources` and arrive here as events. **Nothing of them is re-modelled
 here**: `catenary_asset` keeps only the snapshot a maintenance job needs (code, kp, track, station,
-sectioning) and every material line stores the `mto-stock` ids.
+sectioning), `crew_person`/`fleet_vehicle`/a synchronized `maintenance_team` only what a shift needs,
+and every material line stores the `mto-stock` ids.
 
 ⚠️ The local infrastructure (PostgreSQL, RabbitMQ, Keycloak, the trace collector, and `mto-stock`
 itself) is brought up by `mto-platform`. `compose.yaml` here holds **only the application**.
@@ -54,24 +56,35 @@ cd ../mto-platform && docker compose --profile all up -d && ./keycloak/apply-par
 Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`:
 
 - `domain/model` — framework-free rules: `OrderStateMachine`, `DefectStateMachine`,
-  `ShiftStateMachine`, `KilometricRange`, `Quantity`, `WorkloadEstimate`, `DomainValidations`.
+  `ShiftStateMachine`, `KilometricRange`, `Quantity`, `WorkloadEstimate`, `DomainValidations`,
+  `CrewComposition` (the copy of `mto-resources`' crew rule; returns the reason, does not throw).
   An `IllegalArgumentException` from here is turned into a 400 by `DomainGuard` in the services.
 - `application` — `dto` (one package per resource), `service` + `service.impl` (package-private
-  impls behind public interfaces; `MaintenanceLookups`, `ShiftRules`, `ChecklistRules`,
-  `MaterialStockSynchronizer` and `MaterialLineFactory` are shared helpers), `mapper` (MapStruct,
+  impls behind public interfaces; `MaintenanceLookups`, `ShiftRules`, `ShiftCrew`, `ChecklistRules`,
+  `MaterialStockSynchronizer` (with `StockLine`, the detached copy a line's stock conversation runs
+  on) and `MaterialLineFactory` are shared helpers; `BudgetedOperations` runs the background
+  operations; the `IncomingEvent*` pipeline, `IdempotentIncomingEventProcessor` →
+  `DispatchingIncomingEventHandler` → `ResourcesPersonHandler`/`ResourcesVehicleHandler`/
+  `ResourcesTeamHandler`, applies the events of `mto-resources`), `mapper` (MapStruct,
   **entity → response only**: entities are built in the services with their Lombok builders because
   MapStruct cannot call the protected constructors), `exception`.
 - `infrastructure` — `persistence.entity` (JPA), `persistence.repository` (Spring Data + native
-  upserts), `persistence.specification`, `persistence.audit` (Envers), `web.controller`,
-  `web.exception`, `messaging.rabbitmq` (the consumer and `MaintenanceRabbitMqNames`),
+  upserts), `persistence.specification`, `persistence.audit` (Envers, `BackgroundOperationContext`),
+  `web` (`PreferHeader`, `OperationResponses`), `web.controller`, `web.exception`
+  (`ApiOperationErrorTranslator` too), `messaging.rabbitmq` (the two consumers,
+  `MasterDataEventConsumer` and `ResourcesEventConsumer`, `ResourcesRabbitMqNames` and
+  `MaintenanceRabbitMqNames`),
   `messaging.outbox` (the outbox of the own events: a copy of `mto-configuration`'s `core/outbox`
   plus the envelope factory, `MessageContextResolver` and `OutboxDomainEventPublisher`), `stock`
   (the `RestClientStockClient`), `export` (the POI and OpenPDF writers).
-- `configuration` — security (Keycloak resource server), `rabbitmq`, `messaging` (signature and
-  signer), `outbox` (every outbox piece as a `@Bean`, gone with `app.rabbitmq.enabled=false`),
-  `events` (the daily `PreventiveDueSoonService` scheduler), `reports` (`ReportProperties`, the report
-  time zone), `stock` (`StockProperties`,
-  `StockClientConfiguration`), JPA auditing, OpenAPI.
+- `configuration` — security (Keycloak resource server), `rabbitmq` (both channels,
+  `ResourcesRabbitProperties`), `messaging` (signature and signer), `outbox` (every outbox piece as a
+  `@Bean`, gone with `app.rabbitmq.enabled=false`), `events` (the daily `PreventiveDueSoonService`
+  scheduler), `async` (`AsyncConfiguration`: the `applicationTaskExecutor`, a virtual thread per task
+  with the caller's `SecurityContext` and MDC through `MdcTaskDecorator`; `OperationsProperties`,
+  `app.operations.*`; `OperationsSchedulingConfiguration`, the heartbeat, abandon check and purge),
+  `reports` (`ReportProperties`, the report time zone), `stock` (`StockProperties`,
+  `StockClientConfiguration`, `StockSyncProperties` for `app.stock.sync.*`), JPA auditing, OpenAPI.
 
 ### Domain in one paragraph
 
@@ -104,14 +117,29 @@ tracks or the whole execution package: **an order is of one package** (its stock
 monthly report are) and may cover several of its tracks; what is of another package goes in another
 order. `PreventiveTaskSelector` decides what fits and what is skipped (already in the order, of
 another package, open in another open preventive order, without a task type), `dryRun` previews it,
-and generations of one package queue behind an advisory lock. Each task carries the
+and generations of one package queue behind an advisory lock they only try (`pg_try_advisory_xact_lock`:
+a busy package means rollback, sleep and retry, never a connection held while waiting); with
+`Prefer: respond-async` one that does not finish in time answers 202 with a background operation
+(`BudgetedOperations`, `GET /operations/{id}`, a deployment-wide cap, 429 `OPS-429`). Each task carries the
 `MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan, with standard
 minutes that feed `WorkloadEstimator`; by default groups 1, 2 and 4 on a profile, `RG-03` and
 `RP-02` on an insulator plus `RG-04` and `RP-03` when it has turnouts (`switches`), `RP-07` on a
 disconnector plus `RP-06` when its `driveType` (`V16`) is `MOTOR` and `RG-06` when its
 `disconnectorFunction` (`V17`) is `SurgeA`, a surge arrester).
+A `MaintenanceTeam` is local (edited here, `A`/`B` seeded) or synchronized from `mto-resources`
+(`V18`: leader, supervisor, linemen, packages and default vehicle; no base), which adopts the local
+team of its code on its first event; from then on it is read-only here (`PUT` is 409 `TEA-001`).
 Tasks are executed inside a `MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one
-or more tracks): a task can
+or more tracks) with its crew and vehicles of `mto-resources` (`V19`, copied from a synchronized team
+when not given). `ShiftCrew` keeps them in rule, 409 `SHF-001`: at most 6 linemen, the leader not
+among them and not a `WORKER`, everyone active, every vehicle active and available, one that neither
+moves by itself nor is portable with a towing one, the crew within the seats (only when every
+self-propelled vehicle declares them), and no vehicle, leader or lineman in two open shifts of one
+date (advisory locks); to start and while `IN_PROGRESS`, a leader and 2 to 6 linemen
+(`CrewComposition`), only on a shift with a crew (`hasCrew()`). Closing says where each vehicle was
+left (`parkings`: a site, a track and kp, or a text; a rail-only one never by text alone), and
+starting, closing and cancelling publish `shift.started`/`closed`/`cancelled`, which `mto-resources`
+reads to move the vehicles. A task can
 only be completed with the order and a shift covering its track both `IN_PROGRESS`, a task type that requires
 full possession cannot be done in a `PARTIAL` shift, and a `DIVERTED` section only accepts `FULL`
 shifts. Completing a task can record `CatenaryDefect`s inline (`RESOLVED` in the shift if the work
@@ -120,8 +148,8 @@ was finished, `OPEN` with `repairPlannedDate` if not). A `MaintenanceInspection`
 `CLOSED` on its asset's track or the connected one, it appears in that shift's report), and can create a defect and a corrective
 order (both idempotent). Every material line (`MaintenanceMaterialUsage`) is reserved in
 `mto-stock` when the order is planned, consumed when it is completed and released when it is
-cancelled; a failure leaves the line `FAILED` (stock did not answer) or `REJECTED` (it said no, with
-its reason) and `POST .../materials/{id}/sync` retries. A line
+cancelled, all the lines of the transition at once; a failure leaves the line `FAILED` (stock did not
+answer) or `REJECTED` (it said no, with its reason) and `POST .../materials/{id}/sync` retries. A line
 registered by mistake is removed with `DELETE .../materials/{id}` (a physical delete that Envers keeps
 as a DELETED revision), releasing its reservation first; it is never cancelled.
 
@@ -131,14 +159,19 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
   tables, PostgreSQL enums for every status/type, `numeric(12,3)` for kp, `numeric(19,6)` for
   quantities, `timestamptz` for instants.
 - Ids of `mto-configuration` entities are `bigint` columns (`track_id`, `station_id`,
-  `execution_package_id`); ids of `mto-stock` entities are `uuid` columns (`material_id`,
-  `warehouse_id`, `stock_reservation_id`, `stock_project_id`).
+  `execution_package_id`, `parking_track_id`); ids of `mto-stock` entities are `uuid` columns
+  (`material_id`, `warehouse_id`, `stock_reservation_id`, `stock_project_id`); ids of `mto-resources`
+  are `uuid` too, the primary key of its snapshots (`crew_person`, `fleet_vehicle`), a team's
+  `source_entity_id`, and `default_vehicle_id`/`parking_site_id` without FK. Its enums are `varchar`.
 - Codes come from sequences (`MO-000001`, `SH-`, `INS-`, `DEF-`), never from `MAX + 1`.
 - `CatenaryAssetRepository.upsertFromMasterData`/`deactivateFromMasterData` are native SQL with the
   sequence watermark inside the `WHERE` (never read-then-write), which is why master-data changes
   leave no Envers revision. They write `enabled_at_source` and recompute `enabled`, never
   `disabled_locally`; `deactivateByTrack` advances the watermark of what it disables (the sequence of
-  `mto-configuration` is global).
+  `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle` and the
+  synchronized team (`upsertFromResources`, watermark = the `sequenceNumber` of the `mto-resources`
+  outbox, not its `version`), and for `background_operation` (`V20`), whose cap and turn per scope
+  are decided by row count inside the writing statement.
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
   `CHECK` that exactly one is set.
 - Every entity edited through the API extends `VersionedEntity` (`@Version`, `V11`): its response
@@ -159,13 +192,24 @@ only, deactivates every asset on the track). The other four entity names are log
 The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before touching
 `application/dto/messaging`.
 
+Consumer of `mto-resources` too (`mto.resources.exchange`, own queue
+`mto.maintenance.resources.queue` bound to `mto.resources.{person,team,vehicle}.*`, with DLX/DLQ,
+`app.rabbitmq.resources.*`) through the same inbox (`source_service = mto-resources`):
+`ResourcesEventConsumer` checks the signature, the `origin` and that `data` has `entityName` and
+`eventName`, and `DispatchingIncomingEventHandler` routes by source and entity to the
+`IncomingEventHandler`s `person`, `vehicle` and `team` (only `MAINTENANCE` teams; the people a team
+carries are inserted with `ON CONFLICT DO NOTHING` until their own event arrives). This queue must
+exist before `mto-resources` publishes (`mandatory=true` there): deploy this service first.
+
 Producer of its own events for `mto-notification` (`mto.maintenance.exchange`, routing key
 `mto.maintenance.<entity>.<event>`, no queue here). **`DomainEventPublisher.publish` is the only
 door, and it is called inside the business transaction**: the event goes to `outbox_message`
 (`V13`) with the change and the relay publishes it afterwards with publisher confirms
 (`OutboxRabbitPublisher` refuses to start without them). The hooks: `StatusHistoryServiceImpl`
 (`order.created`/`status-changed`/`reassigned`, `defect.created`/`status-changed`: every order and
-defect transition passes through it), `MaintenanceShiftServiceImpl.start/close`,
+defect transition passes through it), `MaintenanceShiftServiceImpl.start/close/cancel`
+(`shift.started`/`closed`/`cancelled`, with the crew, the vehicles and where each was left: also
+read by `mto-resources`, through its own queue on `mto.maintenance.shift.*`),
 `MaterialStockSynchronizer.record` (`material.rejected`/`in-doubt`/`failed`, only when the line's
 state changes: the 5-minute retry must not publish one per round),
 `CatenaryAssetServiceImpl.disable/patch` (`asset.disabled`, once), `MaintenanceInspectionServiceImpl`
@@ -173,8 +217,9 @@ state changes: the 5-minute retry must not publish one per round),
 `PreventiveDueSoonService` (`preventive.due-soon`, advisory lock, `operationId` from the date). The
 names and `values` of every event live in `MaintenanceEvents` and nowhere else; the envelope is the
 `AsynchronousMessage` of `mto-configuration` plus `actor` (`PERSON`/`SERVICE`/`SYSTEM`, from the
-token) and `correlationId` (`X-Correlation-Id` of the request, else the master-data message id, as
-Envers stores it), both read by `MessageContextResolver` when the event is created. **Keys are only
+token) and `correlationId` (`X-Correlation-Id` of the request, else the master-data message id, else
+the one a background operation copied from its request, as Envers stores it), both read by
+`MessageContextResolver` when the event is created. **Keys are only
 added**; a new key or event changes its example in `docs/messaging/examples/` in the same commit
 (`MessagingContractExamplesTest` compares them with the real factory;
 `MESSAGING_EXAMPLES_WRITE=true` regenerates them). `DomainEvent` rejects any key that smells like a
@@ -213,13 +258,25 @@ key (30 days). Completing an order rejected for such lines (`UnsyncedMaterialsEx
 and an explicit `sync` keep what stock already did (`noRollbackFor`). `NoOpStockClient` replaces it
 with `app.stock.enabled=false`.
 
+An order transition (`reserveAll` on plan and start, `consumeAll`, `releaseAll`) talks to stock for
+all its lines at once, each on a virtual thread (at most `app.stock.sync.parallelism`, 4) under one
+deadline (`app.stock.sync.deadline`, 15 s). Each conversation runs on a `StockLine`, a copy that never
+touches the entity or the database; the transaction thread applies it back and publishes, in line
+order. A line not answered by the deadline is cut (`StockLine.cancel`: its thread sends nothing more
+to stock) and left `FAILED` with what it had in doubt, the order goes on, and after commit
+`DeferredStockSyncListener` (`StockLinesDeferred`) retries those lines at once through
+`StockSyncRetryService.retryLines`, once their call in the air is over (30 s at most),
+`app.stock.sync.immediate-retry`. The one-line paths (`syncNow`, `releaseNow`, `reserve(usage)`,
+`consume`/`release` of one line) stay synchronous on the caller's thread.
+
 ### Report export
 
 The three reports (`GET /shifts/{id}/report`, `/reports/progress`, `/reports/monthly`) take
 `?format=json|xlsx|pdf`, `json` by default: same routes, same `MAINTENANCE_READ` rule, unchanged JSON
 contract. Each report is turned into one format-neutral `ReportDocument`
 (`application/dto/export`: header pairs, an optional table, totals, titled appendix tables — the
-shift's inspections, a sheet of their own in the .xlsx —, typed `ReportValue`s) by its
+shift's inspections, its crew and its vehicles with where each was left, each a sheet of its own in
+the .xlsx —, typed `ReportValue`s) by its
 layout in `application/service/impl`, and `ReportExportServiceImpl` hands it to the `ReportExporter`
 of the requested format. The exporters are `@Component`s indexed by format at startup — the same
 registry-by-key as the master-data handlers, failing the startup on a duplicate or a missing one — so
@@ -234,22 +291,33 @@ and the columns the PDF leaves out.
 
 ### Auditing
 
-Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track and blocking-disconnector collections),
-`MaintenanceTaskCheckItem`, `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`,
-`MaintenanceMaterialUsage`. Not audited on purpose: `MaintenanceStatusHistory`
-(append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `MaintenanceTeam`, `MaintenanceTaskType`,
+Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track, blocking-disconnector and lineman collections),
+`MaintenanceShiftVehicle` (a vehicle of a shift and where it was left, `V19`), `MaintenanceTaskCheckItem`,
+`MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`, `MaintenanceMaterialUsage`.
+Not audited on purpose: `MaintenanceStatusHistory`
+(append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `CrewPerson`
+and `FleetVehicle` (snapshots of `mto-resources`, native SQL only), `BackgroundOperation` and
+`OutboxMessage` (their own history), `MaintenanceTeam`, `MaintenanceTaskType`,
 `InspectionTemplate`/`Item` (catalogues). `JpaEntityModelTest` guards the split. History at
 `GET /<resource>/{id}/revisions`. The `asset` of an order, a task, an inspection and a defect is
 `@Audited(targetAuditMode = NOT_AUDITED)`, like a shift's disconnectors: an asset that only arrived
 by master data has no revision (native SQL), so a revision reads it as it is now instead of looking
-for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`).
+for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`). The leader, supervisor and
+linemen of a shift and the vehicle of each `MaintenanceShiftVehicle` are `NOT_AUDITED` targets for the
+same reason. A shift's vehicles are `@OrderBy("id ASC")`, never by an audit column: Envers applies the
+`@OrderBy` to `maintenance_shift_vehicle_aud`, which has none; `vehiclesByCode()` orders what is shown.
+A background operation keeps its request's source, URI and correlation in its revisions
+(`BackgroundOperationContext`, read by `AuditRevisionListener`).
 
 ### Testing
 
 - `PostgreSQLTestContainer` (in `support/`) starts `postgres:17-alpine` with Testcontainers, or uses
   `TEST_DATABASE_URL`/`TEST_DATABASE_USERNAME`/`TEST_DATABASE_PASSWORD` when set (no Docker needed).
+  It caps the Hikari pool at 5 connections: every context Spring caches keeps its pool open, and with
+  the production 20 a dozen contexts pass PostgreSQL's 100 `max_connections`.
 - `MtoMaintenanceApplicationTests` boots the whole context against a real PostgreSQL and asserts
-  every business service bean is present.
+  every business service bean is present, `spring.threads.virtual.enabled` and that the background
+  executor runs on virtual threads with the caller's identity.
 - One class per layer: `BusinessLayerTest`, `RestControllerLayerTest` +
   `MaintenanceOrderControllerMockMvcTest` + `ReportExportControllerMockMvcTest` (a `@WebMvcTest`
   slice only loads the controllers it names, so the export endpoints cannot live in the order one),
@@ -261,6 +329,13 @@ for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`).
   `GlobalExceptionHandlerTest`, `SecurityLayerTest`, `ApiAuthorizationRulesTest`,
   `MessagingContractExamplesTest` (one JSON per published event) and, for the outbox copied from
   `mto-configuration`, its own tests under `infrastructure/messaging/outbox` (`OutboxRelayDataJpaTest`
-  against PostgreSQL, `OutboxWiringTest`, `OutboxRabbitPublisherTest`...). Add a method to the
+  against PostgreSQL, `OutboxWiringTest`, `OutboxRabbitPublisherTest`...). The planned exception of
+  the same kind is `BudgetedOperationsDataJpaTest`, the cases of `mto-resources` for its copy of
+  `BudgetedOperations`, against PostgreSQL and without the test transaction (each step is its own
+  transaction and the work runs on a virtual thread). Add a method to the
   matching class instead of a new class; the events of each hook are methods of `BusinessLayerTest`
   (`RecordingEventPublisher`) and the envelope, the actor and the correlation of `MessagingLayerTest`.
+  The crew rules, the parallel stock transitions and the deferred retry are methods of
+  `BusinessLayerTest`; the resources handlers against PostgreSQL (adoption, the watermark, a team of
+  construction) of `MasterDataAssetSyncDataJpaTest`; the resources topology of `MessagingLayerTest`;
+the 202 of `Prefer: respond-async` of `MaintenanceOrderControllerMockMvcTest`.

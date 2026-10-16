@@ -10,5 +10,5 @@ Documentation of `mto-maintenance`, in reading order:
 | [03-database.md](03-database.md) | Schema, enums, constraints, seeds |
 | [04-rest-api.md](04-rest-api.md) | Resources, filters, transitions, error codes |
 | [05-development-roadmap.md](05-development-roadmap.md) | What is done and what is left |
-| [06-messaging.md](06-messaging.md) | Master-data events consumed from `mto-configuration` |
+| [06-messaging.md](06-messaging.md) | Events consumed from `mto-configuration` and `mto-resources`, and the own events published |
 | [07-auditing.md](07-auditing.md) | Audit columns, Envers revisions and status history |
