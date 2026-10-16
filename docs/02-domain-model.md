@@ -124,7 +124,8 @@ The `RG-01…RG-18` (general revision) and `RP-01…RP-12` (particular revision)
 plan, read-only: `functionalGroup` (structural supports, overhead conductors, devices and switches,
 anchorage components, turnouts and section insulators, diagnostics, none),
 `standardMinutesPerUnit` + `unit` (`UNIT`, `SPAN`, `KM`, `DEFECT`, `PROFILE`), `fixedMinutes`
-("60 min + 3/km"), `requiresFullPossession` (groups 3, 5 and `RP-12`), `diagnostic` (group 6).
+("60 min + 3/km"), `requiresFullPossession` (groups 3, 5 and `RP-12`), `diagnostic` (group 6). The
+minutes per unit are those of the plan's task sheet (`V18`, see `03-database.md`).
 
 ## Shifts (`MaintenanceShift`) and teams (`MaintenanceTeam`)
 

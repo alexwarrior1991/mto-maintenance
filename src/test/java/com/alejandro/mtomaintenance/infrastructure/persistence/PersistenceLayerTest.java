@@ -73,6 +73,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -144,6 +145,28 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertTrue(taskTypeRepository.findByCode("RP-10").orElseThrow().getDiagnostic());
         assertEquals(3, templateRepository.findAll().size());
         assertEquals(14, templateRepository.findFirstByAssetTypeAndActiveTrueOrderByVersionDesc(CatenaryAssetType.PROFILE).orElseThrow().getItems().size());
+    }
+
+    @Test
+    void theMinutesOfEachTaskTypeAreThoseOfTheTaskSheetWithTheirUnit() {
+        // code -> minutes per unit, unit, fixed minutes (V18: the minutes of the task sheet of the plan).
+        Map<String, String> expected = Map.ofEntries(
+                Map.entry("RG-01", "5 UNIT 0"), Map.entry("RG-02", "4 UNIT 0"), Map.entry("RG-03", "20 UNIT 0"),
+                Map.entry("RG-04", "20 UNIT 0"), Map.entry("RG-05", "10 UNIT 0"), Map.entry("RG-06", "15 UNIT 0"),
+                Map.entry("RG-07", "15 UNIT 0"), Map.entry("RG-08", "3 KM 60"), Map.entry("RG-09", "15 UNIT 0"),
+                Map.entry("RG-10", "3 KM 30"), Map.entry("RG-11", "10 UNIT 0"), Map.entry("RG-12", "3 SPAN 0"),
+                Map.entry("RG-13", "2 UNIT 0"), Map.entry("RG-14", "3 KM 30"), Map.entry("RG-15", "20 UNIT 0"),
+                Map.entry("RG-16", "5 UNIT 0"), Map.entry("RG-17", "3 KM 30"), Map.entry("RG-18", "45 KM 60"),
+                Map.entry("RP-01", "4 UNIT 0"), Map.entry("RP-02", "20 UNIT 0"), Map.entry("RP-03", "20 UNIT 0"),
+                Map.entry("RP-04", "15 UNIT 0"), Map.entry("RP-05", "3 DEFECT 0"), Map.entry("RP-06", "20 UNIT 0"),
+                Map.entry("RP-07", "20 UNIT 0"), Map.entry("RP-08", "4 UNIT 0"), Map.entry("RP-09", "3 PROFILE 0"),
+                Map.entry("RP-10", "10 DEFECT 0"), Map.entry("RP-11", "0.3 KM 0"), Map.entry("RP-12", "60 UNIT 0"));
+
+        Map<String, String> actual = taskTypeRepository.findAllByOrderByOrderIndexAsc().stream()
+                .collect(Collectors.toMap(MaintenanceTaskType::getCode, type -> type.getStandardMinutesPerUnit().stripTrailingZeros().toPlainString()
+                        + " " + type.getUnit() + " " + type.getFixedMinutes().stripTrailingZeros().toPlainString()));
+
+        assertEquals(expected, actual);
     }
 
     @Test
