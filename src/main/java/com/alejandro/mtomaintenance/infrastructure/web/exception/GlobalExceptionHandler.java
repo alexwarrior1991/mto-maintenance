@@ -14,6 +14,7 @@ import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamException;
+import com.alejandro.mtomaintenance.application.exception.TooManyOperationsException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -122,6 +123,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(StockRejectedException.class)
     public ResponseEntity<ApiErrorResponse> handleStockRejected(StockRejectedException exception, HttpServletRequest request) {
         return businessResponse(exception, exception.isInsufficientStock() ? HttpStatus.CONFLICT : HttpStatus.UNPROCESSABLE_CONTENT, request);
+    }
+
+    /**
+     * 429 OPS-429 con {@code Retry-After}: hay tantas operaciones de fondo como admite el despliegue. Lo
+     * que se agota es la conexion que cada una retiene mientras trabaja, no el hilo.
+     */
+    @ExceptionHandler(TooManyOperationsException.class)
+    public ResponseEntity<ApiErrorResponse> handleTooManyOperations(TooManyOperationsException exception, HttpServletRequest request) {
+        String errorCode = BusinessErrorCodeResolver.resolve(exception);
+        LOGGER.warn("Business exception {} for {} {}: {}", errorCode, request.getMethod(), request.getRequestURI(), exception.getMessage());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", String.valueOf(exception.getRetryAfterSeconds()))
+                .body(errorResponse(HttpStatus.TOO_MANY_REQUESTS, exception.getMessage(), errorCode, List.of(), request));
     }
 
     @ExceptionHandler(ValidationException.class)

@@ -21,6 +21,7 @@ import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceTaskMapper;
 import com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskService;
+import com.alejandro.mtomaintenance.configuration.async.OperationsProperties;
 import com.alejandro.mtomaintenance.application.service.StatusHistoryService;
 import com.alejandro.mtomaintenance.application.service.WorkloadEstimator;
 import com.alejandro.mtomaintenance.domain.model.ShiftStateMachine;
@@ -48,7 +49,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -117,6 +120,9 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     private final MaterialLineFactory lineFactory;
     private final MaterialStockSynchronizer stock;
     private final PreventiveTaskSelector selector;
+    /** Las transacciones de la generacion, cortas y a mano: la espera por el cerrojo del EP va fuera. */
+    private final TransactionOperations transactions;
+    private final OperationsProperties operations;
 
     @Override
     @Transactional(readOnly = true)
@@ -190,9 +196,46 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         return mapper.toResponse(repository.save(task));
     }
 
+    /**
+     * Sin {@code @Transactional} a proposito: cada intento es su propia transaccion. Dos generaciones del
+     * mismo EP hacen fila, pero la que espera no lo hace con una conexion de Hikari cogida: prueba el
+     * cerrojo, y si lo tiene otra suelta la transaccion (y la conexion), duerme con espera creciente y
+     * vuelve a empezar, releyendo la orden. Previsualizar no escribe y no hace fila.
+     */
     @Override
-    @Transactional
     public GeneratePreventiveTasksResponse generatePreventiveTasks(UUID orderId, GeneratePreventiveTasksRequest request) {
+        Duration pause = operations.pollInitial();
+        while (true) {
+            GeneratePreventiveTasksResponse response = transactions.execute(status -> {
+                GeneratePreventiveTasksResponse generated = generate(orderId, request);
+                if (generated == null) {
+                    status.setRollbackOnly();
+                }
+                return generated;
+            });
+            if (response != null) {
+                return response;
+            }
+            LOGGER.debug("Task generation for order {} waits for another one of its package; retrying in {}", orderId, pause);
+            try {
+                Thread.sleep(pause);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting to generate the tasks of order " + orderId, interrupted);
+            }
+            Duration doubled = pause.multipliedBy(2);
+            pause = doubled.compareTo(operations.pollMax()) > 0 ? operations.pollMax() : doubled;
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public String generationScope(UUID orderId) {
+        return generationScope(lookups.order(orderId));
+    }
+
+    /** Un intento, dentro de su transaccion; {@code null} si otra generacion del mismo EP tiene el cerrojo. */
+    private GeneratePreventiveTasksResponse generate(UUID orderId, GeneratePreventiveTasksRequest request) {
         MaintenanceOrder order = lookups.order(orderId);
         if (order.getType() != MaintenanceOrderType.PREVENTIVE) {
             throw new InvalidTransitionException("Only preventive orders generate profile tasks; " + order.getCode() + " is " + order.getType());
@@ -202,9 +245,9 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         }
         boolean dryRun = request.previewOnly();
         // Antes de mirar que esta libre: dos generaciones a la vez en el mismo EP darian el mismo activo
-        // por libre. Previsualizar no escribe y no hace fila.
-        if (!dryRun) {
-            lockGeneration(order);
+        // por libre. Previsualizar no escribe y no hace fila. Sin esperar: quien llama reintenta sin conexion.
+        if (!dryRun && !repository.tryAdvisoryTransactionLock(generationLockKey(order))) {
+            return null;
         }
         PreventiveTaskSelector.Plan plan = selector.select(order, request);
 
@@ -266,8 +309,15 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
      * mano, para no chocar con ella en la secuencia. Se suelta al terminar la transaccion.
      */
     private void lockGeneration(MaintenanceOrder order) {
-        String scope = order.getExecutionPackageId() != null ? "EP-" + order.getExecutionPackageId() : "order-" + order.getId();
-        repository.advisoryTransactionLock(("mto-maintenance:generate-tasks:" + scope).hashCode());
+        repository.advisoryTransactionLock(generationLockKey(order));
+    }
+
+    private static long generationLockKey(MaintenanceOrder order) {
+        return ("mto-maintenance:generate-tasks:" + generationScope(order)).hashCode();
+    }
+
+    private static String generationScope(MaintenanceOrder order) {
+        return order.getExecutionPackageId() != null ? "EP-" + order.getExecutionPackageId() : "order-" + order.getId();
     }
 
     private static int count(PreventiveTaskSelector.Plan plan, GenerationOutcome outcome, CatenaryAssetType type) {

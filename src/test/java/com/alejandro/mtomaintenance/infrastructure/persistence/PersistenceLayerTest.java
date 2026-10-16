@@ -96,6 +96,9 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
     private EntityManager entityManager;
 
     @Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    @Autowired
     private CatenaryAssetRepository assetRepository;
 
     @Autowired
@@ -268,6 +271,13 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         long key = ("mto-maintenance:generate-tasks:EP-" + System.nanoTime()).hashCode();
         assertEquals(1, taskRepository.advisoryTransactionLock(key));
         assertEquals(1, taskRepository.advisoryTransactionLock(key), "The same transaction takes it again without waiting");
+        assertTrue(taskRepository.tryAdvisoryTransactionLock(key), "Trying it from the transaction that holds it says yes");
+        org.springframework.transaction.support.TransactionTemplate other =
+                new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        Boolean elsewhere = java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> other.execute(status -> taskRepository.tryAdvisoryTransactionLock(key)))
+                .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+        assertFalse(elsewhere, "Another transaction is told no at once instead of waiting with its connection");
 
         CatenaryAsset profile = profile("DRV-" + UUID.randomUUID().toString().substring(0, 8), System.nanoTime(), "12900.000");
         profile.setDriveType(DisconnectorDriveType.MOTOR);

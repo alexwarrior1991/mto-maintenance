@@ -12,6 +12,7 @@ import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamException;
+import com.alejandro.mtomaintenance.application.exception.TooManyOperationsException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 
 import java.util.Map;
@@ -63,6 +64,7 @@ final class BusinessErrorCodeResolver {
             case StaleVersionException ignored -> "CON-001";
             case StockUnavailableException ignored -> "STK-503";
             case StockRejectedException rejected -> rejected.isInsufficientStock() ? StockRejectedException.INSUFFICIENT_STOCK : "STK-422";
+            case TooManyOperationsException ignored -> "OPS-429";
             case ValidationException ignored -> "VAL-001";
             default -> "BUS-001";
         };

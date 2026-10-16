@@ -3,6 +3,19 @@ spring:
     name: mto-maintenance
   profiles:
     default: ${SPRING_PROFILES_DEFAULT:dev}
+  # Tomcat, @Scheduled (el relay del outbox, el reintento de stock, el aviso de preventivos, el latido
+  # de las operaciones de fondo) y los listeners de RabbitMQ en hilos virtuales: esperar a la base, al
+  # broker o a mto-stock deja de costar un hilo del sistema. El limite de concurrencia pasa a ser el
+  # pool de Hikari, que por eso se fija abajo a la vista. Lo que corre en segundo plano usa su propio
+  # executor de hilos virtuales (AsyncConfiguration).
+  threads:
+    virtual:
+      enabled: ${SPRING_THREADS_VIRTUAL_ENABLED:true}
+  datasource:
+    hikari:
+      # Con Tomcat en hilos virtuales, cada peticion que espera a la base retiene una conexion: el
+      # recurso escaso es este pool, no los hilos. app.operations.max-active se elige con el a la vista.
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:20}
   # La API es un resource server: no emite tokens ni guarda usuarios, solo valida los que emite
   # Keycloak. El JWK Set se descarga de forma perezosa, con lo que un Keycloak que aun no responde
   # no impide arrancar.
@@ -172,6 +185,29 @@ springdoc:
   show-actuator: ${SPRINGDOC_SHOW_ACTUATOR:false}
 
 app:
+  # Lo que tarda se vuelve asincrono (Prefer: respond-async, RFC 7240): generar las tareas de un EP
+  # corre en un hilo virtual, la peticion lo espera hasta su presupuesto y, si no ha terminado,
+  # responde 202 con la operacion (GET /operations/{id}). El recurso escaso es la conexion que cada
+  # operacion retiene mientras trabaja, asi que hay un tope para todo el despliegue, contado en
+  # background_operation y no en memoria. Mismo bloque que mto-resources.
+  operations:
+    default-wait: ${APP_OPERATIONS_DEFAULT_WAIT:5s}
+    # Por debajo del read-timeout del gateway (15 s): mas, y el gateway cortaria con un 504 sin que el
+    # cliente llegara a saber la operacion.
+    max-wait: ${APP_OPERATIONS_MAX_WAIT:10s}
+    max-active: ${APP_OPERATIONS_MAX_ACTIVE:8}
+    heartbeat: ${APP_OPERATIONS_HEARTBEAT:5s}
+    stale-after: ${APP_OPERATIONS_STALE_AFTER:1m}
+    abandon-check: ${APP_OPERATIONS_ABANDON_CHECK:30s}
+    # Tambien la espera de una generacion por el cerrojo de su EP: se mira, se suelta la conexion y se
+    # duerme, del primero al segundo valor doblando cada vez.
+    poll-initial: 200ms
+    poll-max: 2s
+    retention: ${APP_OPERATIONS_RETENTION:7d}
+    purge-every: 1h
+    purge-batch-size: 500
+    scheduling-enabled: ${APP_OPERATIONS_SCHEDULING_ENABLED:true}
+
   security:
     # Cliente de Keycloak que representa a esta API. Sus roles de cliente son los permisos que
     # comprueban la cadena de filtros y las anotaciones de seguridad de metodo.

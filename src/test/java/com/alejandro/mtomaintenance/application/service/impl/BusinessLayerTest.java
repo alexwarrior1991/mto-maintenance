@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.application.dto.messaging.DomainEvent;
 import com.alejandro.mtomaintenance.application.dto.shift.VehicleParkingRequest;
 import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamException;
 import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
+import com.alejandro.mtomaintenance.configuration.async.OperationsProperties;
 import com.alejandro.mtomaintenance.configuration.events.PreventiveDueSoonProperties;
 import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
@@ -186,6 +187,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.springframework.transaction.support.TransactionOperations;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -540,6 +542,30 @@ class BusinessLayerTest {
     }
 
     @Test
+    void aGenerationThatFindsItsPackageBusyLetsGoOfItsTransactionAndTriesAgainRatherThanWaitingOnTheConnection() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        CatenaryAsset first = profile("12-2.27", "12847.990");
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledByTypeOnTrackBetween(CatenaryAssetType.PROFILE, 2L, order.getAsset().getStartKp(), order.getAsset().getEndKp()))
+                .thenReturn(List.of(first));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
+        long key = "mto-maintenance:generate-tasks:EP-6".hashCode();
+        when(fixture.repository.tryAdvisoryTransactionLock(key)).thenReturn(false, false, true);
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
+
+        assertEquals(1, response.createdTasks());
+        verify(fixture.repository, times(3)).tryAdvisoryTransactionLock(key);
+        // Cada intento relee la orden: la otra generacion puede haberla cambiado mientras.
+        verify(fixture.lookups, times(3)).order(order.getId());
+        verify(fixture.repository, times(1)).save(any());
+        verify(fixture.repository, never()).advisoryTransactionLock(anyLong());
+        assertEquals("EP-6", fixture.service.generationScope(order.getId()));
+    }
+
+    @Test
     void theInsulatorsOfTheSectionAreGeneratedWithTheirRevisionsBetweenTheProfilesAroundThemWhenAsked() {
         // Un fin de semana con posesion total: los perfiles de la via y los aisladores que la tocan,
         // tambien el de la via de al lado que conecta con esta, en el orden en que se recorren. El que
@@ -879,6 +905,7 @@ class BusinessLayerTest {
         assertEquals(List.of(fresh, manual), planned.getValue().stream().map(MaintenanceTask::getAsset).toList());
         verify(fixture.repository, never()).save(any());
         verify(fixture.repository, never()).advisoryTransactionLock(anyLong());
+        verify(fixture.repository, never()).tryAdvisoryTransactionLock(anyLong());
         assertEquals(1, order.getTasks().size(), "The order is not touched");
     }
 
@@ -892,18 +919,19 @@ class BusinessLayerTest {
 
         fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
         InOrder inOrder = inOrder(fixture.repository);
-        inOrder.verify(fixture.repository).advisoryTransactionLock(packageLock);
+        inOrder.verify(fixture.repository).tryAdvisoryTransactionLock(packageLock);
         inOrder.verify(fixture.repository).findAssetIdsByOrderId(order.getId());
 
+        // A mano es corto: espera al cerrojo del EP dentro de su transaccion, como antes.
         fixture.service.create(order.getId(), new MaintenanceTaskRequest("By hand", null, null, null, null));
-        verify(fixture.repository, times(2)).advisoryTransactionLock(packageLock);
+        verify(fixture.repository, times(1)).advisoryTransactionLock(packageLock);
 
         MaintenanceOrder withoutPackage = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
         withoutPackage.setExecutionPackageId(null);
         when(fixture.lookups.order(withoutPackage.getId())).thenReturn(withoutPackage);
         when(fixture.workloadEstimator.estimate(withoutPackage)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
         fixture.service.generatePreventiveTasks(withoutPackage.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
-        verify(fixture.repository).advisoryTransactionLock(("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()).hashCode());
+        verify(fixture.repository).tryAdvisoryTransactionLock(("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()).hashCode());
     }
 
     @Test
@@ -4276,9 +4304,11 @@ class BusinessLayerTest {
 
         TaskFixture() {
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+            when(repository.tryAdvisoryTransactionLock(anyLong())).thenReturn(true);
             service = new MaintenanceTaskServiceImpl(repository, assetRepository, defectRepository, mapper, lookups,
                     codeGenerator, history, workloadEstimator, lineFactory, stock,
-                    new PreventiveTaskSelector(assetRepository, repository, lookups));
+                    new PreventiveTaskSelector(assetRepository, repository, lookups), TransactionOperations.withoutTransaction(),
+                    new OperationsProperties(null, null, 0, null, null, Duration.ofMillis(1), Duration.ofMillis(4), null, 0, false));
         }
 
         MaintenanceTask savedTask() {

@@ -94,4 +94,12 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
      */
     @Query(value = "select 1 from (select pg_advisory_xact_lock(:key)) as locked", nativeQuery = true)
     int advisoryTransactionLock(@Param("key") long key);
+
+    /**
+     * El mismo cerrojo sin esperar: {@code true} si se ha tomado (hasta el final de la transaccion),
+     * {@code false} si lo tiene otra. La generacion de un EP lo usa para no esperar con la conexion
+     * cogida: si no lo consigue, suelta la transaccion, duerme y vuelve a probar.
+     */
+    @Query(value = "select pg_try_advisory_xact_lock(:key)", nativeQuery = true)
+    boolean tryAdvisoryTransactionLock(@Param("key") long key);
 }

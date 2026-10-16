@@ -50,6 +50,19 @@ public class AuditRevisionListener implements RevisionListener {
             return;
         }
 
+        BackgroundOperationContext.Context operation = BackgroundOperationContext.current();
+        if (operation != null) {
+            // Una operacion de fondo pedida por HTTP: la peticion ya no existe, pero lo que la
+            // auditoria leeria de ella se copio al apuntar la operacion.
+            revision.setSource(AuditRevisionSource.HTTP);
+            revision.setCorrelationId(truncate(operation.correlationId(), MAX_CORRELATION_ID_LENGTH));
+            revision.setIpAddress(truncate(operation.ipAddress(), MAX_ADDRESS_LENGTH));
+            revision.setUserAgent(truncate(operation.userAgent(), MAX_USER_AGENT_LENGTH));
+            revision.setRequestMethod(operation.requestMethod());
+            revision.setRequestUri(truncate(operation.requestUri(), MAX_URI_LENGTH));
+            return;
+        }
+
         MessagingAuditContext.Context message = MessagingAuditContext.current();
         if (message != null) {
             revision.setSource(AuditRevisionSource.MESSAGING);
@@ -74,7 +87,7 @@ public class AuditRevisionListener implements RevisionListener {
      * {@code X-Forwarded-For} es el cliente original; los siguientes son los proxies por los que
      * pasó.
      */
-    private static String clientAddress(HttpServletRequest request) {
+    public static String clientAddress(HttpServletRequest request) {
         String forwardedFor = request.getHeader(FORWARDED_FOR_HEADER);
         if (forwardedFor == null || forwardedFor.isBlank()) {
             return request.getRemoteAddr();
