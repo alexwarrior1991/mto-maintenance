@@ -6,20 +6,33 @@ import com.alejandro.mtomaintenance.application.exception.StockRejectedException
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
 import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.application.service.StockClient;
+import com.alejandro.mtomaintenance.configuration.async.AsyncConfiguration;
+import com.alejandro.mtomaintenance.configuration.stock.StockSyncProperties;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockRequestType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
-import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 
 /**
  * Conversacion con mto-stock por linea de material. Un fallo de stock nunca tumba la operacion de
@@ -51,9 +64,17 @@ import java.util.UUID;
  * (stock dijo que no, con su codigo), {@code maintenance.material.in-doubt} (una reserva o una
  * salida enviadas sin respuesta) o {@code maintenance.material.failed} (stock no respondio y no hay
  * nada en duda), en la misma transaccion en la que la linea queda marcada.</p>
+ *
+ * <p>Una transicion de orden con varias lineas (planificar, arrancar, completar, cancelar) habla con
+ * stock por todas a la vez, cada una en un hilo virtual y como mucho {@code app.stock.sync.parallelism}
+ * a la vez, con un plazo para todas ({@code app.stock.sync.deadline}). La conversacion de cada linea
+ * corre sobre una copia ({@link StockLine}), sin tocar la entidad ni la base, y el hilo de la transaccion
+ * la devuelve a la linea y publica lo que toque. La que no termina en el plazo queda FAILED con lo que
+ * tuviera en duda y no manda nada mas a stock; al confirmar, se reintenta en ese momento
+ * ({@link StockLinesDeferred}) en vez de esperar a la vuelta de cinco minutos. Es seguro por lo mismo
+ * que lo es reintentar: la misma clave, y antes de nada se repite lo que siga en duda.</p>
  */
 @Component
-@RequiredArgsConstructor
 class MaterialStockSynchronizer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MaterialStockSynchronizer.class);
@@ -62,36 +83,80 @@ class MaterialStockSynchronizer {
 
     private final StockClient stockClient;
     private final DomainEventPublisher events;
+    private final Executor executor;
+    private final int parallelism;
+    /** El plazo de una transicion con varias lineas; {@code null}, sin plazo (los tests de la conversacion). */
+    private final Duration deadline;
+    private final boolean immediateRetry;
+    private final ApplicationEventPublisher applicationEvents;
+
+    @Autowired
+    MaterialStockSynchronizer(StockClient stockClient, DomainEventPublisher events, StockSyncProperties properties,
+                              @Qualifier(AsyncConfiguration.TASK_EXECUTOR) Executor executor, ApplicationEventPublisher applicationEvents) {
+        this(stockClient, events, executor, properties.parallelism(), properties.deadline(), properties.immediateRetry(), applicationEvents);
+    }
+
+    /** En el hilo que llama, una linea detras de otra y sin plazo: lo que prueban los casos de la conversacion. */
+    MaterialStockSynchronizer(StockClient stockClient, DomainEventPublisher events) {
+        this(stockClient, events, Runnable::run, 1, null, false, event -> {
+        });
+    }
+
+    MaterialStockSynchronizer(StockClient stockClient, DomainEventPublisher events, Executor executor, int parallelism, Duration deadline,
+                              boolean immediateRetry, ApplicationEventPublisher applicationEvents) {
+        this.stockClient = stockClient;
+        this.events = events;
+        this.executor = executor;
+        this.parallelism = Math.max(1, parallelism);
+        this.deadline = deadline;
+        this.immediateRetry = immediateRetry;
+        this.applicationEvents = applicationEvents;
+    }
 
     boolean isEnabled() {
         return stockClient.isEnabled();
     }
 
-    /** Planificar o arrancar la orden: reserva cada linea que aun no tiene reserva. */
+    /** Planificar o arrancar la orden: reserva cada linea que aun no tiene reserva, todas a la vez y con plazo. */
     void reserveAll(MaintenanceOrder order) {
         if (stockClient.isEnabled()) {
-            reserve(order, order.getMaterials().stream().filter(MaterialStockSynchronizer::awaitsReservation).toList());
+            reserve(order, order.getMaterials().stream().filter(MaterialStockSynchronizer::awaitsReservation).toList(), true);
         }
     }
 
     /** Una linea registrada con la orden ya planificada, o lo gastado al completar una tarea. */
     void reserve(MaintenanceMaterialUsage usage) {
         if (stockClient.isEnabled() && awaitsReservation(usage)) {
-            reserve(usage.getOrder(), List.of(usage));
+            reserve(usage.getOrder(), List.of(usage), false);
         }
     }
 
-    /** Cierre de la orden: registra en stock lo consumido de la linea. */
+    /** Cierre de la orden: registra en stock lo consumido de cada linea, todas a la vez y con plazo. */
+    void consumeAll(MaintenanceOrder order) {
+        if (stockClient.isEnabled()) {
+            converse(order, order.getMaterials().stream().filter(usage -> usage.getStockSyncStatus() != StockSyncStatus.CONSUMED).toList(),
+                    "consume", this::settle, true);
+        }
+    }
+
+    /** Cierre de una linea: registra en stock lo consumido. */
     void consume(MaintenanceMaterialUsage usage) {
         if (stockClient.isEnabled() && usage.getStockSyncStatus() != StockSyncStatus.CONSUMED) {
-            attempt(usage, "consume", () -> settle(usage));
+            converse(usage.getOrder(), List.of(usage), "consume", this::settle, false);
         }
     }
 
-    /** Cancelacion de la orden: lo que la linea retiene vuelve a estar disponible en stock. */
+    /** Cancelacion de la orden: lo que cada linea retiene vuelve a estar disponible en stock, todas a la vez y con plazo. */
+    void releaseAll(MaintenanceOrder order) {
+        if (stockClient.isEnabled()) {
+            converse(order, order.getMaterials().stream().filter(MaterialStockSynchronizer::isPending).toList(), "release", this::free, true);
+        }
+    }
+
+    /** Cancelacion de una linea: lo que retiene vuelve a estar disponible en stock. */
     void release(MaintenanceMaterialUsage usage) {
         if (stockClient.isEnabled() && isPending(usage)) {
-            attempt(usage, "release", () -> free(usage));
+            converse(usage.getOrder(), List.of(usage), "release", this::free, false);
         }
     }
 
@@ -116,25 +181,35 @@ class MaterialStockSynchronizer {
             throw new StockUnavailableException("The stock client is disabled (app.stock.enabled=false); the reservation of "
                     + usage.getMaterialCode() + " cannot be released");
         }
-        if (usage.isInDoubt()) {
+        StockLine line = StockLine.of(usage);
+        try {
+            releaseNow(line);
+        } finally {
+            line.applyTo(usage);
+        }
+    }
+
+    private void releaseNow(StockLine line) {
+        if (line.isInDoubt()) {
             // La reserva que se quedo sin respuesta puede estar reteniendo material: se confirma para liberarla.
-            confirmReservation(usage);
-            if (usage.getStockReservationId() == null) {
+            confirmReservation(line);
+            if (line.reservationId() == null) {
                 return;
             }
         }
-        Optional<StockReservation> reservation = currentReservation(usage);
+        Optional<StockReservation> reservation = currentReservation(line);
         if (reservation.filter(StockReservation::isConsumed).isPresent()) {
-            throw new MaterialUsageException("Material " + usage.getMaterialCode() + " was already consumed in stock (reservation "
-                    + usage.getStockReservationId() + "); the line cannot be removed");
+            throw new MaterialUsageException("Material " + line.materialCode() + " was already consumed in stock (reservation "
+                    + line.reservationId() + "); the line cannot be removed");
         }
         if (reservation.filter(StockReservation::isActive).isPresent()) {
-            stockClient.release(usage.getStockReservationId());
+            line.checkOpen();
+            stockClient.release(line.reservationId());
             LOGGER.info("Reservation released before removing the line: order={}, material={}, reservation={}",
-                    usage.getOrder().getCode(), usage.getMaterialCode(), usage.getStockReservationId());
+                    line.orderCode(), line.materialCode(), line.reservationId());
         } else {
             LOGGER.info("Reservation {} no longer holds anything in stock; the line is removed anyway: order={}, material={}",
-                    usage.getStockReservationId(), usage.getOrder().getCode(), usage.getMaterialCode());
+                    line.reservationId(), line.orderCode(), line.materialCode());
         }
     }
 
@@ -155,11 +230,12 @@ class MaterialStockSynchronizer {
         StockSyncStatus status = usage.getStockSyncStatus();
         RuntimeException failure = switch (order.getStatus()) {
             case DRAFT -> null;
-            case COMPLETED -> status == StockSyncStatus.CONSUMED ? null : attempt(usage, "consume", () -> settle(usage));
-            case CANCELLED -> isPending(usage) ? attempt(usage, "release", () -> free(usage)) : null;
+            case COMPLETED -> status == StockSyncStatus.CONSUMED ? null : converse(order, List.of(usage), "consume", this::settle, false);
+            case CANCELLED -> isPending(usage) ? converse(order, List.of(usage), "release", this::free, false) : null;
             default -> usage.getStockRequestInDoubt() == StockRequestType.OUTPUT
-                    ? attempt(usage, "consume", () -> settle(usage))
-                    : usage.getPlannedQuantity().signum() == 0 || status == StockSyncStatus.CONSUMED ? null : reserve(order, List.of(usage));
+                    ? converse(order, List.of(usage), "consume", this::settle, false)
+                    : usage.getPlannedQuantity().signum() == 0 || status == StockSyncStatus.CONSUMED ? null
+                    : reserve(order, List.of(usage), false);
         };
         if (failure != null) {
             throw failure;
@@ -167,10 +243,11 @@ class MaterialStockSynchronizer {
     }
 
     /**
-     * Reserva las lineas dadas contra el proyecto de stock de la orden, resuelto una vez. Si no se
-     * puede resolver, ninguna se reserva y todas lo dicen. Devuelve el primer fallo, o null.
+     * Reserva las lineas dadas contra el proyecto de stock de la orden, resuelto una vez y antes de
+     * copiarlas: la copia lleva el proyecto. Si no se puede resolver, ninguna se reserva y todas lo
+     * dicen. Devuelve el primer fallo, o null.
      */
-    private RuntimeException reserve(MaintenanceOrder order, List<MaintenanceMaterialUsage> lines) {
+    private RuntimeException reserve(MaintenanceOrder order, List<MaintenanceMaterialUsage> lines, boolean together) {
         if (lines.isEmpty()) {
             return null;
         }
@@ -181,14 +258,159 @@ class MaterialStockSynchronizer {
             lines.forEach(line -> record(line, "resolve project", exception, LineState.of(line)));
             return exception;
         }
+        return converse(order, lines, "reserve", line -> hold(line, project), together);
+    }
+
+    /**
+     * Un paso con stock para cada linea. Con {@code together}, todas a la vez y con plazo
+     * ({@link #converseTogether}); si no, en este hilo, una detras de otra. Devuelve el primer fallo,
+     * en el orden de las lineas, o null.
+     */
+    private RuntimeException converse(MaintenanceOrder order, List<MaintenanceMaterialUsage> lines, String step, Consumer<StockLine> action,
+                                      boolean together) {
+        if (lines.isEmpty()) {
+            return null;
+        }
+        if (together && deadline != null) {
+            return converseTogether(order, lines, step, action);
+        }
         RuntimeException failure = null;
-        for (MaintenanceMaterialUsage line : lines) {
-            RuntimeException lineFailure = attempt(line, "reserve", () -> hold(line, project));
+        for (MaintenanceMaterialUsage usage : lines) {
+            RuntimeException lineFailure = attempt(usage, step, action);
             if (failure == null) {
                 failure = lineFailure;
             }
         }
         return failure;
+    }
+
+    /** Ejecuta un paso contra stock en este hilo, sobre la copia de la linea; si falla, la linea lo dice y se devuelve el fallo. */
+    private RuntimeException attempt(MaintenanceMaterialUsage usage, String step, Consumer<StockLine> action) {
+        LineState before = LineState.of(usage);
+        StockLine line = StockLine.of(usage);
+        RuntimeException failure;
+        try {
+            failure = talk(line, action);
+        } finally {
+            line.applyTo(usage);
+        }
+        if (failure != null) {
+            record(usage, step, failure, before);
+        }
+        return failure;
+    }
+
+    /**
+     * Todas las lineas a la vez, cada una en un hilo virtual, como mucho {@link #parallelism} a la vez y
+     * con un plazo para todas. Los hilos solo hablan con stock, sobre su copia; este hilo, el de la
+     * transaccion, espera, devuelve cada copia a su linea y publica, en el orden de las lineas.
+     *
+     * <p>La que no termina en el plazo se corta: se queda con lo que sabia (y lo que tuviera en duda),
+     * FAILED, y al confirmar se reintenta en ese momento. Un fallo que no es de stock (un error de
+     * programacion) se lanza despues de dejar las demas como contesto stock, como lo haria el bucle.</p>
+     */
+    private RuntimeException converseTogether(MaintenanceOrder order, List<MaintenanceMaterialUsage> lines, String step,
+                                              Consumer<StockLine> action) {
+        Semaphore permits = new Semaphore(parallelism);
+        List<Conversation> conversations = new ArrayList<>(lines.size());
+        for (MaintenanceMaterialUsage usage : lines) {
+            Conversation conversation = new Conversation(usage, StockLine.of(usage), LineState.of(usage), new CompletableFuture<>());
+            conversations.add(conversation);
+            executor.execute(() -> conversation.run(permits, action));
+        }
+
+        long end = System.nanoTime() + deadline.toNanos();
+        boolean interrupted = false;
+        RuntimeException failure = null;
+        RuntimeException unexpected = null;
+        List<UUID> deferred = new ArrayList<>();
+        List<CompletableFuture<?>> inFlight = new ArrayList<>();
+        for (Conversation conversation : conversations) {
+            MaintenanceMaterialUsage usage = conversation.usage();
+            RuntimeException lineFailure;
+            try {
+                lineFailure = interrupted ? conversation.result().getNow(null) : conversation.result()
+                        .get(Math.max(0, end - System.nanoTime()), TimeUnit.NANOSECONDS);
+                if (interrupted && !conversation.result().isDone()) {
+                    throw new TimeoutException();
+                }
+                conversation.line().applyTo(usage);
+            } catch (TimeoutException late) {
+                StockLine.State known = conversation.line().cancel();
+                usage.applyStockState(known.reservationId(), known.status(), known.error(), known.inDoubt());
+                lineFailure = new StockUnavailableException("deferred: mto-stock did not answer within " + deadline
+                        + "; retried again after the transaction");
+                deferred.add(usage.getId());
+                inFlight.add(conversation.result());
+            } catch (ExecutionException broken) {
+                conversation.line().applyTo(usage);
+                if (unexpected == null) {
+                    unexpected = rethrowable(broken.getCause());
+                }
+                continue;
+            } catch (InterruptedException interruption) {
+                Thread.currentThread().interrupt();
+                interrupted = true;
+                StockLine.State known = conversation.line().cancel();
+                usage.applyStockState(known.reservationId(), known.status(), known.error(), known.inDoubt());
+                lineFailure = new StockUnavailableException("deferred: interrupted while waiting for mto-stock");
+                deferred.add(usage.getId());
+                inFlight.add(conversation.result());
+            }
+            if (lineFailure != null) {
+                record(usage, step, lineFailure, conversation.before());
+                if (failure == null) {
+                    failure = lineFailure;
+                }
+            }
+        }
+        if (unexpected != null) {
+            conversations.forEach(conversation -> conversation.line().cancel());
+            throw unexpected;
+        }
+        if (!deferred.isEmpty()) {
+            LOGGER.warn("Stock {} of order {} left {} of {} material line(s) without an answer within {}: FAILED, {}",
+                    step, order.getCode(), deferred.size(), lines.size(), deadline,
+                    immediateRetry ? "retried right after the transaction" : "left to the periodic retry");
+            if (immediateRetry) {
+                applicationEvents.publishEvent(new StockLinesDeferred(order.getId(), List.copyOf(deferred), List.copyOf(inFlight)));
+            }
+        }
+        return failure;
+    }
+
+    /** La conversacion de una linea en su hilo: su copia, lo que contaba antes y su resultado (el fallo de stock, o null). */
+    private record Conversation(MaintenanceMaterialUsage usage, StockLine line, LineState before,
+                                CompletableFuture<RuntimeException> result) {
+
+        void run(Semaphore permits, Consumer<StockLine> action) {
+            try {
+                permits.acquire();
+                try {
+                    result.complete(talk(line, action));
+                } finally {
+                    permits.release();
+                }
+            } catch (StockLine.Cancelled cancelled) {
+                // Cortada por el plazo: la transaccion ya conto lo que sabia; nadie espera este resultado.
+                result.complete(null);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                result.completeExceptionally(interrupted);
+            } catch (Throwable unexpected) {
+                result.completeExceptionally(unexpected);
+            }
+        }
+    }
+
+    /** El paso sobre la copia: un fallo de stock se devuelve para que la linea lo cuente; lo demas se lanza. */
+    private static RuntimeException talk(StockLine line, Consumer<StockLine> action) {
+        try {
+            action.accept(line);
+            return null;
+        } catch (StockUnavailableException | StockRejectedException exception) {
+            return exception;
+        }
     }
 
     /**
@@ -197,29 +419,27 @@ class MaterialStockSynchronizer {
      * sigue siendo la de la linea, y se liquida al completar la orden. Una reserva en duda se repite
      * aqui mismo: es la misma peticion, con la misma clave.
      */
-    private void hold(MaintenanceMaterialUsage usage, Optional<UUID> project) {
-        Optional<StockReservation> current = currentReservation(usage);
+    private void hold(StockLine line, Optional<UUID> project) {
+        Optional<StockReservation> current = currentReservation(line);
         if (current.isPresent() && !current.get().holdsNothing()) {
-            usage.markReserved(current.get().id());
+            line.markReserved(current.get().id());
             return;
         }
         if (project.isEmpty()) {
             // Sin proyecto de stock no hay contra que reservar: al completar, lo usado sale como salida directa.
-            usage.markNotRequested();
+            line.markNotRequested();
             return;
         }
-        requestReservation(usage, project.get());
+        requestReservation(line, project.get());
     }
 
     /** Pide la reserva de la linea contra {@code project}, apuntada en duda hasta que stock conteste. */
-    private void requestReservation(MaintenanceMaterialUsage usage, UUID project) {
-        String key = idempotencyKey(usage, StockRequestType.RESERVATION, usage.getStockReservationId());
-        usage.markInDoubt(StockRequestType.RESERVATION);
-        StockReservation reservation = stockClient.reserve(usage.getMaterialId(), usage.getWarehouseId(), project,
-                usage.getPlannedQuantity(), key);
-        usage.markReserved(reservation.id());
-        LOGGER.info("Material reserved in stock: order={}, material={}, reservation={}",
-                usage.getOrder().getCode(), usage.getMaterialCode(), reservation.id());
+    private void requestReservation(StockLine line, UUID project) {
+        String key = idempotencyKey(line.id(), line.materialCode(), StockRequestType.RESERVATION, line.reservationId());
+        line.beginRequest(StockRequestType.RESERVATION);
+        StockReservation reservation = stockClient.reserve(line.materialId(), line.warehouseId(), project, line.plannedQuantity(), key);
+        line.markReserved(reservation.id());
+        LOGGER.info("Material reserved in stock: order={}, material={}, reservation={}", line.orderCode(), line.materialCode(), reservation.id());
     }
 
     /**
@@ -228,104 +448,108 @@ class MaterialStockSynchronizer {
      * devuelto sin validar nada-, y la linea sigue como si no se hubiera pedido. Un 409 IDEM-001 dice
      * lo contrario, que la clave ya creo algo con otro cuerpo: se deja pasar, y la linea lo cuenta.
      */
-    private void confirmReservation(MaintenanceMaterialUsage usage) {
-        UUID project = usage.getOrder().getStockProjectId();
+    private void confirmReservation(StockLine line) {
+        UUID project = line.stockProjectId();
         if (project == null) {
-            throw new IllegalStateException("Material line " + usage.getMaterialCode() + " has a reservation in doubt but order "
-                    + usage.getOrder().getCode() + " has no stock project to repeat it against");
+            throw new IllegalStateException("Material line " + line.materialCode() + " has a reservation in doubt but order "
+                    + line.orderCode() + " has no stock project to repeat it against");
         }
         try {
-            requestReservation(usage, project);
+            requestReservation(line, project);
         } catch (StockRejectedException rejected) {
             if (rejected.isIdempotencyConflict()) {
                 LOGGER.error("The idempotency key of the reservation in doubt was used with another body: order={}, material={}, cause={}",
-                        usage.getOrder().getCode(), usage.getMaterialCode(), rejected.getMessage());
+                        line.orderCode(), line.materialCode(), rejected.getMessage());
                 throw rejected;
             }
-            usage.clearInDoubt();
+            line.clearInDoubt();
             LOGGER.info("The reservation in doubt never reached stock, which now rejects it: order={}, material={}, cause={}",
-                    usage.getOrder().getCode(), usage.getMaterialCode(), rejected.getMessage());
+                    line.orderCode(), line.materialCode(), rejected.getMessage());
         }
     }
 
-    private void settle(MaintenanceMaterialUsage usage) {
-        if (usage.getStockRequestInDoubt() == StockRequestType.RESERVATION) {
+    private void settle(StockLine line) {
+        if (line.inDoubt() == StockRequestType.RESERVATION) {
             // La reserva sin respuesta puede estar reteniendo material: primero se confirma, y luego se
             // consume o se libera como cualquier otra. Sin esto, lo usado salia como salida directa y
             // la reserva se quedaba en stock.
-            confirmReservation(usage);
+            confirmReservation(line);
         }
-        Optional<StockReservation> reservation = currentReservation(usage);
+        Optional<StockReservation> reservation = currentReservation(line);
         if (reservation.filter(StockReservation::isActive).isPresent()) {
-            settleActive(usage, reservation.get());
+            settleActive(line, reservation.get());
         } else if (reservation.filter(StockReservation::isConsumed).isPresent()) {
-            settleConsumed(usage, reservation.get());
-        } else if (usage.getConsumedQuantity().signum() > 0) {
+            settleConsumed(line, reservation.get());
+        } else if (line.consumedQuantity().signum() > 0) {
             // Sin reserva que retenga nada: lo usado sale como salida directa.
-            output(usage, usage.getConsumedQuantity(), directOutputNotes(usage));
-            usage.markConsumed();
-        } else if (usage.getStockReservationId() != null) {
-            usage.markReleased();
+            output(line, line.consumedQuantity(), directOutputNotes(line));
+            line.markConsumed();
+        } else if (line.reservationId() != null) {
+            line.markReleased();
         } else {
-            usage.markNotRequested();
+            line.markNotRequested();
         }
     }
 
-    private void settleActive(MaintenanceMaterialUsage usage, StockReservation reservation) {
-        BigDecimal used = usage.getConsumedQuantity();
-        BigDecimal reserved = reserved(usage, reservation);
+    private void settleActive(StockLine line, StockReservation reservation) {
+        BigDecimal used = line.consumedQuantity();
+        BigDecimal reserved = reserved(line, reservation);
         if (used.signum() == 0) {
+            line.checkOpen();
             stockClient.release(reservation.id());
-            usage.markReleased();
+            line.markReleased();
             return;
         }
         int comparison = used.compareTo(reserved);
         if (comparison < 0) {
             // mto-stock no consume parte de una reserva: se libera entera y sale lo usado.
+            line.checkOpen();
             stockClient.release(reservation.id());
-            output(usage, used, directOutputNotes(usage));
+            output(line, used, directOutputNotes(line));
         } else {
+            line.checkOpen();
             stockClient.consume(reservation.id());
             if (comparison > 0) {
-                output(usage, used.subtract(reserved), "Over-consumption beyond reservation " + reservation.id());
+                output(line, used.subtract(reserved), "Over-consumption beyond reservation " + reservation.id());
             }
         }
-        usage.markConsumed();
+        line.markConsumed();
     }
 
     /** La reserva ya se consumio (en un intento anterior o desde Almacen): queda la salida de lo usado por encima. */
-    private void settleConsumed(MaintenanceMaterialUsage usage, StockReservation reservation) {
-        BigDecimal excess = usage.getConsumedQuantity().subtract(reserved(usage, reservation));
+    private void settleConsumed(StockLine line, StockReservation reservation) {
+        BigDecimal excess = line.consumedQuantity().subtract(reserved(line, reservation));
         if (excess.signum() > 0) {
-            output(usage, excess, "Over-consumption beyond reservation " + reservation.id());
+            output(line, excess, "Over-consumption beyond reservation " + reservation.id());
         } else if (excess.signum() < 0) {
             LOGGER.warn("Reservation {} was consumed in stock for more than the {} {} used: order={}, material={}",
-                    reservation.id(), usage.getConsumedQuantity(), usage.getUnit(), usage.getOrder().getCode(), usage.getMaterialCode());
+                    reservation.id(), line.consumedQuantity(), line.unit(), line.orderCode(), line.materialCode());
         }
-        usage.markConsumed();
+        line.markConsumed();
     }
 
-    private void free(MaintenanceMaterialUsage usage) {
-        if (usage.getStockRequestInDoubt() == StockRequestType.OUTPUT) {
+    private void free(StockLine line) {
+        if (line.inDoubt() == StockRequestType.OUTPUT) {
             // Lo usado salio, o sale ahora: la salida que se quedo sin respuesta se termina, y la linea
             // queda consumida como en stock. Liberar no la deshace.
-            settle(usage);
+            settle(line);
             return;
         }
-        if (usage.getStockRequestInDoubt() == StockRequestType.RESERVATION) {
-            confirmReservation(usage);
+        if (line.inDoubt() == StockRequestType.RESERVATION) {
+            confirmReservation(line);
         }
-        Optional<StockReservation> reservation = currentReservation(usage);
+        Optional<StockReservation> reservation = currentReservation(line);
         if (reservation.filter(StockReservation::isActive).isPresent()) {
+            line.checkOpen();
             stockClient.release(reservation.get().id());
-            usage.markReleased();
+            line.markReleased();
         } else if (reservation.filter(StockReservation::isConsumed).isPresent()) {
             // Se consumio antes de cancelar: el material ya salio del almacen, y la linea lo dice.
-            usage.markConsumed();
-        } else if (usage.getStockReservationId() != null) {
-            usage.markReleased();
+            line.markConsumed();
+        } else if (line.reservationId() != null) {
+            line.markReleased();
         } else {
-            usage.markNotRequested();
+            line.markNotRequested();
         }
     }
 
@@ -334,14 +558,16 @@ class MaterialStockSynchronizer {
      * vacio si no, o si stock no la conoce. Un estado que este servicio no conoce no se interpreta:
      * la linea queda FAILED con el.
      */
-    private Optional<StockReservation> currentReservation(MaintenanceMaterialUsage usage) {
-        StockSyncStatus status = usage.getStockSyncStatus();
-        if (usage.getStockReservationId() == null || status == StockSyncStatus.RELEASED || status == StockSyncStatus.CONSUMED) {
+    private Optional<StockReservation> currentReservation(StockLine line) {
+        StockSyncStatus status = line.status();
+        UUID reservationId = line.reservationId();
+        if (reservationId == null || status == StockSyncStatus.RELEASED || status == StockSyncStatus.CONSUMED) {
             return Optional.empty();
         }
-        Optional<StockReservation> reservation = stockClient.findReservation(usage.getStockReservationId());
+        line.checkOpen();
+        Optional<StockReservation> reservation = stockClient.findReservation(reservationId);
         if (reservation.isPresent() && !reservation.get().isActive() && !reservation.get().isConsumed() && !reservation.get().holdsNothing()) {
-            throw new StockUnavailableException("mto-stock reports reservation " + usage.getStockReservationId() + " as "
+            throw new StockUnavailableException("mto-stock reports reservation " + reservationId + " as "
                     + reservation.get().status() + ", which this service does not know how to settle");
         }
         return reservation;
@@ -361,11 +587,10 @@ class MaterialStockSynchronizer {
     }
 
     /** La salida de la linea, apuntada en duda hasta que stock conteste; quien la llama deja la linea consumida. */
-    private void output(MaintenanceMaterialUsage usage, BigDecimal quantity, String notes) {
-        MaintenanceOrder order = usage.getOrder();
-        String key = idempotencyKey(usage, StockRequestType.OUTPUT, null);
-        usage.markInDoubt(StockRequestType.OUTPUT);
-        stockClient.output(usage.getMaterialId(), usage.getWarehouseId(), order.getStockProjectId(), quantity, order.getCode(), notes, key);
+    private void output(StockLine line, BigDecimal quantity, String notes) {
+        String key = idempotencyKey(line.id(), line.materialCode(), StockRequestType.OUTPUT, null);
+        line.beginRequest(StockRequestType.OUTPUT);
+        stockClient.output(line.materialId(), line.warehouseId(), line.stockProjectId(), quantity, line.orderCode(), notes, key);
     }
 
     /**
@@ -375,9 +600,9 @@ class MaterialStockSynchronizer {
      * queda sin respuesta despues de liberar, el reintento llega por el segundo camino y tiene que
      * mandar lo mismo, o stock lo rechazaria con 409 IDEM-001.
      */
-    private static String directOutputNotes(MaintenanceMaterialUsage usage) {
-        String order = "Maintenance order " + usage.getOrder().getCode();
-        return usage.getStockReservationId() == null ? order : order + ", reservation " + usage.getStockReservationId() + " not consumed";
+    private static String directOutputNotes(StockLine line) {
+        String order = "Maintenance order " + line.orderCode();
+        return line.reservationId() == null ? order : order + ", reservation " + line.reservationId() + " not consumed";
     }
 
     /**
@@ -395,18 +620,22 @@ class MaterialStockSynchronizer {
      * recibiria lo que creo la primera.</p>
      */
     static String idempotencyKey(MaintenanceMaterialUsage usage, StockRequestType request, UUID previousReservation) {
-        if (usage.getId() == null) {
-            throw new IllegalStateException("Material line " + usage.getMaterialCode() + " has no id yet: save it before asking stock for anything");
+        return idempotencyKey(usage.getId(), usage.getMaterialCode(), request, previousReservation);
+    }
+
+    private static String idempotencyKey(UUID lineId, String materialCode, StockRequestType request, UUID previousReservation) {
+        if (lineId == null) {
+            throw new IllegalStateException("Material line " + materialCode + " has no id yet: save it before asking stock for anything");
         }
-        String key = "mto-maintenance:" + usage.getId();
+        String key = "mto-maintenance:" + lineId;
         return request == StockRequestType.RESERVATION
                 ? key + ":reserve:" + (previousReservation == null ? "first" : previousReservation)
                 : key + ":output";
     }
 
     /** Lo que stock tiene reservado, que desde Almacen se puede haber cambiado; lo previsto si no lo dice. */
-    private static BigDecimal reserved(MaintenanceMaterialUsage usage, StockReservation reservation) {
-        return reservation.quantity() == null ? usage.getPlannedQuantity() : reservation.quantity();
+    private static BigDecimal reserved(StockLine line, StockReservation reservation) {
+        return reservation.quantity() == null ? line.plannedQuantity() : reservation.quantity();
     }
 
     /**
@@ -424,16 +653,14 @@ class MaterialStockSynchronizer {
         return usage.getStockSyncStatus() == StockSyncStatus.RESERVED || usage.isSyncFailed();
     }
 
-    /** Ejecuta un paso contra stock; si falla, la linea lo dice y se devuelve el fallo. */
-    private RuntimeException attempt(MaintenanceMaterialUsage usage, String step, Runnable action) {
-        LineState before = LineState.of(usage);
-        try {
-            action.run();
-            return null;
-        } catch (StockUnavailableException | StockRejectedException exception) {
-            record(usage, step, exception, before);
-            return exception;
+    private static RuntimeException rethrowable(Throwable failure) {
+        if (failure instanceof RuntimeException runtime) {
+            return runtime;
         }
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        return new IllegalStateException(failure);
     }
 
     /**

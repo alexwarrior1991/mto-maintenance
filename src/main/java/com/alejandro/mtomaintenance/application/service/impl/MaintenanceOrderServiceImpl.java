@@ -295,7 +295,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
         // Consumo de materiales contra stock. Una linea que sigue FAILED o REJECTED tras intentarlo
         // bloquea el cierre salvo force (supervision), que lo deja escrito en las notas de cierre. Lo
         // que stock hizo con las demas queda aunque se rechace: repetir no lo vuelve a consumir.
-        order.getMaterials().forEach(stock::consume);
+        stock.consumeAll(order);
         List<MaintenanceMaterialUsage> unsynced = order.getMaterials().stream().filter(MaintenanceMaterialUsage::isSyncFailed).toList();
         if (!unsynced.isEmpty()) {
             if (!request.isForced()) {
@@ -335,7 +335,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
 
         order.setCancellationReason(request.reason().trim());
         order.getTasks().stream().filter(MaintenanceTask::isOpen).forEach(task -> task.setStatus(MaintenanceTaskStatus.CANCELLED));
-        order.getMaterials().forEach(stock::release);
+        stock.releaseAll(order);
 
         // Un defecto que esperaba a esta orden vuelve a estar abierto; conserva el enlace como historia.
         for (CatenaryDefect defect : defectRepository.findByOrderIdAndStatus(order.getId(), DefectStatus.IN_PROGRESS)) {

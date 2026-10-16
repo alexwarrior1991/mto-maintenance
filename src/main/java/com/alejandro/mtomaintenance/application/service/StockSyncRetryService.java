@@ -1,5 +1,8 @@
 package com.alejandro.mtomaintenance.application.service;
 
+import java.util.Collection;
+import java.util.UUID;
+
 /**
  * Reintento automatico de las lineas de material que stock no llego a contestar (FAILED).
  *
@@ -21,4 +24,13 @@ public interface StockSyncRetryService {
      * @return cuantas han dejado de estar FAILED
      */
     int retryFailedLines();
+
+    /**
+     * Las lineas dadas de una orden, ahora: las que su transicion dejo sin respuesta de stock en el plazo
+     * ({@code app.stock.sync.deadline}). Como una vuelta, cada una en su transaccion, y se para en la
+     * primera a la que stock sigue sin contestar; lo que quede FAILED lo recoge la vuelta periodica.
+     *
+     * @return cuantas han dejado de estar FAILED
+     */
+    int retryLines(UUID orderId, Collection<UUID> lineIds);
 }

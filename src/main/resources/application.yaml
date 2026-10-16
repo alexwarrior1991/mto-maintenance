@@ -374,3 +374,11 @@ app:
     sync-retry:
       enabled: ${APP_STOCK_SYNC_RETRY_ENABLED:true}
       interval: ${APP_STOCK_SYNC_RETRY_INTERVAL:PT5M}
+    # Planificar, arrancar, completar o cancelar una orden habla con stock por todas sus lineas a la
+    # vez, cada una en un hilo virtual y sin tocar la base, con un plazo para todas. La linea que no
+    # contesta a tiempo queda FAILED con lo que tuviera en duda, la orden sigue, y al confirmar se
+    # reintenta en ese momento (immediate-retry) en vez de esperar a sync-retry.
+    sync:
+      parallelism: ${APP_STOCK_SYNC_PARALLELISM:4}
+      deadline: ${APP_STOCK_SYNC_DEADLINE:15s}
+      immediate-retry: ${APP_STOCK_SYNC_IMMEDIATE_RETRY:true}

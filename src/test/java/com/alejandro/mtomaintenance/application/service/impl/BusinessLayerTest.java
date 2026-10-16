@@ -14,11 +14,15 @@ import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.springframework.beans.BeanUtils;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.anyLong;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectRequest;
 import com.alejandro.mtomaintenance.application.dto.defect.CatenaryDefectUpdateRequest;
@@ -337,7 +341,7 @@ class BusinessLayerTest {
         assertNotNull(order.getActualEndDate());
         assertEquals(order.getActualEndDate(), order.getAsset().getLastPreventiveCompletedAt());
         assertEquals(done.getCompletedAt(), done.getAsset().getLastPreventiveCompletedAt());
-        verify(fixture.stock).consume(line);
+        verify(fixture.stock).consumeAll(order);
         verify(fixture.history).recordOrderChange(order, "IN_PROGRESS", "COMPLETED", "all good");
     }
 
@@ -356,8 +360,7 @@ class BusinessLayerTest {
         assertThrows(UnsyncedMaterialsException.class, () -> fixture.service.complete(order.getId(), new CompleteOrderRequest("done", false, null)));
 
         // Stock ya se ha llamado por cada linea, y ese rechazo no deshace la transaccion: la orden no puede quedar tocada.
-        verify(fixture.stock).consume(failed);
-        verify(fixture.stock).consume(rejected);
+        verify(fixture.stock).consumeAll(order);
         assertEquals(MaintenanceOrderStatus.IN_PROGRESS, order.getStatus());
         assertNull(order.getClosingNotes());
         assertNull(order.getActualEndDate());
@@ -399,7 +402,7 @@ class BusinessLayerTest {
         assertEquals("no possession granted", order.getCancellationReason());
         assertEquals(MaintenanceTaskStatus.CANCELLED, open.getStatus());
         assertEquals(DefectStatus.OPEN, defect.getStatus());
-        verify(fixture.stock).release(line);
+        verify(fixture.stock).releaseAll(order);
         verify(fixture.history).recordDefectChange(eq(defect), eq("IN_PROGRESS"), eq("OPEN"), anyString());
         verify(fixture.history).recordOrderChange(order, "ASSIGNED", "CANCELLED", "no possession granted");
     }
@@ -2814,6 +2817,139 @@ class BusinessLayerTest {
     }
 
     @Test
+    void planningTalksToStockForEveryLineAtOnceSoFourSlowLinesTakeTheTimeOfOne() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            Thread.sleep(400);
+            return new StockReservation(UUID.randomUUID(), invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+                    invocation.getArgument(3), "ACTIVE");
+        });
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, events, virtualThreads(), 4,
+                Duration.ofSeconds(10), true, event -> fail("Nothing is deferred: " + event));
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
+        order.setStockProjectId(UUID.randomUUID());
+        List<MaintenanceMaterialUsage> lines = List.of(line(order), line(order), line(order), line(order));
+
+        long started = System.nanoTime();
+        synchronizer.reserveAll(order);
+        long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        assertTrue(elapsed < 1200, "Four lines of 400 ms each in parallel, not 1600 ms in a row: " + elapsed + " ms");
+        lines.forEach(line -> {
+            assertEquals(StockSyncStatus.RESERVED, line.getStockSyncStatus());
+            assertNotNull(line.getStockReservationId());
+            assertFalse(line.isInDoubt());
+        });
+        assertTrue(events.published.isEmpty());
+    }
+
+    @Test
+    void aLineThatStockDoesNotAnswerWithinTheDeadlineIsLeftInDoubtAndTheRetryRepeatsItWithTheSameKey() throws Exception {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        CountDownLatch release = new CountDownLatch(1);
+        List<String> keys = java.util.Collections.synchronizedList(new ArrayList<>());
+        UUID created = UUID.randomUUID();
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
+        order.setStockProjectId(UUID.randomUUID());
+        MaintenanceMaterialUsage quick = line(order);
+        MaintenanceMaterialUsage slow = line(order);
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            keys.add(invocation.getArgument(4));
+            if (invocation.getArgument(0).equals(slow.getMaterialId()) && release.getCount() > 0) {
+                release.await(10, TimeUnit.SECONDS);
+            }
+            return new StockReservation(invocation.getArgument(0).equals(slow.getMaterialId()) ? created : UUID.randomUUID(),
+                    invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2), invocation.getArgument(3), "ACTIVE");
+        });
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        List<Object> deferred = new ArrayList<>();
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, events, virtualThreads(), 4,
+                Duration.ofMillis(300), true, deferred::add);
+
+        long started = System.nanoTime();
+        synchronizer.reserveAll(order);
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 2000, "The transition does not wait for a slow stock");
+
+        assertEquals(StockSyncStatus.RESERVED, quick.getStockSyncStatus());
+        assertEquals(StockSyncStatus.FAILED, slow.getStockSyncStatus());
+        assertEquals(StockRequestType.RESERVATION, slow.getStockRequestInDoubt(), "The reservation may have reached stock");
+        assertTrue(slow.getStockSyncError().contains("deferred"), slow.getStockSyncError());
+        assertNull(slow.getStockReservationId());
+        assertEquals(List.of("material.in-doubt"), events.names(), "Said once, like any line left in doubt");
+        StockLinesDeferred event = (StockLinesDeferred) deferred.getFirst();
+        assertEquals(order.getId(), event.orderId());
+        assertEquals(List.of(slow.getId()), event.lineIds());
+
+        // La llamada en el aire termina despues; la entidad ya no cambia por ella.
+        release.countDown();
+        CompletableFuture.allOf(event.inFlight().toArray(CompletableFuture[]::new)).get(5, TimeUnit.SECONDS);
+        assertEquals(StockSyncStatus.FAILED, slow.getStockSyncStatus());
+        assertNull(slow.getStockReservationId());
+
+        // El reintento repite la reserva en duda con la misma clave, y stock devuelve la que creo.
+        synchronizer.syncNow(slow);
+        assertEquals(StockSyncStatus.RESERVED, slow.getStockSyncStatus());
+        assertEquals(created, slow.getStockReservationId());
+        String slowKey = MaterialStockSynchronizer.idempotencyKey(slow, StockRequestType.RESERVATION, null);
+        assertEquals(2, keys.stream().filter(slowKey::equals).count(), "Sent twice with one key: stock applies it once");
+    }
+
+    @Test
+    void aConversationCutByItsDeadlineSendsNothingMoreToStock() throws Exception {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        CountDownLatch release = new CountDownLatch(1);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
+        order.setStockProjectId(UUID.randomUUID());
+        MaintenanceMaterialUsage first = line(order);
+        MaintenanceMaterialUsage second = line(order);
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            release.await(10, TimeUnit.SECONDS);
+            return new StockReservation(UUID.randomUUID(), invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+                    invocation.getArgument(3), "ACTIVE");
+        });
+        List<Object> deferred = new ArrayList<>();
+        // Una a la vez: la segunda espera su turno detras de la primera, que no contesta.
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher(), virtualThreads(), 1,
+                Duration.ofMillis(200), true, deferred::add);
+
+        synchronizer.reserveAll(order);
+
+        // Cual de las dos llego primero al permiso no esta fijado: una tiene su reserva en el aire, la otra nada.
+        MaintenanceMaterialUsage sent = first.isInDoubt() ? first : second;
+        MaintenanceMaterialUsage waiting = sent == first ? second : first;
+        assertEquals(StockRequestType.RESERVATION, sent.getStockRequestInDoubt(), "Its reservation was in the air");
+        assertNull(waiting.getStockRequestInDoubt(), "It never got to send anything");
+        assertEquals(StockSyncStatus.FAILED, sent.getStockSyncStatus());
+        assertEquals(StockSyncStatus.FAILED, waiting.getStockSyncStatus());
+        release.countDown();
+        StockLinesDeferred event = (StockLinesDeferred) deferred.getFirst();
+        assertEquals(java.util.Set.of(first.getId(), second.getId()), java.util.Set.copyOf(event.lineIds()));
+        CompletableFuture.allOf(event.inFlight().toArray(CompletableFuture[]::new)).get(5, TimeUnit.SECONDS);
+        verify(stockClient, times(1)).reserve(any(), any(), any(), any(), any());
+        verify(stockClient, never()).reserve(eq(waiting.getMaterialId()), any(), any(), any(), any());
+    }
+
+    @Test
+    void theDeferredLinesAreRetriedRightAfterTheCommitOnceTheirCallInTheAirIsOver() {
+        StockSyncRetryService retryService = mock(StockSyncRetryService.class);
+        DeferredStockSyncListener listener = new DeferredStockSyncListener(retryService, Runnable::run);
+        UUID orderId = UUID.randomUUID();
+        List<UUID> lines = List.of(UUID.randomUUID(), UUID.randomUUID());
+        CompletableFuture<RuntimeException> inTheAir = new CompletableFuture<>();
+        CompletableFuture.delayedExecutor(150, TimeUnit.MILLISECONDS).execute(() -> inTheAir.complete(null));
+
+        long started = System.nanoTime();
+        listener.retryAfterCommit(new StockLinesDeferred(orderId, lines, List.of(inTheAir)));
+
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) >= 140, "It waits for the call in the air");
+        verify(retryService).retryLines(orderId, lines);
+    }
+
+    @Test
     void settlingALineAsksStockFirstSoThatRetryingNeverConsumesTwice() {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
@@ -4503,6 +4639,11 @@ class BusinessLayerTest {
         MaintenanceTask task = MaintenanceTask.builder().order(order).sequence(order.getTasks().size() + 1).description("Task").status(status).build();
         ReflectionTestUtils.setField(task, "id", UUID.randomUUID());
         return task;
+    }
+
+    /** El executor de produccion: un hilo virtual por tarea. */
+    private static java.util.concurrent.Executor virtualThreads() {
+        return new com.alejandro.mtomaintenance.configuration.async.AsyncConfiguration().applicationTaskExecutor();
     }
 
     private static MaintenanceMaterialUsage line(MaintenanceOrder order) {
