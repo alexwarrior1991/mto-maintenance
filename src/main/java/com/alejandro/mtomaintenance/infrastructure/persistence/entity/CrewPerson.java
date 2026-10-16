@@ -15,7 +15,7 @@ import java.util.UUID;
 
 /**
  * Una persona de mto-resources, tal como la necesita un turno: su codigo, su nombre, su usuario y su
- * categoria. Solo se lee: la escribe {@code ResourcesSnapshotRepository} con SQL nativo y la marca de
+ * categoria. Solo se lee: la escribe {@code CrewPersonRepository} con SQL nativo y la marca de
  * agua dentro de la sentencia, como un activo de datos maestros. No se audita (Envers no veria esas
  * escrituras). El id es el de mto-resources.
  */

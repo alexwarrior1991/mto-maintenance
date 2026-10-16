@@ -33,7 +33,7 @@ import java.util.UUID;
  *
  * <p>Uno <b>sincronizado</b> ({@code sourceService = mto-resources}) es de mto-resources: su jefe, su
  * supervisor, sus linemen y su vehiculo por defecto los escribe con SQL nativo
- * {@code ResourcesSnapshotRepository}, y por eso esas columnas no las escribe JPA. Uno local, de antes,
+ * {@code MaintenanceTeamRepository}, y por eso esas columnas no las escribe JPA. Uno local, de antes,
  * se edita aqui hasta que se da de alta alli con su codigo y se adopta.</p>
  */
 @Entity

@@ -16,7 +16,7 @@ import java.util.UUID;
 /**
  * Un vehiculo de mto-resources, tal como lo necesita un turno: por donde va ({@code mobility}), si se
  * mueve solo, si remolca, cuantas plazas tiene y si esta disponible. Solo se lee: la escribe
- * {@code ResourcesSnapshotRepository} con SQL nativo y la marca de agua dentro de la sentencia. No se
+ * {@code FleetVehicleRepository} con SQL nativo y la marca de agua dentro de la sentencia. No se
  * audita. El id es el de mto-resources; sus enumerados van como texto.
  */
 @Entity
