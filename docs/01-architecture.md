@@ -63,3 +63,14 @@ Rules that keep the layers honest:
 - **Pagination**: `PageResponse<T>` with `PageMetadataResponse`.
 - **Observability**: Actuator health/info public; metrics and prometheus behind `ops-metrics`;
   traces exported by OTLP, including the trace propagated in the RabbitMQ headers.
+- **Threads**: virtual threads (`spring.threads.virtual.enabled`, `SPRING_THREADS_VIRTUAL_ENABLED`,
+  `true` by default) for Tomcat's requests (`tomcat-handler-N`), the `@Scheduled` jobs (Boot's
+  `SimpleAsyncTaskScheduler`: the fixed-delay ones still run one after another on its thread, the
+  daily `preventive.due-soon` cron on its own), the RabbitMQ consumer (`rabbit-simple-N`) and the
+  `stock` circuit breaker (`StockCircuitBreakerExecutorConfiguration`, `stock-circuit-N`: Spring Cloud
+  CircuitBreaker runs each call on its own executor, a platform pool the flag does not reach). The
+  `outbox-dispatch` thread stays a single platform thread on purpose: `OutboxDispatchTrigger`
+  coalesces wake-ups on it. A single request is no faster; what changes is how many can wait at once
+  without an OS thread each. The limit is the connection pool (`DATABASE_POOL_MAX_SIZE`, 10 by
+  default), and the pools of every service share the `max_connections` (100) of the PostgreSQL of
+  `mto-platform`. A connection is held while a stock call runs inside an order transition.

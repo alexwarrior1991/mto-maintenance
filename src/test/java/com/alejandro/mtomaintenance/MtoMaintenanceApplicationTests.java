@@ -87,14 +87,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
+import com.zaxxer.hikari.HikariDataSource;
 import io.micrometer.tracing.Tracer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.thread.Threading;
 import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import javax.sql.DataSource;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -201,6 +204,17 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
     @Test
     void theTracingBridgeIsInTheContext() {
         assertNotNull(tracer);
+    }
+
+    /**
+     * La configuracion de la aplicacion enciende los hilos virtuales (Tomcat, los @Scheduled, el
+     * consumidor y el circuito de stock los toman de esta misma condicion), y el pool de conexiones,
+     * que pasa a ser el limite real, es el configurado: 10 por defecto.
+     */
+    @Test
+    void theApplicationRunsOnVirtualThreadsWithTheConfiguredConnectionPool() throws Exception {
+        assertTrue(Threading.VIRTUAL.isActive(context.getEnvironment()), "spring.threads.virtual.enabled");
+        assertEquals(10, context.getBean(DataSource.class).unwrap(HikariDataSource.class).getMaximumPoolSize());
     }
 
     /**

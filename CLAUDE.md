@@ -46,6 +46,9 @@ cd ../mto-platform && docker compose --profile all up -d && ./keycloak/apply-par
   in every profile, so schema changes always go through a new migration. A migration that changes a
   column on one of the audited tables must change its `<table>_aud` twin in the same migration.
 - Swagger UI: `http://localhost:8083/swagger-ui.html` (`dev` profile); OpenAPI JSON: `/v3/api-docs`.
+- Virtual threads are on (`SPRING_THREADS_VIRTUAL_ENABLED`, see `docs/01-architecture.md`, Threads):
+  the limit is the connection pool (`DATABASE_POOL_MAX_SIZE`, 10), not the threads; `outbox-dispatch`
+  stays one platform thread on purpose.
 - Profiles: `dev`, `test`, `prod`, selected via `SPRING_PROFILES_ACTIVE`. Local port is **8083**
   (`dev`); the container listens on 8080 and `mto-platform` publishes it on 8083.
 
@@ -186,7 +189,9 @@ outbox bean exists.
 `StockClient` (interface in `application/service`) is the only door to `mto-stock`.
 `RestClientStockClient` authenticates with the Keycloak service account `mto-maintenance-svc`
 (`client_credentials`, audience `mto-stock-api`) and runs every call inside the Spring Cloud
-circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`). Its token manager
+circuit breaker `stock` (Resilience4j, tuned with `app.stock.circuit-breaker.*`; with virtual threads
+on, `StockCircuitBreakerExecutorConfiguration` gives each call a virtual thread, because the breaker
+runs it on its own executor, a platform pool the flag does not reach). Its token manager
 is built by `StockClientConfiguration` itself, never taken from the context: the one Spring Security
 registers by default needs an HTTP request in course, and these calls run on the breaker's thread or
 the scheduled retry (`servletRequest cannot be null`, every line `FAILED`). A failure is one
