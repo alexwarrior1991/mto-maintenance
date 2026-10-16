@@ -38,6 +38,21 @@ public record MaintenanceShiftUpdateRequest(
         String personnel,
         @Size(max = 500) String measurementEquipment,
         String observations,
+        Set<@NotNull UUID> vehicleIds,
+        UUID teamLeaderPersonId,
+        UUID supervisorPersonId,
+        Set<@NotNull UUID> linemanPersonIds,
         Long version
 ) {
+
+    /** Sin tocar la dotacion ni los vehiculos. */
+    public MaintenanceShiftUpdateRequest(LocalDate shiftDate, UUID teamId, String baseName, String vehicle, PossessionType possessionType,
+                                         Instant plannedStart, Instant plannedEnd, Set<UUID> blockingDisconnectorIds, String earthingPoints,
+                                         String parkingPlace, Long executionPackageId, Set<Long> trackIds, BigDecimal startKp,
+                                         BigDecimal endKp, String personnel, String measurementEquipment, String observations,
+                                         Long version) {
+        this(shiftDate, teamId, baseName, vehicle, possessionType, plannedStart, plannedEnd, blockingDisconnectorIds, earthingPoints,
+                parkingPlace, executionPackageId, trackIds, startKp, endKp, personnel, measurementEquipment, observations,
+                null, null, null, null, version);
+    }
 }

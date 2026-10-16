@@ -1,14 +1,18 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
+import com.alejandro.mtomaintenance.application.dto.crew.CrewPersonSummary;
 import com.alejandro.mtomaintenance.application.dto.export.ReportDocument;
 import com.alejandro.mtomaintenance.application.dto.export.ReportValue;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportInspectionResponse;
-import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftVehicleResponse;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamSummaryResponse;
 
+import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -80,6 +84,26 @@ final class ShiftReportLayout {
             new ReportDocument.Column("Defect", 6),
             new ReportDocument.Column("Corrective order", 6));
 
+    private static final String CREW = "Crew";
+
+    /** Quien fue esa noche: el jefe, el supervisor y los linemen, de mto-resources. */
+    private static final List<ReportDocument.Column> CREW_COLUMNS = List.of(
+            new ReportDocument.Column("Role", 5),
+            new ReportDocument.Column("Code", 5),
+            new ReportDocument.Column("Name", 12),
+            new ReportDocument.Column("Username", 8),
+            new ReportDocument.Column("Category", 7));
+
+    private static final String VEHICLES = "Vehicles";
+
+    /** En que fueron y donde se dejo cada uno al cerrar: no hay base fija. */
+    private static final List<ReportDocument.Column> VEHICLE_COLUMNS = List.of(
+            new ReportDocument.Column("Code", 5),
+            new ReportDocument.Column("Name", 10),
+            new ReportDocument.Column("Mobility", 6),
+            new ReportDocument.Column("Category", 8),
+            new ReportDocument.Column("Parking", 16));
+
     private ShiftReportLayout() {
     }
 
@@ -98,7 +122,9 @@ final class ShiftReportLayout {
                 header(shift, time),
                 new ReportDocument.Table(COLUMNS, rows),
                 totals(report),
-                List.of(new ReportDocument.Appendix(INSPECTIONS, new ReportDocument.Table(INSPECTION_COLUMNS, inspections))));
+                List.of(new ReportDocument.Appendix(INSPECTIONS, new ReportDocument.Table(INSPECTION_COLUMNS, inspections)),
+                        new ReportDocument.Appendix(CREW, new ReportDocument.Table(CREW_COLUMNS, crew(shift))),
+                        new ReportDocument.Appendix(VEHICLES, new ReportDocument.Table(VEHICLE_COLUMNS, vehicles(shift)))));
     }
 
     private static String subtitle(MaintenanceShiftResponse shift) {
@@ -134,6 +160,11 @@ final class ShiftReportLayout {
                 new ReportDocument.Field("Blocking disconnectors", disconnectors(shift)),
                 new ReportDocument.Field("Earthing points", ReportValue.text(shift.earthingPoints())),
                 new ReportDocument.Field("Parking place", ReportValue.text(shift.parkingPlace())),
+                new ReportDocument.Field("Team leader", ReportValue.text(name(shift.teamLeader()))),
+                new ReportDocument.Field("Supervisor", ReportValue.text(name(shift.supervisor()))),
+                new ReportDocument.Field("Linemen", ReportValue.count(shift.linemen() == null ? null : shift.linemen().size())),
+                new ReportDocument.Field("Vehicles", ReportValue.textList(shift.vehicles() == null ? List.of()
+                        : shift.vehicles().stream().map(ShiftVehicleResponse::code).toList())),
                 new ReportDocument.Field("Personnel", ReportValue.text(shift.personnel())),
                 new ReportDocument.Field("Measurement equipment", ReportValue.text(shift.measurementEquipment())),
                 new ReportDocument.Field("Observations", ReportValue.text(shift.observations())));
@@ -187,6 +218,59 @@ final class ShiftReportLayout {
                 ReportValue.flag(row.workComplete()),
                 ReportValue.date(row.repairPlannedDate()),
                 ReportValue.textList(row.photoRefs()));
+    }
+
+    private static List<List<ReportValue>> crew(MaintenanceShiftResponse shift) {
+        List<List<ReportValue>> rows = new ArrayList<>();
+        if (shift.teamLeader() != null) {
+            rows.add(person("Team leader", shift.teamLeader()));
+        }
+        if (shift.supervisor() != null) {
+            rows.add(person("Supervisor", shift.supervisor()));
+        }
+        if (shift.linemen() != null) {
+            shift.linemen().forEach(lineman -> rows.add(person("Lineman", lineman)));
+        }
+        return rows;
+    }
+
+    private static List<ReportValue> person(String role, CrewPersonSummary person) {
+        return List.of(ReportValue.text(role), ReportValue.text(person.code()), ReportValue.text(person.fullName()),
+                ReportValue.text(person.username()), ReportValue.text(person.category()));
+    }
+
+    private static List<List<ReportValue>> vehicles(MaintenanceShiftResponse shift) {
+        if (shift.vehicles() == null) {
+            return List.of();
+        }
+        return shift.vehicles().stream().map(vehicle -> List.of(
+                ReportValue.text(vehicle.code()),
+                ReportValue.text(vehicle.name()),
+                ReportValue.text(vehicle.mobility()),
+                ReportValue.text(vehicle.category()),
+                ReportValue.text(parking(vehicle.parking())))).toList();
+    }
+
+    /** {@code track 31, kp 4.250 — Siding north of Herzliya}; un sitio del catalogo va por su id de mto-resources. */
+    private static String parking(ShiftVehicleResponse.Parking parking) {
+        if (parking == null) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        if (parking.trackId() != null) {
+            parts.add("track " + parking.trackId() + (parking.kp() == null ? "" : ", kp " + parking.kp().setScale(3, RoundingMode.HALF_UP).toPlainString()));
+        }
+        if (parking.siteId() != null) {
+            parts.add("site " + parking.siteId());
+        }
+        if (parking.description() != null) {
+            parts.add(parking.description());
+        }
+        return String.join(" — ", parts);
+    }
+
+    private static String name(CrewPersonSummary person) {
+        return person == null ? null : person.fullName() + " (" + person.code() + ")";
     }
 
     private static ReportValue disconnectors(MaintenanceShiftResponse shift) {

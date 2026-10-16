@@ -1,15 +1,19 @@
 package com.alejandro.mtomaintenance.configuration.rabbitmq;
 
+import com.alejandro.mtomaintenance.application.service.IncomingEventProcessor;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor;
 import com.alejandro.mtomaintenance.configuration.messaging.MessagePayloadSignatureVerifier;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataEventConsumer;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataRabbitMqNames;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.RabbitListenerContainerFactoryNames;
+import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.ResourcesEventConsumer;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.Declarable;
+import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
@@ -48,7 +52,7 @@ import tools.jackson.databind.json.JsonMapper;
  */
 @Configuration
 @RequiredArgsConstructor
-@EnableConfigurationProperties({MasterDataRabbitProperties.class, MaintenanceEventsProperties.class})
+@EnableConfigurationProperties({MasterDataRabbitProperties.class, MaintenanceEventsProperties.class, ResourcesRabbitProperties.class})
 @ConditionalOnProperty(prefix = "app.rabbitmq", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class RabbitMqConfiguration {
 
@@ -56,6 +60,7 @@ public class RabbitMqConfiguration {
 
     private final MasterDataRabbitProperties properties;
     private final MaintenanceEventsProperties eventsProperties;
+    private final ResourcesRabbitProperties resourcesProperties;
 
     /**
      * Exchange propio: lo que este servicio cuenta de sí mismo, con la clave
@@ -189,5 +194,77 @@ public class RabbitMqConfiguration {
                 properties.deadLetterQueue(), properties.deadLetterExchange(), properties.deadLetterRoutingKey());
 
         return new MasterDataEventConsumer(masterDataEventProcessor, signatureVerifier);
+    }
+
+    // ------------------------------------------------------------- canal de mto-resources
+
+    /**
+     * El exchange de {@code mto-resources}, redeclarado con sus mismos atributos (topic, durable), como
+     * el de datos maestros: personas, equipos y vehiculos de los que salen la dotacion y los vehiculos
+     * de un turno. La cola, su DLX y su DLQ son de este servicio.
+     */
+    @Bean
+    public TopicExchange resourcesExchange() {
+        return new TopicExchange(resourcesProperties.exchange(), true, false);
+    }
+
+    @Bean
+    public Queue resourcesQueue() {
+        return QueueBuilder.durable(resourcesProperties.queue())
+                .withArgument(MasterDataRabbitMqNames.ARG_DEAD_LETTER_EXCHANGE, resourcesProperties.deadLetterExchange())
+                .withArgument(MasterDataRabbitMqNames.ARG_DEAD_LETTER_ROUTING_KEY, resourcesProperties.deadLetterRoutingKey())
+                .build();
+    }
+
+    /** Un binding por clave ({@code mto.resources.person.*}, {@code team.*}, {@code vehicle.*}): nada mas llega aqui. */
+    @Bean
+    public Declarables resourcesBindings(Queue resourcesQueue, TopicExchange resourcesExchange) {
+        return new Declarables(resourcesProperties.routingKeys().stream()
+                .map(key -> (Declarable) BindingBuilder.bind(resourcesQueue).to(resourcesExchange).with(key))
+                .toList());
+    }
+
+    @Bean
+    public DirectExchange resourcesDeadLetterExchange() {
+        return new DirectExchange(resourcesProperties.deadLetterExchange(), true, false);
+    }
+
+    @Bean
+    public Queue resourcesDeadLetterQueue() {
+        return QueueBuilder.durable(resourcesProperties.deadLetterQueue()).build();
+    }
+
+    @Bean
+    public Binding resourcesDeadLetterBinding(Queue resourcesDeadLetterQueue, DirectExchange resourcesDeadLetterExchange) {
+        return BindingBuilder.bind(resourcesDeadLetterQueue).to(resourcesDeadLetterExchange).with(resourcesProperties.deadLetterRoutingKey());
+    }
+
+    /** La misma factoria que la de datos maestros, con el mismo convertidor tolerante y sin reencolar. */
+    @Bean(RabbitListenerContainerFactoryNames.RESOURCES)
+    public SimpleRabbitListenerContainerFactory resourcesRabbitListenerContainerFactory(
+            SimpleRabbitListenerContainerFactoryConfigurer configurer,
+            ConnectionFactory connectionFactory,
+            MessageConverter masterDataMessageConverter) {
+
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        configurer.configure(factory, connectionFactory);
+        factory.setMessageConverter(masterDataMessageConverter);
+        factory.setDefaultRequeueRejected(false);
+
+        return factory;
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+            prefix = "app.rabbitmq.resources", name = "listener-enabled",
+            havingValue = "true", matchIfMissing = true)
+    public ResourcesEventConsumer resourcesEventConsumer(
+            IncomingEventProcessor incomingEventProcessor,
+            MessagePayloadSignatureVerifier signatureVerifier) {
+        LOGGER.info("mto-resources consumer enabled: queue={}, boundTo={} with routingKeys={}, deadLetterQueue={}",
+                resourcesProperties.queue(), resourcesProperties.exchange(), resourcesProperties.routingKeys(),
+                resourcesProperties.deadLetterQueue());
+
+        return new ResourcesEventConsumer(incomingEventProcessor, signatureVerifier);
     }
 }

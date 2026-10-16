@@ -1,6 +1,8 @@
 package com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq;
 
 import com.alejandro.mtomaintenance.application.dto.messaging.InboxMessageCommand;
+import com.alejandro.mtomaintenance.application.dto.messaging.IncomingEvent;
+import com.alejandro.mtomaintenance.application.dto.messaging.IncomingEventMessage;
 import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataChangedEvent;
 import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataChangedMessage;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
@@ -11,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.UUID;
 
 /**
  * Turns an AMQP delivery into the transport-free command the inbox works with.
@@ -52,15 +55,31 @@ public final class InboxMessageCommandFactory {
     }
 
     public static InboxMessageCommand from(MasterDataChangedMessage message, Message rawMessage) {
+        MasterDataChangedEvent event = message == null ? null : message.data();
+        return from(message == null ? null : message.operationId(), message == null ? null : message.origin(),
+                message == null ? null : message.eventType(), event == null ? null : event.entityName(),
+                event == null ? null : event.entityId(), rawMessage);
+    }
+
+    /** Un evento propio de un servicio hermano ({@code DomainEvent} en el sobre comun): hoy, de mto-resources. */
+    public static InboxMessageCommand from(IncomingEventMessage message, Message rawMessage) {
+        IncomingEvent event = message == null ? null : message.data();
+        return from(message == null ? null : message.operationId(), message == null ? null : message.origin(),
+                message == null ? null : message.eventType(), event == null ? null : event.entityName(),
+                event == null ? null : event.entityId(), rawMessage);
+    }
+
+    private static InboxMessageCommand from(UUID operationId, String origin, String eventType, String entityName, String entityId,
+                                            Message rawMessage) {
         MessageProperties properties = rawMessage.getMessageProperties();
         String payload = new String(rawMessage.getBody(), StandardCharsets.UTF_8);
 
         return new InboxMessageCommand(
-                idempotencyKey(message, properties),
-                truncate(sourceService(message), MAX_SOURCE_SERVICE_LENGTH),
-                truncate(message == null ? null : message.eventType(), MAX_EVENT_TYPE_LENGTH),
-                truncate(aggregateType(message), MAX_AGGREGATE_TYPE_LENGTH),
-                truncate(aggregateId(message), MAX_AGGREGATE_ID_LENGTH),
+                idempotencyKey(operationId, properties),
+                truncate(origin == null || origin.isBlank() ? UNKNOWN_SOURCE_SERVICE : origin, MAX_SOURCE_SERVICE_LENGTH),
+                truncate(eventType, MAX_EVENT_TYPE_LENGTH),
+                truncate(entityName, MAX_AGGREGATE_TYPE_LENGTH),
+                truncate(entityId, MAX_AGGREGATE_ID_LENGTH),
                 truncate(properties.getReceivedExchange(), MAX_ROUTING_LENGTH),
                 truncate(properties.getReceivedRoutingKey(), MAX_ROUTING_LENGTH),
                 truncate(properties.getConsumerQueue(), MAX_ROUTING_LENGTH),
@@ -99,10 +118,8 @@ public final class InboxMessageCommandFactory {
         }
     }
 
-    private static String idempotencyKey(MasterDataChangedMessage message, MessageProperties properties) {
-        String key = message != null && message.operationId() != null
-                ? message.operationId().toString()
-                : properties.getMessageId();
+    private static String idempotencyKey(UUID operationId, MessageProperties properties) {
+        String key = operationId != null ? operationId.toString() : properties.getMessageId();
 
         if (key == null || key.isBlank()) {
             throw new AmqpRejectAndDontRequeueException(
@@ -118,23 +135,6 @@ public final class InboxMessageCommandFactory {
         }
 
         return key;
-    }
-
-    private static String sourceService(MasterDataChangedMessage message) {
-        if (message == null || message.origin() == null || message.origin().isBlank()) {
-            return UNKNOWN_SOURCE_SERVICE;
-        }
-        return message.origin();
-    }
-
-    private static String aggregateType(MasterDataChangedMessage message) {
-        MasterDataChangedEvent event = message == null ? null : message.data();
-        return event == null ? null : event.entityName();
-    }
-
-    private static String aggregateId(MasterDataChangedMessage message) {
-        MasterDataChangedEvent event = message == null ? null : message.data();
-        return event == null ? null : event.entityId();
     }
 
     /**

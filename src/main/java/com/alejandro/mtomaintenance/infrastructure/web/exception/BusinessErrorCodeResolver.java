@@ -11,6 +11,7 @@ import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
+import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 
 import java.util.Map;
@@ -41,7 +42,9 @@ final class BusinessErrorCodeResolver {
             Map.entry("CatenaryDefect", "DEF"),
             Map.entry("Catenary defect", "DEF"),
             Map.entry("MaintenanceMaterialUsage", "MAT"),
-            Map.entry("Material usage", "MAT")
+            Map.entry("Material usage", "MAT"),
+            Map.entry("Crew person", "CRW"),
+            Map.entry("Fleet vehicle", "FLT")
     );
 
     private BusinessErrorCodeResolver() {
@@ -56,6 +59,7 @@ final class BusinessErrorCodeResolver {
             case MaterialUsageException ignored -> "MAT-001";
             case InspectionException ignored -> "INS-001";
             case ShiftException ignored -> "SHF-001";
+            case SynchronizedTeamException ignored -> "TEA-001";
             case StaleVersionException ignored -> "CON-001";
             case StockUnavailableException ignored -> "STK-503";
             case StockRejectedException rejected -> rejected.isInsufficientStock() ? StockRejectedException.INSUFFICIENT_STOCK : "STK-422";

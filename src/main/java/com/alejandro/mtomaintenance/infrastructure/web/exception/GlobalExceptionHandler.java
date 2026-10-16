@@ -13,6 +13,7 @@ import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
 import com.alejandro.mtomaintenance.application.exception.StockUnavailableException;
+import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -72,7 +73,7 @@ public class GlobalExceptionHandler {
 
     /** Transicion no permitida: el recurso existe pero su estado actual no admite la operacion. */
     @ExceptionHandler({InvalidTransitionException.class, AssetDisabledException.class, ShiftException.class,
-            MaterialUsageException.class})
+            MaterialUsageException.class, SynchronizedTeamException.class})
     public ResponseEntity<ApiErrorResponse> handleStateConflict(BusinessException exception, HttpServletRequest request) {
         return businessResponse(exception, HttpStatus.CONFLICT, request);
     }

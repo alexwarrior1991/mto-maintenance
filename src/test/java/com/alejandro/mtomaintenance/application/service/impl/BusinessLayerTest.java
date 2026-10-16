@@ -5,9 +5,15 @@ import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryRe
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.PreventiveDueSoonReport;
 import com.alejandro.mtomaintenance.application.dto.messaging.DomainEvent;
+import com.alejandro.mtomaintenance.application.dto.shift.VehicleParkingRequest;
+import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamException;
 import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.configuration.events.PreventiveDueSoonProperties;
 import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
+import org.springframework.beans.BeanUtils;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import java.nio.charset.StandardCharsets;
@@ -139,6 +145,8 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TaskUnit;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryDefectRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPersonRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.FleetVehicleRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.InspectionTemplateRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository;
@@ -1990,6 +1998,160 @@ class BusinessLayerTest {
         assertEquals(Set.of(7L, 8L), saved.getExecutionPackageIds());
     }
 
+    @Test
+    void aTeamOfMtoResourcesIsNotEditedHere() {
+        TeamFixture fixture = new TeamFixture();
+        MaintenanceTeam synced = team("A");
+        ReflectionTestUtils.setField(synced, "sourceService", "mto-resources");
+        ReflectionTestUtils.setField(synced, "sourceEntityId", UUID.randomUUID());
+        when(fixture.lookups.team(synced.getId())).thenReturn(synced);
+
+        assertThrows(SynchronizedTeamException.class, () -> fixture.service.update(synced.getId(),
+                new MaintenanceTeamRequest("A", "Renamed", null, null, null, null)));
+        assertEquals("Team A", synced.getName());
+    }
+
+    // ------------------------------------------------------------ shift crew
+
+    @Test
+    void aShiftOfASynchronizedTeamCopiesItsLeaderSupervisorLinemenAndDefaultVehicle() {
+        ShiftFixture fixture = new ShiftFixture();
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        CrewPerson supervisor = crewPerson("SUPERVISOR");
+        FleetVehicle towerCar = fleetVehicle("RAIL_ONLY", true, false, 8);
+        MaintenanceTeam team = syncedTeam(leader, supervisor, towerCar, crewPerson("WORKER"), crewPerson("WORKER"), crewPerson("WORKER"));
+        when(fixture.lookups.team(team.getId())).thenReturn(team);
+        when(fixture.vehicles.existsById(towerCar.getId())).thenReturn(true);
+        when(fixture.vehicles.findById(towerCar.getId())).thenReturn(Optional.of(towerCar));
+        when(fixture.codeGenerator.nextShiftCode()).thenReturn("SH-000100");
+
+        fixture.service.create(new MaintenanceShiftRequest(LocalDate.now(), team.getId(), null, null, PossessionType.FULL, null, null,
+                null, null, null, null, Set.of(2L), null, null, null, null, null));
+
+        MaintenanceShift saved = fixture.savedShift();
+        assertEquals(leader, saved.getTeamLeader());
+        assertEquals(supervisor, saved.getSupervisor());
+        assertEquals(3, saved.getLinemen().size());
+        assertEquals(List.of(towerCar.getId()), saved.getVehicles().stream().map(vehicle -> vehicle.getVehicle().getId()).toList());
+        assertNull(saved.getBaseName(), "A synchronized team has no base");
+    }
+
+    @Test
+    void aShiftWithACrewStartsOnlyWithItsLeaderAndTwoToSixLinemen() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift withoutLeader = crewedShift(null, 3);
+        MaintenanceShift withOne = crewedShift(crewPerson("TEAM_LEADER"), 1);
+        MaintenanceShift complete = crewedShift(crewPerson("TEAM_LEADER"), 2);
+        for (MaintenanceShift shift : List.of(withoutLeader, withOne, complete)) {
+            when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        }
+
+        assertThrows(ShiftException.class, () -> fixture.service.start(withoutLeader.getId(), new StartShiftRequest(null, null)));
+        assertThrows(ShiftException.class, () -> fixture.service.start(withOne.getId(), new StartShiftRequest(null, null)));
+        assertEquals(ShiftStatus.PLANNED, withOne.getStatus(), "Planned, it may still be incomplete");
+        fixture.service.start(complete.getId(), new StartShiftRequest(null, null));
+        assertEquals(ShiftStatus.IN_PROGRESS, complete.getStatus());
+        assertEquals(List.of("shift.started"), fixture.events.names());
+    }
+
+    @Test
+    void sevenLinemenTheLeaderAsLinemanOrAWorkerAsLeaderAreRefusedEvenWhilePlanned() {
+        ShiftFixture fixture = new ShiftFixture();
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        MaintenanceShift seven = crewedShift(leader, 7);
+        MaintenanceShift leaderAsLineman = crewedShift(leader, 2);
+        leaderAsLineman.getLinemen().add(leader);
+        MaintenanceShift workerLeads = crewedShift(crewPerson("WORKER"), 2);
+        for (MaintenanceShift shift : List.of(seven, leaderAsLineman, workerLeads)) {
+            when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+            assertThrows(ShiftException.class, () -> fixture.service.update(shift.getId(), observations("checked")), shift.getCode());
+        }
+    }
+
+    @Test
+    void aShiftOfALocalTeamWithoutCrewStartsAsBefore() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        shift.setTeam(team("B"));
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+
+        fixture.service.start(shift.getId(), new StartShiftRequest(null, null));
+
+        assertEquals(ShiftStatus.IN_PROGRESS, shift.getStatus());
+    }
+
+    @Test
+    void aVehicleOrAPersonInAnotherOpenShiftOfTheSameNightIsRefused() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = crewedShift(crewPerson("TEAM_LEADER"), 2);
+        shift.getVehicles().add(MaintenanceShiftVehicle.of(shift, fleetVehicle("RAIL_ONLY", true, false, 8)));
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        when(fixture.repository.findOpenShiftCodesWithVehicles(any(), eq(shift.getShiftDate()), any(), eq(shift.getId())))
+                .thenReturn(List.of("SH-000099"));
+
+        ShiftException refused = assertThrows(ShiftException.class, () -> fixture.service.start(shift.getId(), new StartShiftRequest(null, null)));
+        assertTrue(refused.getMessage().contains("SH-000099"), refused.getMessage());
+        verify(fixture.repository, org.mockito.Mockito.atLeastOnce()).lockResource(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void theCrewFitsInTheSeatsAndAWagonGoesWithSomethingThatTowsIt() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift crowded = crewedShift(crewPerson("TEAM_LEADER"), 4);
+        crowded.getVehicles().add(MaintenanceShiftVehicle.of(crowded, fleetVehicle("ROAD_RAIL", true, false, 3)));
+        MaintenanceShift wagonAlone = crewedShift(crewPerson("TEAM_LEADER"), 2);
+        wagonAlone.getVehicles().add(MaintenanceShiftVehicle.of(wagonAlone, fleetVehicle("RAIL_ONLY", false, false, null)));
+        MaintenanceShift towed = crewedShift(crewPerson("TEAM_LEADER"), 2);
+        towed.getVehicles().add(MaintenanceShiftVehicle.of(towed, fleetVehicle("RAIL_ONLY", false, false, null)));
+        towed.getVehicles().add(MaintenanceShiftVehicle.of(towed, fleetVehicle("RAIL_ONLY", true, true, 8)));
+        for (MaintenanceShift shift : List.of(crowded, wagonAlone, towed)) {
+            when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        }
+
+        assertThrows(ShiftException.class, () -> fixture.service.start(crowded.getId(), new StartShiftRequest(null, null)), "5 people, 3 seats");
+        assertThrows(ShiftException.class, () -> fixture.service.start(wagonAlone.getId(), new StartShiftRequest(null, null)));
+        fixture.service.start(towed.getId(), new StartShiftRequest(null, null));
+        assertEquals(ShiftStatus.IN_PROGRESS, towed.getStatus());
+    }
+
+    @Test
+    void closingSaysWhereEachVehicleWasLeftAndARailOnlyOneStaysOnATrack() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = crewedShift(crewPerson("TEAM_LEADER"), 2);
+        shift.setStatus(ShiftStatus.IN_PROGRESS);
+        shift.setActualStart(Instant.parse("2026-01-27T21:10:00Z"));
+        FleetVehicle towerCar = fleetVehicle("RAIL_ONLY", true, false, 8);
+        shift.getVehicles().add(MaintenanceShiftVehicle.of(shift, towerCar));
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        Instant end = Instant.parse("2026-01-28T04:30:00Z");
+
+        assertThrows(ShiftException.class, () -> fixture.service.close(shift.getId(), new CloseShiftRequest(end, null, null, null,
+                List.of(new VehicleParkingRequest(towerCar.getId(), null, null, null, "Car park by the level crossing")))));
+        assertThrows(ValidationException.class, () -> fixture.service.close(shift.getId(), new CloseShiftRequest(end, null, null, null,
+                List.of(new VehicleParkingRequest(UUID.randomUUID(), null, 31L, null, null)))), "Not a vehicle of the shift");
+        fixture.service.close(shift.getId(), new CloseShiftRequest(end, null, null, null,
+                List.of(new VehicleParkingRequest(towerCar.getId(), null, 31L, new BigDecimal("4.250"), null))));
+
+        DomainEvent closed = fixture.events.published.getLast();
+        assertEquals("closed", closed.eventName());
+        Map<?, ?> vehicle = (Map<?, ?>) ((List<?>) closed.values().get("vehicles")).getFirst();
+        assertEquals(31L, ((Map<?, ?>) vehicle.get("parking")).get("trackId"));
+        assertEquals(List.of(towerCar.getId().toString()), closed.values().get("vehicleIds"));
+    }
+
+    @Test
+    void cancellingAShiftTellsMtoResources() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        shift.setActualStart(Instant.parse("2026-01-27T21:10:00Z"));
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+
+        fixture.service.cancel(shift.getId(), new CancelShiftRequest("possession withdrawn"));
+
+        assertEquals(List.of("shift.cancelled"), fixture.events.names());
+        assertEquals("2026-01-27T21:10:00Z", String.valueOf(fixture.events.published.getFirst().values().get("actualStart")));
+    }
+
     // ------------------------------------------------------- inspections (2)
 
     @Test
@@ -3484,7 +3646,7 @@ class BusinessLayerTest {
         assertEquals(19, document.table().columns().size());
         assertEquals("Asset", document.table().columns().get(4).header(), "a row can be an insulator, not only a profile");
         // Sin inspecciones el anexo sigue estando, vacio: el lector ve que no hubo, no que se perdio.
-        assertEquals(List.of("Inspections"), document.appendices().stream().map(ReportDocument.Appendix::title).toList());
+        assertEquals(List.of("Inspections", "Crew", "Vehicles"), document.appendices().stream().map(ReportDocument.Appendix::title).toList());
         assertTrue(document.appendices().getFirst().table().rows().isEmpty());
     }
 
@@ -3623,7 +3785,7 @@ class BusinessLayerTest {
                 closed ? 290 : null,
                 List.of(), "PT-14", "Rishpon depot", 6L, List.of(2L),
                 new BigDecimal("12847.990"), new BigDecimal("14078.090"),
-                "3 linemen", "Laser", status, null, null, null);
+                "3 linemen", null, null, List.of(), List.of(), "Laser", status, null, null, null);
         return new ShiftReportResponse(shift, rows.size(), 0, rows.size(), 0, 0, rows, 0, List.of());
     }
 
@@ -3981,6 +4143,8 @@ class BusinessLayerTest {
         final MaintenanceInspectionRepository inspectionRepository = mock(MaintenanceInspectionRepository.class);
         final MaintenanceLookups lookups = mock(MaintenanceLookups.class);
         final MaintenanceCodeGenerator codeGenerator = mock(MaintenanceCodeGenerator.class);
+        final CrewPersonRepository people = mock(CrewPersonRepository.class);
+        final FleetVehicleRepository vehicles = mock(FleetVehicleRepository.class);
         final RecordingEventPublisher events = new RecordingEventPublisher();
         final MaintenanceShiftServiceImpl service;
 
@@ -3994,7 +4158,8 @@ class BusinessLayerTest {
                         asset.getExecutionPackageId(), asset.getStationId(), asset.getDriveType(), asset.getDisconnectorFunction());
             });
             service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository, inspectionRepository,
-                    mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events);
+                    mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events,
+                    new ShiftCrew(people, vehicles, repository));
         }
 
         MaintenanceShift savedShift() {
@@ -4366,6 +4531,61 @@ class BusinessLayerTest {
         }
         ReflectionTestUtils.setField(defect, "id", UUID.randomUUID());
         return defect;
+    }
+
+    private static CrewPerson crewPerson(String category) {
+        CrewPerson person = BeanUtils.instantiateClass(CrewPerson.class);
+        UUID id = UUID.randomUUID();
+        ReflectionTestUtils.setField(person, "id", id);
+        ReflectionTestUtils.setField(person, "code", "PER-" + id.toString().substring(0, 6));
+        ReflectionTestUtils.setField(person, "fullName", "Person " + id.toString().substring(0, 4));
+        ReflectionTestUtils.setField(person, "category", category);
+        ReflectionTestUtils.setField(person, "active", true);
+        return person;
+    }
+
+    private static FleetVehicle fleetVehicle(String mobility, boolean selfPropelled, boolean towing, Integer seats) {
+        FleetVehicle vehicle = BeanUtils.instantiateClass(FleetVehicle.class);
+        UUID id = UUID.randomUUID();
+        ReflectionTestUtils.setField(vehicle, "id", id);
+        ReflectionTestUtils.setField(vehicle, "code", "V-" + id.toString().substring(0, 6));
+        ReflectionTestUtils.setField(vehicle, "mobility", mobility);
+        ReflectionTestUtils.setField(vehicle, "category", "TEST");
+        ReflectionTestUtils.setField(vehicle, "selfPropelled", selfPropelled);
+        ReflectionTestUtils.setField(vehicle, "portable", false);
+        ReflectionTestUtils.setField(vehicle, "towing", towing);
+        ReflectionTestUtils.setField(vehicle, "seats", seats);
+        ReflectionTestUtils.setField(vehicle, "operationalStatus", "OPERATIONAL");
+        ReflectionTestUtils.setField(vehicle, "available", true);
+        ReflectionTestUtils.setField(vehicle, "active", true);
+        return vehicle;
+    }
+
+    private static MaintenanceTeam syncedTeam(CrewPerson leader, CrewPerson supervisor, FleetVehicle defaultVehicle, CrewPerson... members) {
+        MaintenanceTeam team = team("A");
+        team.setBaseName(null);
+        ReflectionTestUtils.setField(team, "sourceService", "mto-resources");
+        ReflectionTestUtils.setField(team, "sourceEntityId", UUID.randomUUID());
+        ReflectionTestUtils.setField(team, "leader", leader);
+        ReflectionTestUtils.setField(team, "supervisor", supervisor);
+        ReflectionTestUtils.setField(team, "defaultVehicleId", defaultVehicle.getId());
+        team.getMembers().addAll(List.of(members));
+        return team;
+    }
+
+    /** Un turno planificado con su jefe (o sin el) y tantos linemen. */
+    private static MaintenanceShift crewedShift(CrewPerson leader, int linemen) {
+        MaintenanceShift shift = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        shift.setTeamLeader(leader);
+        for (int i = 0; i < linemen; i++) {
+            shift.getLinemen().add(crewPerson("WORKER"));
+        }
+        return shift;
+    }
+
+    private static MaintenanceShiftUpdateRequest observations(String text) {
+        return new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, text, null);
     }
 
     private static MaintenanceShift shift(Long trackId, PossessionType possession, ShiftStatus status) {
