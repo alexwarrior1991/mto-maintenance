@@ -132,6 +132,8 @@ disconnector plus `RP-06` when its `driveType` (`V16`) is `MOTOR` and `RG-06` wh
 A `MaintenanceTeam` is local (edited here, `A`/`B` seeded) or synchronized from `mto-resources`
 (`V19`: leader, supervisor, linemen, packages and default vehicle; no base), which adopts the local
 team of its code on its first event; from then on it is read-only here (`PUT` is 409 `TEA-001`).
+An order of a synchronized team left without a user goes to the username of its leader
+(`fillLeader`, at creation, `assign` and a team change; an explicit user wins).
 Tasks are executed inside a `MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one
 or more tracks) with its crew and vehicles of `mto-resources` (`V20`, copied from a synchronized team
 when not given). `ShiftCrew` keeps them in rule, 409 `SHF-001`: at most 6 linemen, the leader not

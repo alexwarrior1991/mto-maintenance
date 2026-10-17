@@ -1301,6 +1301,70 @@ class BusinessLayerTest {
         assertThrows(InvalidTransitionException.class, () -> fixture.service.assign(draft.getId(), new AssignOrderRequest(team.getId(), null, null)));
     }
 
+    @Test
+    void anOrderOfATeamOfMtoResourcesWithoutAUserGoesToItsLeader() {
+        OrderFixture fixture = new OrderFixture();
+        CrewPerson leaderA = crewPerson("TEAM_LEADER");
+        ReflectionTestUtils.setField(leaderA, "username", "equipo.jefe");
+        CrewPerson leaderB = crewPerson("TEAM_LEADER");
+        ReflectionTestUtils.setField(leaderB, "username", "otro.jefe");
+        MaintenanceTeam teamA = syncedTeam(leaderA, null, fleetVehicle("ROAD_RAIL", true, false, 5));
+        MaintenanceTeam teamB = syncedTeam(leaderB, null, fleetVehicle("ROAD_RAIL", true, false, 5));
+        MaintenanceTeam local = team("L");
+        CatenaryAsset section = trackSection();
+        when(fixture.lookups.enabledAsset(section.getId())).thenReturn(section);
+        when(fixture.codeGenerator.nextOrderCode()).thenReturn("MO-000001");
+        when(fixture.lookups.team(teamA.getId())).thenReturn(teamA);
+        when(fixture.lookups.team(teamB.getId())).thenReturn(teamB);
+        when(fixture.lookups.team(local.getId())).thenReturn(local);
+
+        // El alta sin usuario va al jefe; con un usuario dado, ese gana.
+        fixture.service.create(new MaintenanceOrderRequest("Preventive T2", null, MaintenanceOrderType.PREVENTIVE, null,
+                section.getId(), null, teamA.getId(), null, null));
+        assertEquals("equipo.jefe", fixture.savedOrder().getAssignedUser());
+        OrderFixture explicit = new OrderFixture();
+        when(explicit.lookups.enabledAsset(section.getId())).thenReturn(section);
+        when(explicit.lookups.team(teamA.getId())).thenReturn(teamA);
+        explicit.service.create(new MaintenanceOrderRequest("Preventive T2", null, MaintenanceOrderType.PREVENTIVE, null,
+                section.getId(), null, teamA.getId(), "yossi", null));
+        assertEquals("yossi", explicit.savedOrder().getAssignedUser());
+
+        // Cambiar de equipo pasa la orden del jefe anterior al nuevo; un usuario dado a mano se queda.
+        MaintenanceOrder draft = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        draft.setTeam(teamA);
+        draft.setAssignedUser("equipo.jefe");
+        when(fixture.lookups.order(draft.getId())).thenReturn(draft);
+        fixture.service.update(draft.getId(), new MaintenanceOrderUpdateRequest(null, null, null, null, teamB.getId(),
+                null, null, null, null, null, null, null, null, null));
+        assertEquals("otro.jefe", draft.getAssignedUser());
+        draft.setAssignedUser("yossi");
+        fixture.service.update(draft.getId(), new MaintenanceOrderUpdateRequest(null, null, null, null, teamA.getId(),
+                null, null, null, null, null, null, null, null, null));
+        assertEquals("yossi", draft.getAssignedUser(), "un usuario que no era el jefe anterior se queda");
+        fixture.service.update(draft.getId(), new MaintenanceOrderUpdateRequest(null, null, null, null, local.getId(),
+                null, null, null, null, null, null, null, null, null));
+        assertEquals("yossi", draft.getAssignedUser(), "un equipo local no tiene jefe que poner");
+
+        // Asignar a un equipo de mto-resources sin usuario: su jefe, y con el va el aviso de la orden asignada.
+        MaintenanceOrder planned = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        when(fixture.lookups.order(planned.getId())).thenReturn(planned);
+        fixture.service.assign(planned.getId(), new AssignOrderRequest(teamB.getId(), null, "night crew"));
+        assertEquals("otro.jefe", planned.getAssignedUser());
+        assertEquals(MaintenanceOrderStatus.ASSIGNED, planned.getStatus());
+        // El dialogo manda el usuario que ya tenia: con el jefe anterior, la orden pasa al del equipo nuevo.
+        fixture.service.assign(planned.getId(), new AssignOrderRequest(teamA.getId(), "otro.jefe", null));
+        assertEquals("equipo.jefe", planned.getAssignedUser());
+        fixture.service.assign(planned.getId(), new AssignOrderRequest(teamB.getId(), "yossi", null));
+        assertEquals("yossi", planned.getAssignedUser(), "una persona elegida en el dialogo gana");
+
+        // Un jefe sin usuario de Keycloak no pone nada.
+        ReflectionTestUtils.setField(leaderA, "username", null);
+        MaintenanceOrder other = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.PLANNED);
+        when(fixture.lookups.order(other.getId())).thenReturn(other);
+        fixture.service.assign(other.getId(), new AssignOrderRequest(teamA.getId(), null, null));
+        assertNull(other.getAssignedUser());
+    }
+
     // ----------------------------------------------------------------- assets
 
     @Test

@@ -41,10 +41,20 @@ creation; optional `teamId`, `assignedUser`, `plannedDate`, `stockProjectId` (re
 stock project `EP-<executionPackageId>` when present). `estimatedMinutes` and `estimatedShifts`
 are computed from the task types (4.5 effective hours per shift), never stored.
 
+**An order of a team of `mto-resources` without a user goes to its leader** (`fillLeader`): at
+creation, on `assign` without `assignedUser` and on a `PATCH`/`PUT` that changes the team without
+touching `assignedUser`, the order takes the username of the team's leader; one that still had the
+leader of the previous team (given by this same rule) moves to the new one; on `assign`, an
+`assignedUser` equal to the one the order already has is not a choice (the dialogs send it back) and
+follows the same rule. A user given explicitly
+wins, and a local team (no leader) or a leader without a Keycloak user change nothing. The
+`order.status-changed`/`reassigned` event already carries `assignedUser`, so the
+`maintenance-order-assigned` rule of `mto-notification` tells the leader.
+
 | Transition | From | Rules |
 |---|---|---|
 | `plan` | `DRAFT` | `plannedDate` not in the past; reserves every `NOT_REQUESTED` material in stock |
-| `assign` | `PLANNED`, `ASSIGNED` → `ASSIGNED`; `IN_PROGRESS` keeps its status | `teamId` or `assignedUser` |
+| `assign` | `PLANNED`, `ASSIGNED` → `ASSIGNED`; `IN_PROGRESS` keeps its status | `teamId` or `assignedUser`; without a user, the leader of a team of `mto-resources` |
 | `start` | `PLANNED`, `ASSIGNED`; `DRAFT` only for `URGENT` | sets `actualStartDate` |
 | `complete` | `IN_PROGRESS` | no task `PENDING`/`IN_PROGRESS`; at least one `COMPLETED` task or `closingNotes`; `INSPECTION` needs an inspection with `originOrderId`; a `FAILED` or `REJECTED` material line blocks unless `force` (supervise), and the other lines keep what stock did even when that rejects the completion; consumes reservations or registers direct outputs; `PREVENTIVE` updates `asset.lastPreventiveCompletedAt` |
 | `cancel` | any non-terminal | reason required; releases reservations; open tasks → `CANCELLED`; linked defect `IN_PROGRESS` → `OPEN` |
