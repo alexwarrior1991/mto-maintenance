@@ -1,11 +1,13 @@
 # 06 · Messaging
 
-`mto-maintenance` **consumes** the master-data change events that `mto-configuration` publishes,
-and **publishes** its own events (an order created, a defect that changes state, a shift closed, a
-material the warehouse rejects, the preventives about to fall due) for `mto-notification`. The two
-channels are separate: the master-data contract is owned by `mto-configuration` (see its
-`README_MESSAGING.md`) and mirrored here in `application/dto/messaging`; the own-events contract
-is owned by this repository and documented in [Published events](#published-events).
+`mto-maintenance` **consumes** the master-data change events that `mto-configuration` publishes and
+the people, teams and vehicles that `mto-resources` publishes, and **publishes** its own events (an
+order created, a defect that changes state, a shift started, closed or cancelled, a material the
+warehouse rejects, the preventives about to fall due) for `mto-notification` and, the shifts, for
+`mto-resources`. The channels are separate: the master-data contract is owned by `mto-configuration`
+(see its `README_MESSAGING.md`) and mirrored here in `application/dto/messaging`; the resources
+contract is owned by `mto-resources` (its `docs/06-messaging.md`); the own-events contract is owned
+by this repository and documented in [Published events](#published-events).
 
 ## Consumed: master data from `mto-configuration`
 
@@ -142,6 +144,69 @@ tested in `MasterDataAssetSyncDataJpaTest`:
   nothing about turnouts cannot delete the ones that are there, while an empty list from the one
   that does mean the insulator has none left.
 
+## Consumed: resources from `mto-resources`
+
+`mto-resources` owns the people, the organization tree and the fleet. A shift needs three of its
+entities, the people (`person`), the teams (`team`) and the vehicles (`vehicle`), and keeps of each the
+snapshot it reads (`crew_person`, `maintenance_team`, `fleet_vehicle`, `V19`; `02-domain-model.md`,
+"Teams" and "Shift crew and vehicles"). Nothing here calls `mto-resources`; it calls nobody either.
+
+### Topology
+
+| | Value |
+|---|---|
+| Exchange (publisher's) | `mto.resources.exchange` (topic, durable; redeclared with the same attributes) |
+| Bindings | `mto.resources.person.*`, `mto.resources.team.*`, `mto.resources.vehicle.*` (`app.rabbitmq.resources.routing-keys`): nothing else it publishes reaches this queue |
+| Queue (own) | `mto.maintenance.resources.queue` |
+| Dead letter | `mto.maintenance.resources.queue.dlx` → `mto.maintenance.resources.queue.dlq` |
+| Listener factory | `resourcesRabbitListenerContainerFactory`: the master-data converter, nothing rejected is requeued |
+
+Gated by `app.rabbitmq.enabled` (topology) and `app.rabbitmq.resources.listener-enabled` (consumer,
+off in the `test` profile). The defaults are `ResourcesRabbitMqNames`, overridable under
+`app.rabbitmq.resources.*` (`ResourcesRabbitProperties`; a blank value is the default).
+
+**Deployment order**: `mto-maintenance` first, which declares the queue and its bindings, then
+`mto-resources`, whose outbox publishes with `mandatory=true`: an event that reaches no queue fails and
+blocks its aggregate. Then `POST /actuator/republish` on `mto-resources` loads what it already had
+(an `updated` is an upsert here).
+
+### Envelope and inbox
+
+The `AsynchronousMessage` of `mto-configuration` with `data` as a `DomainEvent`
+(`{entityName, entityId, eventName, values}`), read tolerantly as `IncomingEventMessage` /
+`IncomingEvent`, with the headers `sequenceNumber` (the global sequence of the `mto-resources`
+outbox), `messageSignature` and `messageSignatureAlgorithm`, verified like the master data's (same
+secret and mode). `ResourcesEventConsumer` sends to the DLQ without retries a bad signature, an
+envelope without `data`, one whose `origin` is not `mto-resources`, and one without `entityName` or
+`eventName`. Then `IdempotentIncomingEventProcessor` → `InboxMessageService` (the same
+`inbox_message`, `source_service = mto-resources`, key `operationId`, fallback AMQP `message_id`) →
+`DispatchingIncomingEventHandler`, which routes by source and entity to an `IncomingEventHandler`
+(two for the same pair stop the startup; an entity without one is logged and ignored). As with the
+master data, recording, claiming, the handler and the `PROCESSED` mark share one transaction, and a
+failure is recorded after it and rethrown, so the container retries and then dead-letters it. The
+`IncomingEvent*` pipeline is not tied to `mto-resources`: another sibling's own events would be one
+more handler.
+
+### Handlers
+
+| Entity | Handler | Effect |
+|---|---|---|
+| `person` (`created`, `updated`, `deactivated`) | `ResourcesPersonHandler` | Upsert `crew_person` by `entityId`: `code`, `fullName`, `username`, `category`, `active` |
+| `vehicle` (the same three) | `ResourcesVehicleHandler` | Upsert `fleet_vehicle` by `entityId`: `code`, `name`, `type.{code, name, mobility, category, selfPropelled, portable, seats}`, `towing` (`TOWING` in `type.capabilities`), `operationalStatus`, `available`, `active` |
+| `team` (the same three) | `ResourcesTeamHandler` | Only `discipline = MAINTENANCE`; the rest is logged and ignored. Inserts the people it carries (`leader`, `supervisor`, `members[]`, each `{personId, code, fullName, username, category}`) that are not there yet, `ON CONFLICT DO NOTHING` and without watermark, so the person's own event then overwrites them whatever its number; adopts the local team of its `code` the first time (`adoptByCode`); upserts the team by `source_entity_id` (`code`, `name`, `active`, leader, supervisor, `defaultVehicle.id`, `vehicle` = `defaultVehicle.code`, no base); and only if that applied, replaces its `members` and its `executionPackageIds` whole |
+
+`chiefSupervisor`, `linemen` (a count), `parentId`, `departmentId` and `version` are not read; a
+deactivation is the same upsert with `active: false`. Every write is native SQL in
+`CrewPersonRepository`, `FleetVehicleRepository` and `MaintenanceTeamRepository` with the
+`sequenceNumber` watermark inside the `WHERE` (applied when nothing is stored, when nothing arrives or
+when it is not lower): an older event returns 0 rows and is discarded, and a late team event touches
+neither its members nor its packages. **The watermark is the outbox `sequenceNumber`, not
+`version`**: changing the head of a supervision republishes every team under it without bumping their
+versions, and `mto-resources` locks those rows in id order before publishing, so the sequence follows
+the commits. A missing sequence applies and keeps the stored watermark. An `entityId` that is not a
+UUID, or a missing `code`, `fullName`, `category` or vehicle `type.mobility`/`type.category`, fails the
+handler (retried, then the DLQ). None of it leaves an Envers revision (`07-auditing.md`).
+
 ## Published events
 
 Everything this service tells the outside world goes through **one door**,
@@ -159,7 +224,7 @@ written (the tests, and an environment without a broker).
 |---|---|
 | Exchange (own) | `mto.maintenance.exchange` (topic, durable; `app.rabbitmq.events.exchange`) |
 | Routing key | `mto.maintenance.<entity>.<event>` (`MaintenanceRabbitMqNames`), e.g. `mto.maintenance.order.status-changed` |
-| Queue | **none here**: a queue belongs to whoever consumes it. `mto-notification` declares `mto.notification.maintenance.queue` bound to `mto.maintenance.#` |
+| Queue | **none here**: a queue belongs to whoever consumes it. `mto-notification` declares `mto.notification.maintenance.queue` bound to `mto.maintenance.#`, and `mto-resources` declares `mto.resources.maintenance.queue` bound to `mto.maintenance.shift.*` |
 | AMQP `message_id` | the id of the `outbox_message` row |
 | Headers | `eventType`, `aggregateType` (the entity), `aggregateId`, `sequenceNumber` (global, increasing), `messageSignature`, `messageSignatureAlgorithm`, `traceparent`/`tracestate` |
 
@@ -233,12 +298,22 @@ and every event has a real JSON example in `docs/messaging/examples/` that
 | `inspection.item-failed` | a checklist item that becomes `DEFECT` (`PATCH/PUT .../items/{id}`); staying `DEFECT` does not fail again | inspection + `itemId`, `itemCode`, `itemLabel`, `itemResult`, `measuredValue`, `valueAfterAdjustment`, `unit`, `minValue`, `maxValue`, `notes` |
 | `inspection.defect-created` | `POST /inspections/{id}/defect` (the defect also publishes its own `defect.created`) | inspection + `defectId`, `defectCode`, `severity`, `description` |
 | `inspection.corrective-order-created` | `POST /inspections/{id}/corrective-order` (the order also publishes its own `order.created`) | inspection + `orderId`, `orderCode`, `orderType`, `priority`, `defectId`, `defectCode` |
-| `shift.started` / `shift.closed` | `POST /shifts/{id}/start` and `/close` | shift (`code`, `status`, `shiftDate`, `possessionType`, team, `baseName`, `vehicle`, `trackIds`, `executionPackageId`, kp range, planned and actual instants, `voltageCutoffAt`, `netWorkMinutes`) |
+| `shift.started` / `shift.closed` / `shift.cancelled` | `POST /shifts/{id}/start`, `/close` and `/cancel` | shift (`code`, `status`, `shiftDate`, `possessionType`, team, `baseName`, `vehicle`, `trackIds`, `executionPackageId`, kp range, planned and actual instants, `voltageCutoffAt`, `netWorkMinutes`, `parkingPlace`) and its crew and vehicles: `vehicles[]` (`id`, `code`, `parking` `{siteId, trackId, kp, description}` or `null`), `vehicleIds`, `vehicleCodes`, `teamLeaderPersonId`, `teamLeaderUsername` (whom to notify), `supervisorPersonId`, `linemanPersonIds` (sorted). Only ids, codes and the leader's username: `mto-notification` copies `values` whole into its registry |
 | `material.rejected` | a material line `mto-stock` said no to (`REJECTED`), on any step | line (`orderCode`, `orderStatus`, `taskId`, `materialId`, `materialCode`, `materialDescription`, `warehouseId`, quantities, `unit`, `stockReservationId`, `stockSyncStatus`, `request`) + `step`, `reason`, `stockErrorCode` (`STK-001` is no stock), `stockHttpStatus` |
 | `material.in-doubt` | a reservation or an output sent to `mto-stock` that got no answer (`FAILED` with `stockRequestInDoubt`) | line + `step`, `reason`; `request` says which one (`RESERVATION`/`OUTPUT`) |
 | `material.failed` | `mto-stock` did not answer and nothing is in doubt (the request never left, e.g. resolving the project) | line + `step`, `reason` |
 | `asset.disabled` | `DELETE /assets/{id}` or `PUT enabled=false`, the first time it is disabled here | asset (`code`, `name`, `type`, location, `sourceService`, `sourceEntityId`, `enabledAtSource`, `disabledLocally`, `preventiveIntervalDays`) |
 | `preventive.due-soon` | the daily check (below) | `date`, `horizonDays`, `count`, `overdueCount`, `sampleSize`, `assets[]` (`assetId`, `assetCode`, `assetName`, `assetType`, `trackId`, `executionPackageId`, `lastPreventiveCompletedAt`, `dueAt`, `overdue`) |
+
+The shift events have two consumers. `mto-notification` notifies them, and `mto-resources` moves the
+vehicles of the shift (its `MaintenanceShiftEventHandler`, which reads `code`, `trackIds`,
+`executionPackageId`, `startKp`, `actualStart`, `actualEnd`, `parkingPlace`, `vehicleIds` and
+`vehicles[].parking`): on the track (a road-only one, on the road) at `started`, parked where
+`vehicles[].parking` says (else at `parkingPlace`) at `closed`, and the same at `cancelled` of a
+shift that had started (`actualStart` set); a shift cancelled before starting moved nothing.
+`shift.cancelled`, `parkingPlace` and the crew and vehicle keys arrived with `V20`, added to the
+contract without renaming anything; both consumers copy `shift-started.json`, `shift-closed.json`
+and `shift-cancelled.json` as fixtures.
 
 The three `material.*` events are published when the line's state changes, not on every attempt: a
 retry that fails the same way (the automatic one every 5 minutes while stock is down, or a repeated

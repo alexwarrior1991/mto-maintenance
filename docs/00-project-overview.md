@@ -24,6 +24,7 @@ per-segment progress workbooks with a single service that:
 |---|---|---|
 | Stations, tracks, profiles, cantilevers, disconnectors, section insulators | `mto-configuration` | Consumed as events; only the snapshot a job needs is kept in `catenary_asset` |
 | Materials, warehouses, projects, reservations, movements | `mto-stock` | Called through its REST API with a service account; lines store the stock ids |
+| People, teams, vehicles (the crew and the fleet of a shift) | `mto-resources` | Consumed as events; snapshots in `crew_person`, `fleet_vehicle` and the synchronized `maintenance_team`, which are read-only here |
 | Users, roles, tokens | Keycloak (`mto-platform`) | Resource server; permissions are client roles of `mto-maintenance-api` |
 | Public routing, CORS at the edge | `mto-gateway` | `/api/maintenance/**` → `/api/v1/maintenance/**` |
 

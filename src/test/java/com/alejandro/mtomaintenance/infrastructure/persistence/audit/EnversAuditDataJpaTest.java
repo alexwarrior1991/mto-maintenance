@@ -14,6 +14,13 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPersonRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.FleetVehicleRepository;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
 import org.hibernate.envers.RevisionType;
 import jakarta.persistence.EntityManager;
@@ -76,6 +83,12 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
     @Autowired
     private CatenaryAssetRepository assetRepository;
 
+    @Autowired
+    private CrewPersonRepository personRepository;
+
+    @Autowired
+    private FleetVehicleRepository vehicleRepository;
+
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
@@ -121,10 +134,65 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
 
         assertTrue(tables.containsAll(List.of("catenary_asset_aud", "maintenance_order_aud", "maintenance_task_aud", "maintenance_shift_aud",
                 "maintenance_inspection_aud", "catenary_defect_aud", "maintenance_material_usage_aud", "maintenance_task_task_type_aud",
-                "maintenance_shift_track_aud", "maintenance_shift_disconnector_aud")));
+                "maintenance_shift_track_aud", "maintenance_shift_disconnector_aud", "maintenance_shift_vehicle_aud",
+                "maintenance_shift_lineman_aud")));
+        assertFalse(tables.contains("crew_person_aud"), "A snapshot of mto-resources written only with native SQL");
+        assertFalse(tables.contains("fleet_vehicle_aud"));
         assertFalse(tables.contains("maintenance_status_history_aud"));
         assertFalse(tables.contains("maintenance_task_type_aud"));
         assertFalse(tables.contains("inbox_message_aud"));
+    }
+
+    @Test
+    void theCrewAndTheVehiclesOfAShiftAreInItsHistoryAndWhereAVehicleWasLeftHasItsOwnRevision() {
+        // La dotacion y el vehiculo llegan de mto-resources por SQL nativo, sin revision: se leen como estan.
+        UUID leaderId = UUID.randomUUID();
+        UUID linemanA = UUID.randomUUID();
+        UUID linemanB = UUID.randomUUID();
+        UUID vehicleId = UUID.randomUUID();
+        inTransaction(em -> {
+            personRepository.upsertFromResources(leaderId, "PER-" + leaderId.toString().substring(0, 8), "Yossi Cohen", "equipo.jefe", "TEAM_LEADER", true, 1L);
+            personRepository.upsertFromResources(linemanA, "PER-" + linemanA.toString().substring(0, 8), "Eli Katz", null, "WORKER", true, 1L);
+            personRepository.upsertFromResources(linemanB, "PER-" + linemanB.toString().substring(0, 8), "Noam Biton", null, "WORKER", true, 1L);
+            vehicleRepository.upsertFromResources(vehicleId, "DR-" + vehicleId.toString().substring(0, 6), "Tower car", "MTW", "Plasser MTW",
+                    "RAIL_ONLY", "CATENARY_TOWER_CAR", true, false, true, 8, "OPERATIONAL", true, true, 1L);
+            return null;
+        });
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UUID shiftId = inTransaction(em -> {
+            MaintenanceShift shift = MaintenanceShift.builder().code("SH-AUD-" + suffix).shiftDate(LocalDate.of(2026, 10, 16))
+                    .possessionType(PossessionType.FULL).trackIds(new java.util.LinkedHashSet<>(List.of(2L))).build();
+            shift.setTeamLeader(em.find(CrewPerson.class, leaderId));
+            shift.getLinemen().add(em.find(CrewPerson.class, linemanA));
+            shift.getLinemen().add(em.find(CrewPerson.class, linemanB));
+            shift.getVehicles().add(MaintenanceShiftVehicle.of(shift, em.find(FleetVehicle.class, vehicleId)));
+            em.persist(shift);
+            return shift.getId();
+        });
+        UUID shiftVehicleId = inTransaction(em -> {
+            MaintenanceShiftVehicle vehicle = em.find(MaintenanceShift.class, shiftId).getVehicles().getFirst();
+            vehicle.setParkingTrackId(31L);
+            vehicle.setParkingKp(new BigDecimal("4.250"));
+            return vehicle.getId();
+        });
+
+        List<Number> shiftRevisions = reading(reader -> reader.getRevisions(MaintenanceShift.class, shiftId));
+        assertEquals(1, shiftRevisions.size(), "Parking a vehicle changes the vehicle line, not the shift");
+        List<Object> crewAtFirst = reading(reader -> {
+            MaintenanceShift first = reader.find(MaintenanceShift.class, shiftId, shiftRevisions.getFirst());
+            return List.of(first.getTeamLeader().getFullName(), first.getLinemen().size(), first.getVehicles().size());
+        });
+        assertEquals(List.of("Yossi Cohen", 2, 1), crewAtFirst);
+        List<Number> vehicleRevisions = reading(reader -> reader.getRevisions(MaintenanceShiftVehicle.class, shiftVehicleId));
+        assertEquals(2, vehicleRevisions.size());
+        assertNull(reading(reader -> reader.find(MaintenanceShiftVehicle.class, shiftVehicleId, vehicleRevisions.getFirst()).getParkingTrackId()));
+        MaintenanceShiftVehicle parked = reading(reader -> {
+            MaintenanceShiftVehicle line = reader.find(MaintenanceShiftVehicle.class, shiftVehicleId, vehicleRevisions.getLast());
+            line.getVehicle().getCode();
+            return line;
+        });
+        assertEquals(31L, parked.getParkingTrackId());
+        assertEquals("DR-" + vehicleId.toString().substring(0, 6), parked.getVehicle().getCode(), "The vehicle is read as it is now");
     }
 
     private <T> T inTransaction(Function<EntityManager, T> work) {

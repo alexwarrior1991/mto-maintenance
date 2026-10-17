@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.application.dto.shift;
 
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.common.AuditMetadataResponse;
+import com.alejandro.mtomaintenance.application.dto.crew.CrewPersonSummary;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamSummaryResponse;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
@@ -45,6 +46,10 @@ public record MaintenanceShiftResponse(
         BigDecimal startKp,
         BigDecimal endKp,
         String personnel,
+        CrewPersonSummary teamLeader,
+        CrewPersonSummary supervisor,
+        List<CrewPersonSummary> linemen,
+        List<ShiftVehicleResponse> vehicles,
         String measurementEquipment,
         ShiftStatus status,
         String observations,

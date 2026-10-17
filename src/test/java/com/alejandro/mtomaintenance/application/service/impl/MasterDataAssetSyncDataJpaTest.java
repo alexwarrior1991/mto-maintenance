@@ -20,6 +20,12 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetSwitchRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.InboxMessageRepository;
+import com.alejandro.mtomaintenance.application.dto.messaging.IncomingEvent;
+import com.alejandro.mtomaintenance.application.dto.messaging.IncomingEventContext;
+import com.alejandro.mtomaintenance.application.service.IncomingEventHandler;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPersonRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTeamRepository;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
@@ -71,6 +77,12 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
 
     @Autowired
     private CatenaryAssetSwitchRepository switchRepository;
+
+    @Autowired
+    private MaintenanceTeamRepository teamRepository;
+
+    @Autowired
+    private CrewPersonRepository personRepository;
 
     @Test
     void twoDeliveriesOfAProfileLeaveASingleSynchronizedAssetAndOneProcessedInboxRow() {
@@ -777,6 +789,83 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         return message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, disconnectorId, MasterDataOperation.UPDATED, values);
     }
 
+    @Test
+    void aTeamOfMtoResourcesAdoptsTheLocalTeamOfItsCodeWithItsCrewAndPackagesAndALateEventUndoesNothing() {
+        String code = "T" + (System.nanoTime() % 1_000_000_000L);
+        MaintenanceTeam local = MaintenanceTeam.builder().code(code).name("Team " + code).baseName("Rishpon").vehicle("Truck 3").build();
+        entityManager.persist(local);
+        entityManager.flush();
+        UUID localId = local.getId();
+        UUID teamId = UUID.randomUUID();
+        Map<String, Object> leader = crewMember("TEAM_LEADER");
+        Map<String, Object> supervisor = crewMember("SUPERVISOR");
+        List<Map<String, Object>> linemen = List.of(crewMember("WORKER"), crewMember("WORKER"));
+        IncomingEventHandler handler = new ResourcesTeamHandler(teamRepository, personRepository);
+
+        handler.handle(teamEvent(teamId, code, "Team " + code + " (resources)", leader, supervisor, linemen, List.of(4, 5, 6)),
+                resourcesContext(5L));
+        handler.handle(teamEvent(teamId, code, "stale", leader, supervisor, linemen.subList(0, 1), List.of(9)), resourcesContext(4L));
+        entityManager.flush();
+        entityManager.clear();
+
+        MaintenanceTeam adopted = teamRepository.findByCode(code).orElseThrow();
+        assertEquals(localId, adopted.getId(), "The local team is adopted, not duplicated: its shifts and orders keep pointing at it");
+        assertTrue(adopted.isSynchronized());
+        assertEquals(teamId, adopted.getSourceEntityId());
+        assertEquals(5L, adopted.getSourceSequenceNumber());
+        assertEquals("Team " + code + " (resources)", adopted.getName());
+        assertNull(adopted.getBaseName(), "A team of mto-resources has no fixed base: the vehicle parks wherever it can");
+        assertEquals("RR-07", adopted.getVehicle());
+        assertEquals(leader.get("personId"), adopted.getLeader().getId().toString());
+        assertEquals("TEAM_LEADER", adopted.getLeader().getCategory());
+        assertEquals(supervisor.get("personId"), adopted.getSupervisor().getId().toString());
+        assertEquals(java.util.Set.of(linemen.get(0).get("personId"), linemen.get(1).get("personId")),
+                adopted.getMembers().stream().map(member -> member.getId().toString()).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(java.util.Set.of(4L, 5L, 6L), adopted.getExecutionPackageIds());
+
+        handler.handle(teamEvent(teamId, code, "Team " + code, leader, supervisor, List.of(linemen.get(0), linemen.get(1), crewMember("WORKER")),
+                List.of(4, 5)), resourcesContext(6L));
+        entityManager.flush();
+        entityManager.clear();
+        MaintenanceTeam updated = teamRepository.findByCode(code).orElseThrow();
+        assertEquals(3, updated.getMembers().size());
+        assertEquals(java.util.Set.of(4L, 5L), updated.getExecutionPackageIds());
+    }
+
+    @Test
+    void aConstructionTeamIsNotOfMaintenanceAndIsIgnored() {
+        String code = "C" + (System.nanoTime() % 1_000_000_000L);
+        Map<String, Object> values = new HashMap<>(teamEvent(UUID.randomUUID(), code, "Construction", crewMember("TEAM_LEADER"), null,
+                List.of(crewMember("WORKER"), crewMember("WORKER")), List.of(4)).values());
+        values.put("discipline", "CONSTRUCTION");
+
+        new ResourcesTeamHandler(teamRepository, personRepository)
+                .handle(new IncomingEvent("team", UUID.randomUUID().toString(), "created", values), resourcesContext(1L));
+
+        assertTrue(teamRepository.findByCode(code).isEmpty());
+    }
+
+    @Test
+    void aPersonEventOverwritesWhatItsTeamBroughtAndALateOneIsDiscarded() {
+        Map<String, Object> lineman = crewMember("WORKER");
+        UUID personId = UUID.fromString((String) lineman.get("personId"));
+        new ResourcesTeamHandler(teamRepository, personRepository).handle(teamEvent(UUID.randomUUID(),
+                "P" + (System.nanoTime() % 1_000_000_000L), "Team", crewMember("TEAM_LEADER"), null, List.of(lineman, crewMember("WORKER")),
+                List.of()), resourcesContext(3L));
+        IncomingEventHandler people = new ResourcesPersonHandler(personRepository);
+
+        people.handle(personEvent(personId, (String) lineman.get("code"), "Eli Katz", "TEAM_LEADER", true), resourcesContext(2L));
+        people.handle(personEvent(personId, (String) lineman.get("code"), "Eli Katz (old)", "WORKER", false), resourcesContext(1L));
+        entityManager.flush();
+        entityManager.clear();
+
+        var person = personRepository.findById(personId).orElseThrow();
+        assertEquals("Eli Katz", person.getFullName(), "The team brought it without a watermark, so its own event overwrites it");
+        assertEquals("TEAM_LEADER", person.getCategory());
+        assertTrue(person.getActive());
+        assertEquals(2L, person.getSourceSequenceNumber());
+    }
+
     /** El mismo mensaje con {@code station} a null: un seccionador que no es de ninguna estacion. */
     private static MasterDataChangedMessage withoutStation(MasterDataChangedMessage message) {
         Map<String, Object> values = new HashMap<>(message.data().values());
@@ -824,6 +913,47 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
             values.put("connectedTrack", Map.of("id", connectedTrackId));
         }
         return message(UUID.randomUUID(), MasterDataEntityNames.SECTION_INSULATOR, insulatorId, MasterDataOperation.UPDATED, values);
+    }
+
+    private static IncomingEventContext resourcesContext(long sequenceNumber) {
+        return new IncomingEventContext("mto-resources", sequenceNumber, UUID.randomUUID().toString());
+    }
+
+    /** Una persona tal como viaja dentro de un equipo de mto-resources. */
+    private static Map<String, Object> crewMember(String category) {
+        UUID id = UUID.randomUUID();
+        Map<String, Object> person = new HashMap<>();
+        person.put("personId", id.toString());
+        person.put("code", "PER-" + id.toString().substring(0, 8));
+        person.put("fullName", "Person " + id.toString().substring(0, 4));
+        person.put("username", null);
+        person.put("category", category);
+        return person;
+    }
+
+    private static IncomingEvent teamEvent(UUID teamId, String code, String name, Map<String, Object> leader, Map<String, Object> supervisor,
+                                           List<Map<String, Object>> members, List<Integer> executionPackageIds) {
+        Map<String, Object> values = new HashMap<>();
+        values.put("code", code);
+        values.put("name", name);
+        values.put("discipline", "MAINTENANCE");
+        values.put("active", true);
+        values.put("executionPackageIds", executionPackageIds);
+        values.put("defaultVehicle", Map.of("id", UUID.randomUUID().toString(), "code", "RR-07"));
+        values.put("leader", leader);
+        values.put("supervisor", supervisor);
+        values.put("members", members);
+        return new IncomingEvent("team", teamId.toString(), "updated", values);
+    }
+
+    private static IncomingEvent personEvent(UUID personId, String code, String fullName, String category, boolean active) {
+        Map<String, Object> values = new HashMap<>();
+        values.put("code", code);
+        values.put("fullName", fullName);
+        values.put("username", null);
+        values.put("category", category);
+        values.put("active", active);
+        return new IncomingEvent("person", personId.toString(), "updated", values);
     }
 
     private MasterDataEventHandler dispatcher() {

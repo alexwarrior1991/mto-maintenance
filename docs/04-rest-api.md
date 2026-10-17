@@ -23,6 +23,10 @@ GET             /assets/{id}/orders | /revisions
 
 GET             /task-types | /task-types/{code}     functionalGroup, requiresFullPossession, diagnostic
 GET/POST        /teams        GET/PUT /teams/{id}
+                                              synchronizedFromResources, sourceEntityId (its unit in mto-resources), leader,
+                                              supervisor, members (linemen, by code), defaultVehicleId, executionPackageIds; a
+                                              synchronized team has no baseName and its vehicle is the code of its default
+                                              vehicle; PUT on one is 409 TEA-001
 
 GET/POST        /shifts                       date, dateFrom, dateTo, teamId, trackId, executionPackageId, status, possessionType
                                               trackId can be repeated (?trackId=12&trackId=13): the shifts working on any of
@@ -30,6 +34,9 @@ GET/POST        /shifts                       date, dateFrom, dateTo, teamId, tr
 GET/PUT         /shifts/{id}                  POST /shifts/{id}/start | /close | /cancel
 GET             /shifts/{id}/tasks?status= | /profiles?status= | /report?format= | /revisions
                                               /profiles: PROFILE assets of the shift's tasks by kp (default status=COMPLETED = reviewed)
+                                              a shift answers teamLeader, supervisor, linemen[] (by code) and vehicles[] (by code:
+                                              vehicleId, code, name, mobility, category, available, parking{siteId, trackId, kp,
+                                              description} or null until closed with one) — "Shifts: crew and vehicles" below
 POST            /shifts/{id}/tasks/{taskId}   assigns a task to the shift (track and window rules)
 POST            /shifts/{id}/tasks/{taskId}/unassign
                                               takes an open task out of the shift: back to its order, PENDING and without
@@ -59,6 +66,9 @@ GET             /defects/{id}/history | /revisions
 
 GET             /reports/progress             executionPackageId, trackId (also the insulators connecting to it), assetType, from, to, format
 GET             /reports/monthly              executionPackageId, month=yyyy-MM, format
+
+GET             /operations/{id}              a background operation (202 of a Prefer: respond-async call): to whoever asked for it,
+                                              maintenance-supervise or ops-write; anyone else gets 404
 ```
 
 ## Generating preventive tasks
@@ -121,6 +131,77 @@ GET             /reports/monthly              executionPackageId, month=yyyy-MM,
 `outcome` is `CREATE`, `ALREADY_IN_ORDER`, `OTHER_PACKAGE`, `IN_OTHER_ORDER` or `NO_TASK_TYPES`. With
 `dryRun` the counters and the estimate are those of generating it.
 
+### `Prefer: respond-async`
+
+A generation of a whole package can take longer than a client wants to hold a request. With
+`Prefer: respond-async` (RFC 7240; `wait=N` chooses how many seconds to wait first) it runs as a
+background operation (`02-domain-model.md`):
+
+- It finishes within the wait: the usual 200 with the body above, or the usual error.
+- It does not: `202 Accepted`, `Location: /api/v1/maintenance/operations/{id}`,
+  `Preference-Applied: respond-async`, and the operation as body. The generation goes on.
+- The wait is `wait=N` capped at `app.operations.max-wait` (10 s, below the gateway's 15 s read
+  timeout), `app.operations.default-wait` (5 s) without it; `wait=0` answers 202 at once. Anything
+  else in `Prefer` is ignored, as the RFC says.
+- Without the header, or with `dryRun: true`, the call is synchronous as always.
+- Live operations are capped for the whole deployment (`app.operations.max-active`, 8): beyond it,
+  429 `OPS-429` with `Retry-After` (the default wait in seconds). Generations of one package run one
+  after another, the later ones `QUEUED`.
+
+```jsonc
+// GET /operations/{id}
+{
+  "id": "…", "kind": "GENERATE_TASKS", "scope": "EP-14", "status": "SUCCEEDED",   // QUEUED, RUNNING, SUCCEEDED, FAILED
+  "requestedBy": "mantenimiento.responsable",
+  "createdAt": "2026-10-16T21:00:00Z", "startedAt": "2026-10-16T21:00:00Z", "finishedAt": "2026-10-16T21:00:12Z",
+  "resultStatus": 200, "result": {"createdTasks": 412, "…": "…"}                  // the body of the synchronous call
+  // or, FAILED: "error": {"status": 409, "errorCode": "TRN-001", "message": "…"}   the error it would have answered
+}
+```
+
+Absent fields are not sent. An operation whose instance stopped beating for
+`app.operations.stale-after` (1 min) is `FAILED` with `error.errorCode` `OPS-410` (abandoned; its
+`status` is 500). `GET /operations/{id}` needs `maintenance-read` like any read, and shows the
+operation only to whoever asked for it, to `maintenance-supervise` and to `ops-write`; to anyone else,
+and once purged (`app.operations.retention`, 7 days), it is 404 `APP-404`.
+
+## Shifts: crew and vehicles
+
+`POST /shifts` and `PUT`/`PATCH /shifts/{id}` take, besides the fields of before, the crew and the
+vehicles of that night from `mto-resources` (`02-domain-model.md`, "Shift crew and vehicles"):
+
+```jsonc
+{
+  "shiftDate": "2026-01-27", "teamId": "…", "possessionType": "PARTIAL", "trackIds": [2], "…": "…",
+  "vehicleIds": ["…(DR-02)"],                  // a set, replaced whole; a vehicle that stays keeps its parking
+  "teamLeaderPersonId": "…",                   // TEAM_LEADER or above (anything but WORKER)
+  "supervisorPersonId": "…",
+  "linemanPersonIds": ["…", "…", "…"]          // a set, replaced whole; 2 to 6 to start
+}
+```
+
+With a synchronized team, what `POST` does not say is copied from the team (leader, supervisor,
+linemen, default vehicle). A `PATCH` may empty the four; emptying `teamLeaderPersonId` while the
+shift has linemen is 400 `VAL-001` (replace it instead). An unknown person or vehicle is 404
+`CRW-404` / `FLT-404`; a broken crew rule (more than 6 linemen, the leader among them, a `WORKER` as
+leader, someone deactivated, a vehicle not available, one that needs towing without a towing vehicle,
+not enough seats, a vehicle or a person already in another open shift of the same date) is 409
+`SHF-001`, and so is starting, or changing a shift `IN_PROGRESS`, without a leader and 2 to 6 linemen
+when the shift has a crew.
+
+`POST /shifts/{id}/close` takes `parkings`, where each vehicle was left:
+
+```jsonc
+{"actualEnd": "2026-01-28T02:30:00Z", "parkings": [
+  {"vehicleId": "…(DR-02)", "trackId": 31, "kp": 4.250},                        // a track and kp (mto-configuration)
+  {"vehicleId": "…(RR-07)", "parkingSiteId": "…", "description": "Gate 3"}       // a site of mto-resources, a text
+]}
+```
+
+Each needs a site, a track or a description, and a vehicle of the shift (400 `VAL-001`); a rail-only
+vehicle with only a description is 409 `SHF-001`. Without `parkings` the shift's `parkingPlace`
+stands.
+
 ## Export (`?format=`)
 
 The three reports — `/shifts/{id}/report`, `/reports/progress`, `/reports/monthly` — take `format`
@@ -130,8 +211,8 @@ the parameter is absent; the download is an ordinary URL, so it can be linked or
 | `format` | `Content-Type` | Notes |
 |---|---|---|
 | `json`, absent | `application/json` | Unchanged |
-| `xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | One sheet, header pairs above the table, frozen and filtered header, real dates and numbers; the shift report adds an `Inspections` sheet |
-| `pdf` | `application/pdf` | A4 landscape (shift, progress) or portrait (monthly), header repeated on every page; the shift report's inspections follow its totals |
+| `xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | One sheet, header pairs above the table, frozen and filtered header, real dates and numbers; the shift report adds the `Inspections`, `Crew` and `Vehicles` sheets |
+| `pdf` | `application/pdf` | A4 landscape (shift, progress) or portrait (monthly), header repeated on every page; the shift report's inspections, crew and vehicles follow its totals |
 
 The value is case insensitive; an unknown one is `400 VAL-001`. The file arrives as
 `Content-Disposition: attachment` with a stable, sortable ASCII name — `shift-report-<date>-<code>`,
@@ -156,7 +237,11 @@ Two deliberate differences from the JSON:
   with its frozen and filtered header, and the note when there are none), in the PDF a titled table
   after the totals without the asset name and type, which the code already says. The totals carry
   `Inspections recorded`. The task table's `Profile` column reads `Asset`, because a row can be a
-  section insulator; the JSON keeps `profileCode`/`profileName`.
+  section insulator; the JSON keeps `profileCode`/`profileName`. The crew (`Role`, `Code`, `Name`,
+  `Username`, `Category`: the leader, the supervisor, each lineman) and the vehicles (`Code`, `Name`,
+  `Mobility`, `Category`, `Parking`, as `track 31, kp 4.250 — site … — description`) are two more
+  appendices after it, and the header adds `Team leader`, `Supervisor`, `Linemen` (the count) and
+  `Vehicles` (the codes); the JSON carries them in `shift`.
 - `photoRefs` are printed as text in both formats. They are references that resolve to nothing until
   the photo storage in `05-development-roadmap.md` exists, but they are the only record that the
   photo was taken, so dropping them would lose what the paper report used to carry.
@@ -165,10 +250,12 @@ Transitions are `POST` with a body: `PlanOrderRequest{plannedDate, comment}`,
 `AssignOrderRequest{teamId, assignedUser, comment}`, `OrderCommentRequest{comment}`,
 `CompleteOrderRequest{closingNotes, force, comment}`, `CancelOrderRequest{reason}`;
 `CompleteTaskRequest{shiftId, taskTypeCodes, notes, defectsFound, workComplete, repairPlannedDate,
-inlineDefects[], materials[], photoRefs[]}`; `MaintenanceShiftRequest{shiftDate, teamId, possessionType, trackIds[], blockingDisconnectorIds[], …}`,
+inlineDefects[], materials[], photoRefs[]}`; `MaintenanceShiftRequest{shiftDate, teamId, possessionType, trackIds[], blockingDisconnectorIds[], …,
+vehicleIds[], teamLeaderPersonId, supervisorPersonId, linemanPersonIds[]}`,
 `StartShiftRequest{actualStart, voltageCutoffAt}`, `CloseShiftRequest{actualEnd,
-voltageCutoffAt, netWorkMinutes, observations}`; `ResolveDefectRequest{resolutionNotes, correctionType,
-partsReplaced, resolvedInShiftId}`.
+voltageCutoffAt, netWorkMinutes, observations, parkings[{vehicleId, parkingSiteId, trackId, kp,
+description}]}`; `ResolveDefectRequest{resolutionNotes, correctionType, partsReplaced,
+resolvedInShiftId}`.
 
 ## Changing a resource: `PUT`, `PATCH` and `version`
 
@@ -189,7 +276,7 @@ their items, defects, material lines — takes the same body two ways:
 | Order | `description`, `plannedDate`, `teamId`, `assignedUser`, `closingNotes`, `executionPackageId`, `trackId`, `stationId`, `startKp`, `endKp`, `stockProjectId` |
 | Task | `assignedUser`, `taskTypeCodes`, `notes`, `defectsFound`, `photoRefs` |
 | Check item (task or inspection) | `measuredValue`, `valueAfterAdjustment`, `itemResult`, `notes` |
-| Shift | `teamId`, `baseName`, `vehicle`, `plannedStart`, `plannedEnd`, `blockingDisconnectorIds`, `earthingPoints`, `parkingPlace`, `executionPackageId`, `startKp`, `endKp`, `personnel`, `measurementEquipment`, `observations` |
+| Shift | `teamId`, `baseName`, `vehicle`, `plannedStart`, `plannedEnd`, `blockingDisconnectorIds`, `earthingPoints`, `parkingPlace`, `executionPackageId`, `startKp`, `endKp`, `personnel`, `measurementEquipment`, `observations`, `vehicleIds`, `teamLeaderPersonId` (only with no linemen left), `supervisorPersonId`, `linemanPersonIds` (not below 2 while `IN_PROGRESS`) |
 | Inspection | `inspector`, `description`, `detectedDefects`, `recommendedActions`, `kp` |
 | Defect | `technicalNotes`, `correctionType`, `partsReplaced`, `repairPlannedDate`, `photoRefs` |
 | Asset | `description`, `preventiveIntervalDays`, and on an own section `executionPackageId` and `stationId` |
@@ -217,9 +304,9 @@ themselves:
   UTC day for an hour or two), and resolving one that was still dated in the future is 400 `VAL-001`
   (it was 409 `APP-409`).
 - A `null` inside a list (`taskTypeCodes`, `inlineDefects`, `materials`, `photoRefs`, `trackIds`,
-  `blockingDisconnectorIds`, a team's `executionPackageIds`) is 400 `REQ-VALIDATION` on that list. It
-  was a 500 for task types, defects and materials, a 409 `APP-409` for tracks and packages, and a
-  photo stored as the text `null`.
+  `blockingDisconnectorIds`, a shift's `vehicleIds`, `linemanPersonIds` and `parkings`, a team's
+  `executionPackageIds`) is 400 `REQ-VALIDATION` on that list. It was a 500 for task types, defects
+  and materials, a 409 `APP-409` for tracks and packages, and a photo stored as the text `null`.
 
 Anything else a constraint catches is 409 `APP-409` rather than 500.
 
@@ -237,16 +324,18 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 |---|---|
 | 201 + `Location` | Creation |
 | 200 | Reads, updates, transitions, idempotent `create-defect`/`create-corrective-order` |
+| 202 + `Location` + `Preference-Applied` | `POST /orders/{id}/tasks/generate` with `Prefer: respond-async` that did not finish within its wait: the body is the operation, `Location` its `GET /operations/{id}` |
 | 204 | `DELETE /assets/{id}` (disables the asset), `DELETE /orders/{id}/materials/{usageId}` (removes the line) |
 | 400 `REQ-VALIDATION` / `VAL-001` | Bean Validation / domain invariant (kp range, quantity, unknown task type, unknown export `format`, a blank required text, a `PATCH` that empties a required field or has an unknown key, a `null` inside a list, a defect detected in the future, a shift closed with its voltage cut-off after the end) |
 | 400 `REQ-400` | Malformed body, a parameter of the wrong type, a missing required parameter (`month` of the monthly report) or a `sort` on a property the entity does not have |
 | 401 `AUTH-401` / 403 `AUTH-403` | No token / missing role |
-| 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `INS`, `TPL`, `DEF`, `MAT`); a task type, a check item and an inspection item answer `APP-404` |
+| 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `INS`, `TPL`, `DEF`, `MAT`, and `CRW` for a person or `FLT` for a vehicle of `mto-resources` named in a shift); a task type, a check item, an inspection item and a background operation (unknown, purged or someone else's) answer `APP-404` |
 | 404 `HTTP-404` | Unknown route |
 | 405 `REQ-405` | The route exists but not for that method; the `Allow` header lists the ones it takes |
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset; changing a field of a synchronized asset that only `mto-configuration` changes (sending it with the value it already has is accepted); `enabled=true` on an asset disabled at the source |
-| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them, and an inspection recorded in a shift that is not in progress or closed, or that does not work on its asset's track nor on the one it connects with |
+| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them, and an inspection recorded in a shift that is not in progress or closed, or that does not work on its asset's track nor on the one it connects with; a crew or vehicle rule (more than 6 linemen, the leader among them or a `WORKER`, someone deactivated, a vehicle not available or needing a tow, not enough seats, a vehicle or a person in another open shift of the same date, starting or changing a shift in progress without a leader and 2 to 6 linemen), and a rail-only vehicle left by description only on close |
+| 409 `TEA-001` | `PUT /teams/{id}` of a team synchronized from `mto-resources`: it is changed there |
 | 409 `MAT-001` | Over-consumption (also taking `allowOverConsumption` off a line consumed above plan), duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
 | 409 `<AGG>-409` | Duplicated code |
@@ -255,13 +344,14 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 415 `REQ-415` | Unsupported media type (a `PATCH` is only `application/merge-patch+json`) |
 | 422 `INS-001` | Inconsistent inspection result / checklist |
 | 422 `STK-422` | `mto-stock` rejected the step for another reason (a material or warehouse retired, a reservation no longer active...), on an explicit `sync` or when removing a reserved line; its code and message are in `message` |
+| 429 `OPS-429` + `Retry-After` | As many background operations live as the deployment admits (`app.operations.max-active`): try again in the seconds `Retry-After` says |
 | 503 `STK-503` | `mto-stock` unreachable on an explicit `sync`, or when removing a reserved line (the line stays) |
 
 ## Security
 
 | Verb / action | Role |
 |---|---|
-| `GET` | `MAINTENANCE_READ` |
+| `GET` | `MAINTENANCE_READ`; `GET /operations/{id}` also needs to be who asked for it, `MAINTENANCE_SUPERVISE` or `OPS_WRITE` (404 otherwise) |
 | `POST`, `PUT` | `MAINTENANCE_WRITE` |
 | `DELETE`, and `PUT /assets/{id}` with `enabled=false` (the same decision) | `MAINTENANCE_DELETE` (method security on the `PUT`, on top of `MAINTENANCE_WRITE`) |
 | `cancel` **of an order**, `complete` of an order with `force=true`, `resolve`, `close`, `discard` of a defect | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security); cancelling a shift or a task, and taking a task out of a shift (`POST .../unassign`), only need `MAINTENANCE_WRITE` |

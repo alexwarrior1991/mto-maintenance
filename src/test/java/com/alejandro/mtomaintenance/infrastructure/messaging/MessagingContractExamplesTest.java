@@ -13,6 +13,8 @@ import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CheckItemResult;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectStatus;
@@ -27,12 +29,14 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockRequestType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.BeanUtils;
 import org.springframework.test.util.ReflectionTestUtils;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
@@ -198,8 +202,24 @@ class MessagingContractExamplesTest {
         shift.setActualEnd(Instant.parse("2026-09-30T03:50:00Z"));
         shift.setNetWorkMinutes(330);
 
+        MaintenanceShiftVehicle towerCar = shift.getVehicles().getFirst();
+        towerCar.setParkingTrackId(31L);
+        towerCar.setParkingKp(new BigDecimal("4.250"));
+        towerCar.setParkingDescription("Siding north of Herzliya");
+
         check("shift-closed.json", "a0000000-0000-4000-8000-00000000000b", TECHNICIAN, REQUEST_CORRELATION_ID,
                 MaintenanceEvents.shiftClosed(shift));
+    }
+
+    @Test
+    void shiftCancelled() throws IOException {
+        MaintenanceShift shift = shift();
+        shift.setStatus(ShiftStatus.CANCELLED);
+        shift.setActualStart(Instant.parse("2026-09-29T22:05:00Z"));
+        shift.setObservations("Cancelled: possession withdrawn by the traffic control");
+
+        check("shift-cancelled.json", "a0000000-0000-4000-8000-000000000012", MANAGER, REQUEST_CORRELATION_ID,
+                MaintenanceEvents.shiftCancelled(shift));
     }
 
     // ---------------------------------------------------------------------------- materials
@@ -342,9 +362,37 @@ class MessagingContractExamplesTest {
                 .baseName("Base Herzliya").vehicle("Dresina 3").possessionType(PossessionType.PARTIAL)
                 .plannedStart(Instant.parse("2026-09-29T22:00:00Z")).plannedEnd(Instant.parse("2026-09-30T04:00:00Z"))
                 .executionPackageId(6L).trackIds(new LinkedHashSet<>(Set.of(2L))).startKp(new BigDecimal("12847.990")).endKp(new BigDecimal("14078.090"))
-                .build();
+                .parkingPlace("Herzliya siding").build();
         id(shift, "90000000-0000-4000-8000-000000000001");
+        shift.setTeamLeader(crewPerson("c0000000-0000-4000-8000-000000000003", "PER-000003", "Yossi Cohen", "equipo.jefe", "TEAM_LEADER"));
+        shift.setSupervisor(crewPerson("c0000000-0000-4000-8000-000000000002", "PER-000002", "Dana Mizrahi", "equipo.supervisor", "SUPERVISOR"));
+        shift.getLinemen().add(crewPerson("c0000000-0000-4000-8000-000000000010", "PER-000010", "Eli Katz", "equipo.operario", "WORKER"));
+        shift.getLinemen().add(crewPerson("c0000000-0000-4000-8000-000000000011", "PER-000011", "Noam Biton", null, "WORKER"));
+        shift.getLinemen().add(crewPerson("c0000000-0000-4000-8000-000000000012", "PER-000012", "Avi Levi", null, "WORKER"));
+        MaintenanceShiftVehicle towerCar = MaintenanceShiftVehicle.of(shift, fleetVehicle("f0000000-0000-4000-8000-000000000002", "DR-02"));
+        id(towerCar, "f1000000-0000-4000-8000-000000000002");
+        shift.getVehicles().add(towerCar);
         return shift;
+    }
+
+    private static CrewPerson crewPerson(String id, String code, String fullName, String username, String category) {
+        CrewPerson person = BeanUtils.instantiateClass(CrewPerson.class);
+        id(person, id);
+        ReflectionTestUtils.setField(person, "code", code);
+        ReflectionTestUtils.setField(person, "fullName", fullName);
+        ReflectionTestUtils.setField(person, "username", username);
+        ReflectionTestUtils.setField(person, "category", category);
+        ReflectionTestUtils.setField(person, "active", true);
+        return person;
+    }
+
+    private static FleetVehicle fleetVehicle(String id, String code) {
+        FleetVehicle vehicle = BeanUtils.instantiateClass(FleetVehicle.class);
+        id(vehicle, id);
+        ReflectionTestUtils.setField(vehicle, "code", code);
+        ReflectionTestUtils.setField(vehicle, "mobility", "RAIL_ONLY");
+        ReflectionTestUtils.setField(vehicle, "category", "CATENARY_TOWER_CAR");
+        return vehicle;
     }
 
     private static MaintenanceMaterialUsage materialLine() {

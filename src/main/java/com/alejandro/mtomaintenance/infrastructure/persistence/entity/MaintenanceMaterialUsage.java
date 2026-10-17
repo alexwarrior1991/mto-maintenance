@@ -188,4 +188,15 @@ public class MaintenanceMaterialUsage extends VersionedEntity {
         this.stockSyncError = error;
         this.stockRequestInDoubt = null;
     }
+
+    /**
+     * Lo que conto stock de la linea en una conversacion que corrio fuera de la transaccion, sobre una
+     * copia ({@code MaterialStockSynchronizer}): los cuatro campos tal como la copia los dejo.
+     */
+    public void applyStockState(UUID reservationId, StockSyncStatus status, String error, StockRequestType inDoubt) {
+        this.stockReservationId = reservationId;
+        this.stockSyncStatus = status;
+        this.stockSyncError = error;
+        this.stockRequestInDoubt = inDoubt;
+    }
 }

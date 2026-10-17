@@ -1,6 +1,7 @@
 package com.alejandro.mtomaintenance;
 
 import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataEntityNames;
+import com.alejandro.mtomaintenance.application.service.BudgetedOperations;
 import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
 import com.alejandro.mtomaintenance.application.service.CatenaryDefectService;
 import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
@@ -55,6 +56,7 @@ import com.alejandro.mtomaintenance.application.dto.task.InlineDefectRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.configuration.async.AsyncConfiguration;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetSwitch;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
@@ -93,7 +95,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.thread.Threading;
+import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
@@ -123,6 +128,10 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
 
     @Autowired
     private ApplicationContext context;
+
+    @Autowired
+    @org.springframework.beans.factory.annotation.Qualifier(AsyncConfiguration.TASK_EXECUTOR)
+    private org.springframework.core.task.AsyncTaskExecutor backgroundExecutor;
 
     @Autowired(required = false)
     private MasterDataEventHandler masterDataEventHandler;
@@ -177,6 +186,26 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         assertNotNull(masterDataEventHandler);
     }
 
+    /**
+     * Lo que corre de fondo va en hilos virtuales, y con el {@code SecurityContext} de quien lo encola.
+     * Que Tomcat, {@code @Scheduled} y los listeners tambien lo hacen lo pone
+     * {@code spring.threads.virtual.enabled}, que se comprueba aqui por si alguien lo quita del YAML.
+     */
+    @Test
+    void theBackgroundExecutorRunsOnVirtualThreadsWithTheCallersIdentity() throws Exception {
+        assertThat(context.getEnvironment().getProperty("spring.threads.virtual.enabled", Boolean.class)).isTrue();
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                new org.springframework.security.authentication.TestingAuthenticationToken("planner", null, "ROLE_MAINTENANCE_WRITE"));
+        try {
+            java.util.concurrent.CompletableFuture<String> background = new java.util.concurrent.CompletableFuture<>();
+            backgroundExecutor.execute(() -> background.complete(Thread.currentThread().isVirtual() + ":"
+                    + org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getName()));
+            assertThat(background.get(5, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo("true:planner");
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
     @Test
     void everyBusinessServiceIsInTheContext() {
         for (Class<?> service : BusinessServices.ALL) {
@@ -209,12 +238,20 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
     /**
      * La configuracion de la aplicacion enciende los hilos virtuales (Tomcat, los @Scheduled, el
      * consumidor y el circuito de stock los toman de esta misma condicion), y el pool de conexiones,
-     * que pasa a ser el limite real, es el configurado: 10 por defecto.
+     * que pasa a ser el limite real, es el configurado: 10 por defecto en application.yaml, y aqui el
+     * de PostgreSQLTestContainer, que lo baja para que los contextos cacheados quepan en PostgreSQL.
      */
     @Test
     void theApplicationRunsOnVirtualThreadsWithTheConfiguredConnectionPool() throws Exception {
         assertTrue(Threading.VIRTUAL.isActive(context.getEnvironment()), "spring.threads.virtual.enabled");
-        assertEquals(10, context.getBean(DataSource.class).unwrap(HikariDataSource.class).getMaximumPoolSize());
+        assertEquals(context.getEnvironment().getProperty("spring.datasource.hikari.maximum-pool-size", Integer.class),
+                context.getBean(DataSource.class).unwrap(HikariDataSource.class).getMaximumPoolSize());
+
+        StandardEnvironment defaults = new StandardEnvironment();
+        new YamlPropertySourceLoader().load("application", new ClassPathResource("application.yaml"))
+                .forEach(defaults.getPropertySources()::addLast);
+        assertEquals(10, defaults.getProperty("spring.datasource.hikari.maximum-pool-size", Integer.class),
+                "the default of DATABASE_POOL_MAX_SIZE");
     }
 
     /**
@@ -381,6 +418,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
     /** Lista viva: cada fase que anade un servicio lo anade aqui. */
     static final class BusinessServices {
         static final List<Class<?>> ALL = List.of(
+                BudgetedOperations.class,
                 CatenaryAssetService.class,
                 CatenaryDefectService.class,
                 DomainEventPublisher.class,

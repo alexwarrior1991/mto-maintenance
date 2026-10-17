@@ -12,6 +12,8 @@ public final class RabbitListenerContainerFactoryNames {
     /** Factory del canal de datos maestros. */
     public static final String MASTER_DATA = "masterDataRabbitListenerContainerFactory";
 
+    public static final String RESOURCES = "resourcesRabbitListenerContainerFactory";
+
     private RabbitListenerContainerFactoryNames() {
     }
 }

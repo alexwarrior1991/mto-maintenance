@@ -5,11 +5,13 @@ import com.alejandro.mtomaintenance.application.exception.StockRejectedException
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspection;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspectionItem;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
 
 import java.time.Instant;
@@ -51,6 +53,7 @@ public final class MaintenanceEvents {
     public static final String CORRECTIVE_ORDER_CREATED = "corrective-order-created";
     public static final String STARTED = "started";
     public static final String CLOSED = "closed";
+    public static final String CANCELLED = "cancelled";
     public static final String REJECTED = "rejected";
     public static final String FAILED = "failed";
     public static final String IN_DOUBT = "in-doubt";
@@ -227,6 +230,14 @@ public final class MaintenanceEvents {
         return new DomainEvent(SHIFT, id(shift.getId()), CLOSED, shift(shift));
     }
 
+    /**
+     * Cancelado: si llego a empezar ({@code actualStart}), mto-resources devuelve sus vehiculos a donde
+     * se dejaron; si no, no se movieron.
+     */
+    public static DomainEvent shiftCancelled(MaintenanceShift shift) {
+        return new DomainEvent(SHIFT, id(shift.getId()), CANCELLED, shift(shift));
+    }
+
     private static Map<String, Object> shift(MaintenanceShift shift) {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("code", shift.getCode());
@@ -246,7 +257,47 @@ public final class MaintenanceEvents {
         values.put("actualEnd", shift.getActualEnd());
         values.put("voltageCutoffAt", shift.getVoltageCutoffAt());
         values.put("netWorkMinutes", shift.getNetWorkMinutes());
+        values.put("parkingPlace", shift.getParkingPlace());
+        crew(values, shift);
         return values;
+    }
+
+    /**
+     * La dotacion y los vehiculos de mto-resources: solo ids, codigos y el usuario del jefe (a quien se
+     * avisa), porque mto-notification copia el {@code values} entero a su registro. {@code vehicles}
+     * lleva donde se dejo cada uno, que es lo que lee mto-resources al cerrar.
+     */
+    private static void crew(Map<String, Object> values, MaintenanceShift shift) {
+        List<Map<String, Object>> vehicles = new ArrayList<>();
+        List<String> vehicleIds = new ArrayList<>();
+        List<String> vehicleCodes = new ArrayList<>();
+        for (MaintenanceShiftVehicle shiftVehicle : shift.getVehicles() == null ? List.<MaintenanceShiftVehicle>of() : shift.vehiclesByCode()) {
+            Map<String, Object> vehicle = new LinkedHashMap<>();
+            vehicle.put("id", id(shiftVehicle.getVehicle().getId()));
+            vehicle.put("code", shiftVehicle.getVehicle().getCode());
+            if (shiftVehicle.hasParking()) {
+                Map<String, Object> parking = new LinkedHashMap<>();
+                parking.put("siteId", shiftVehicle.getParkingSiteId() == null ? null : shiftVehicle.getParkingSiteId().toString());
+                parking.put("trackId", shiftVehicle.getParkingTrackId());
+                parking.put("kp", shiftVehicle.getParkingKp());
+                parking.put("description", shiftVehicle.getParkingDescription());
+                vehicle.put("parking", parking);
+            } else {
+                vehicle.put("parking", null);
+            }
+            vehicles.add(vehicle);
+            vehicleIds.add(id(shiftVehicle.getVehicle().getId()));
+            vehicleCodes.add(shiftVehicle.getVehicle().getCode());
+        }
+        values.put("vehicles", vehicles);
+        values.put("vehicleIds", vehicleIds);
+        values.put("vehicleCodes", vehicleCodes);
+        CrewPerson leader = shift.getTeamLeader();
+        values.put("teamLeaderPersonId", leader == null ? null : id(leader.getId()));
+        values.put("teamLeaderUsername", leader == null ? null : leader.getUsername());
+        values.put("supervisorPersonId", shift.getSupervisor() == null ? null : id(shift.getSupervisor().getId()));
+        values.put("linemanPersonIds", shift.getLinemen() == null ? List.of()
+                : shift.getLinemen().stream().map(person -> person.getId().toString()).sorted().toList());
     }
 
     // ---------------------------------------------------------------------------- materials

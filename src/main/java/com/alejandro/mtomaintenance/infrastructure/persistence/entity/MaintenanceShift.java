@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.infrastructure.persistence.entity;
 
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
@@ -13,6 +14,8 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinTable;
 import jakarta.persistence.ManyToMany;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.Digits;
@@ -36,7 +39,9 @@ import org.hibernate.type.SqlTypes;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -164,6 +169,42 @@ public class MaintenanceShift extends VersionedEntity {
     @Column(name = "personnel", columnDefinition = "text")
     private String personnel;
 
+    /** El jefe de equipo (foreman) de esa noche, de mto-resources: el del equipo o un suplente. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "team_leader_person_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_team_leader"))
+    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
+    private CrewPerson teamLeader;
+
+    /** El supervisor que tiene el turno a su cargo esa noche; puede llevar varios a la vez. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "supervisor_person_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_supervisor"))
+    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
+    private CrewPerson supervisor;
+
+    /**
+     * Los linemen de esa noche (de 2 a 6 para iniciarlo, {@code CrewComposition}). Un conjunto que se
+     * sustituye entero, como los seccionadores; las personas se leen como estan ahora.
+     */
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+            name = "maintenance_shift_lineman",
+            joinColumns = @JoinColumn(name = "shift_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_lineman_shift")),
+            inverseJoinColumns = @JoinColumn(name = "person_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_lineman_person"))
+    )
+    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
+    @Builder.Default
+    private Set<CrewPerson> linemen = new LinkedHashSet<>();
+
+    /**
+     * Los vehiculos de esa noche, cada uno con donde se dejo al cerrar. Se ordenan por {@code id} y no
+     * por {@code createdAt}: Envers aplica el {@code @OrderBy} a {@code maintenance_shift_vehicle_aud},
+     * que no tiene las columnas de auditoria. Lo que se ensena sale de {@link #vehiclesByCode()}.
+     */
+    @OneToMany(mappedBy = "shift", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("id ASC")
+    @Builder.Default
+    private List<MaintenanceShiftVehicle> vehicles = new ArrayList<>();
+
     @Size(max = 500)
     @Column(name = "measurement_equipment", length = 500)
     private String measurementEquipment;
@@ -181,6 +222,23 @@ public class MaintenanceShift extends VersionedEntity {
 
     public boolean isInProgress() {
         return ShiftStatus.IN_PROGRESS == status;
+    }
+
+    /** Los vehiculos por su codigo de flota: el orden de la respuesta, del evento y del parte. */
+    public List<MaintenanceShiftVehicle> vehiclesByCode() {
+        return vehicles.stream()
+                .sorted(java.util.Comparator.comparing((MaintenanceShiftVehicle vehicle) -> vehicle.getVehicle().getCode())
+                        .thenComparing(vehicle -> vehicle.getVehicle().getId()))
+                .toList();
+    }
+
+    /** Si se le exige la dotacion entera para iniciarse: un equipo sincronizado, o uno que ya la lleva. */
+    public boolean hasCrew() {
+        return teamLeader != null || !linemen.isEmpty() || (team != null && team.isSynchronized());
+    }
+
+    public boolean isOpen() {
+        return status == ShiftStatus.PLANNED || status == ShiftStatus.IN_PROGRESS;
     }
 
     public boolean worksOn(Long trackId) {

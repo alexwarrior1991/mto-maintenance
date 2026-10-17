@@ -9,6 +9,7 @@ import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRespon
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksRequest;
 import com.alejandro.mtomaintenance.application.dto.task.GeneratePreventiveTasksResponse;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
+import com.alejandro.mtomaintenance.application.service.BudgetedOperations;
 import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
@@ -95,7 +96,7 @@ class RestControllerLayerTest {
         MaintenanceTaskService taskService = mock(MaintenanceTaskService.class);
         MaintenanceMaterialUsageService materialService = mock(MaintenanceMaterialUsageService.class);
         MaintenanceOrderController controller = new MaintenanceOrderController(orderService, taskService,
-                materialService, mock(StatusHistoryService.class));
+                materialService, mock(StatusHistoryService.class), mock(BudgetedOperations.class));
         UUID orderId = UUID.randomUUID();
         UUID assetId = UUID.randomUUID();
         Pageable pageable = PageRequest.of(0, 20);
@@ -115,7 +116,7 @@ class RestControllerLayerTest {
         var createResponse = controller.create(request);
         var searchResponse = controller.search(MaintenanceOrderStatus.PLANNED, null, MaintenancePriority.HIGH, null, null, 2L, null, null, from, to, null, null, null, null, null, pageable);
         var cancelResponse = controller.cancel(orderId, new CancelOrderRequest("rain"));
-        var generateResponse = controller.generateTasks(orderId, null);
+        var generateResponse = controller.generateTasks(orderId, null, null);
         UUID usageId = UUID.randomUUID();
         var removeResponse = controller.removeMaterial(orderId, usageId);
 
@@ -207,7 +208,7 @@ class RestControllerLayerTest {
         MaintenanceInspectionController inspections = new MaintenanceInspectionController(inspectionService);
         MaintenanceOrderService orderService = mock(MaintenanceOrderService.class);
         MaintenanceOrderController orders = new MaintenanceOrderController(orderService, mock(MaintenanceTaskService.class),
-                mock(MaintenanceMaterialUsageService.class), mock(StatusHistoryService.class));
+                mock(MaintenanceMaterialUsageService.class), mock(StatusHistoryService.class), mock(BudgetedOperations.class));
         UUID id = UUID.randomUUID();
 
         shifts.start(id, null);

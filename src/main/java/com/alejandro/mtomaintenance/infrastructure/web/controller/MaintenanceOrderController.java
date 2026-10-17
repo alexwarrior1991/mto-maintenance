@@ -24,6 +24,7 @@ import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.task.StartTaskRequest;
+import com.alejandro.mtomaintenance.application.service.BudgetedOperations;
 import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskService;
@@ -33,6 +34,8 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
+import com.alejandro.mtomaintenance.infrastructure.web.OperationResponses;
+import com.alejandro.mtomaintenance.infrastructure.web.PreferHeader;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -43,6 +46,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
@@ -53,6 +57,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -69,17 +74,23 @@ import java.util.UUID;
 @Tag(name = "Orders")
 public class MaintenanceOrderController {
 
+    /** El {@code kind} de la operacion de fondo de una generacion de tareas. */
+    static final String GENERATE_TASKS = "GENERATE_TASKS";
+
     private final MaintenanceOrderService orderService;
     private final MaintenanceTaskService taskService;
     private final MaintenanceMaterialUsageService materialService;
     private final StatusHistoryService historyService;
+    private final BudgetedOperations operations;
 
     public MaintenanceOrderController(MaintenanceOrderService orderService, MaintenanceTaskService taskService,
-                                      MaintenanceMaterialUsageService materialService, StatusHistoryService historyService) {
+                                      MaintenanceMaterialUsageService materialService, StatusHistoryService historyService,
+                                      BudgetedOperations operations) {
         this.orderService = orderService;
         this.taskService = taskService;
         this.materialService = materialService;
         this.historyService = historyService;
+        this.operations = operations;
     }
 
     // ---------------------------------------------------------------- orders
@@ -203,10 +214,23 @@ public class MaintenanceOrderController {
                     + "on any track of the order's execution package. Default task types per asset: groups 1, 2 and 4 on a profile, RG-03 "
                     + "and RP-02 on an insulator (and RG-04 and RP-03 when it has turnouts), RP-07 on a disconnector (and RP-06 with a "
                     + "motor, RG-06 on a surge arrester). Skips what already has a task in the order, what belongs to another package "
-                    + "and what has an open task in another open preventive order. dryRun previews without creating anything.")
+                    + "and what has an open task in another open preventive order. dryRun previews without creating anything. "
+                    + "Generations of one package run one at a time. With 'Prefer: respond-async' (RFC 7240, and 'wait=N' to "
+                    + "choose the budget, capped at app.operations.max-wait) a generation that does not finish in time answers "
+                    + "202 with the background operation and its Location; GET /operations/{id} gives the same body as this call "
+                    + "when it ends. Without the header, or with dryRun, the call is synchronous.")
     @PostMapping("/{id}/tasks/generate")
-    public ResponseEntity<GeneratePreventiveTasksResponse> generateTasks(@PathVariable UUID id, @Valid @RequestBody(required = false) GeneratePreventiveTasksRequest request) {
-        return ResponseEntity.ok(taskService.generatePreventiveTasks(id, request == null ? new GeneratePreventiveTasksRequest(null, null, null, null, null) : request));
+    public ResponseEntity<Object> generateTasks(@PathVariable UUID id,
+                                                @RequestHeader(value = PreferHeader.NAME, required = false) String prefer,
+                                                @Valid @RequestBody(required = false) GeneratePreventiveTasksRequest request) {
+        GeneratePreventiveTasksRequest generation = request == null ? new GeneratePreventiveTasksRequest(null, null, null, null, null) : request;
+        PreferHeader preference = PreferHeader.parse(prefer);
+        if (!preference.respondAsync() || generation.previewOnly()) {
+            return ResponseEntity.ok(taskService.generatePreventiveTasks(id, generation));
+        }
+        BudgetedOperations.Outcome<GeneratePreventiveTasksResponse> outcome = operations.run(GENERATE_TASKS, taskService.generationScope(id),
+                HttpStatus.OK.value(), preference.waitFor(), () -> taskService.generatePreventiveTasks(id, generation));
+        return OperationResponses.of(outcome, HttpStatus.OK);
     }
 
     @Operation(summary = "Get task", tags = "Tasks")

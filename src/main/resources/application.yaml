@@ -9,13 +9,16 @@ spring:
   # las llamadas a stock tambien (StockCircuitBreakerExecutorConfiguration). Una peticion suelta no va
   # mas rapida: lo que cambia es cuantas pueden esperar a la vez. El hilo de outbox-dispatch sigue
   # siendo uno solo a proposito (OutboxConfiguration). Con false, todo vuelve a hilos de plataforma.
+  # Lo que corre de fondo (las operaciones, las lineas de stock de una transicion) usa su propio
+  # executor de hilos virtuales, AsyncConfiguration, que la bandera no toca.
   threads:
     virtual:
       enabled: ${SPRING_THREADS_VIRTUAL_ENABLED:true}
 
   # El limite real de concurrencia: sin el tope de 200 hilos de Tomcat, lo que espera es la conexion.
   # El PostgreSQL de mto-platform es uno para todos los servicios (max_connections 100 por defecto),
-  # asi que la suma de los pools de todas las instancias tiene que quedar por debajo.
+  # asi que la suma de los pools de todas las instancias tiene que quedar por debajo. Cada operacion de
+  # fondo en marcha retiene una de estas conexiones: app.operations.max-active se elige con el a la vista.
   datasource:
     hikari:
       maximum-pool-size: ${DATABASE_POOL_MAX_SIZE:10}
@@ -188,6 +191,29 @@ springdoc:
   show-actuator: ${SPRINGDOC_SHOW_ACTUATOR:false}
 
 app:
+  # Lo que tarda se vuelve asincrono (Prefer: respond-async, RFC 7240): generar las tareas de un EP
+  # corre en un hilo virtual, la peticion lo espera hasta su presupuesto y, si no ha terminado,
+  # responde 202 con la operacion (GET /operations/{id}). El recurso escaso es la conexion que cada
+  # operacion retiene mientras trabaja, asi que hay un tope para todo el despliegue, contado en
+  # background_operation y no en memoria. Mismo bloque que mto-resources.
+  operations:
+    default-wait: ${APP_OPERATIONS_DEFAULT_WAIT:5s}
+    # Por debajo del read-timeout del gateway (15 s): mas, y el gateway cortaria con un 504 sin que el
+    # cliente llegara a saber la operacion.
+    max-wait: ${APP_OPERATIONS_MAX_WAIT:10s}
+    max-active: ${APP_OPERATIONS_MAX_ACTIVE:4}
+    heartbeat: ${APP_OPERATIONS_HEARTBEAT:5s}
+    stale-after: ${APP_OPERATIONS_STALE_AFTER:1m}
+    abandon-check: ${APP_OPERATIONS_ABANDON_CHECK:30s}
+    # Tambien la espera de una generacion por el cerrojo de su EP: se mira, se suelta la conexion y se
+    # duerme, del primero al segundo valor doblando cada vez.
+    poll-initial: 200ms
+    poll-max: 2s
+    retention: ${APP_OPERATIONS_RETENTION:7d}
+    purge-every: 1h
+    purge-batch-size: 500
+    scheduling-enabled: ${APP_OPERATIONS_SCHEDULING_ENABLED:true}
+
   security:
     # Cliente de Keycloak que representa a esta API. Sus roles de cliente son los permisos que
     # comprueban la cadena de filtros y las anotaciones de seguridad de metodo.
@@ -227,6 +253,16 @@ app:
       # Permite declarar la topologia sin consumir: util para dejar la cola creada acumulando
       # eventos mientras el servicio todavia no sabe que hacer con ellos.
       listener-enabled: ${APP_RABBITMQ_MASTER_DATA_LISTENER_ENABLED:true}
+    # Personas, equipos y vehiculos de mto-resources: de ellos salen los equipos sincronizados, la
+    # dotacion y los vehiculos de un turno. Cola propia con su DLX y su DLQ, como la de datos maestros.
+    resources:
+      exchange: ${APP_RABBITMQ_RESOURCES_EXCHANGE:mto.resources.exchange}
+      queue: ${APP_RABBITMQ_RESOURCES_QUEUE:mto.maintenance.resources.queue}
+      routing-keys: ${APP_RABBITMQ_RESOURCES_ROUTING_KEYS:mto.resources.person.*,mto.resources.team.*,mto.resources.vehicle.*}
+      dead-letter-exchange: ${APP_RABBITMQ_RESOURCES_DEAD_LETTER_EXCHANGE:mto.maintenance.resources.queue.dlx}
+      dead-letter-queue: ${APP_RABBITMQ_RESOURCES_DEAD_LETTER_QUEUE:mto.maintenance.resources.queue.dlq}
+      dead-letter-routing-key: ${APP_RABBITMQ_RESOURCES_DEAD_LETTER_ROUTING_KEY:mto.maintenance.resources.queue.dlq}
+      listener-enabled: ${APP_RABBITMQ_RESOURCES_LISTENER_ENABLED:true}
     # Exchange propio: lo que este servicio cuenta de si mismo (ordenes, defectos, inspecciones,
     # turnos, material, activos, preventivos), con la clave mto.maintenance.<entidad>.<evento>. Aqui
     # solo se declara el exchange; la cola es de quien lo consume (mto-notification).
@@ -344,3 +380,11 @@ app:
     sync-retry:
       enabled: ${APP_STOCK_SYNC_RETRY_ENABLED:true}
       interval: ${APP_STOCK_SYNC_RETRY_INTERVAL:PT5M}
+    # Planificar, arrancar, completar o cancelar una orden habla con stock por todas sus lineas a la
+    # vez, cada una en un hilo virtual y sin tocar la base, con un plazo para todas. La linea que no
+    # contesta a tiempo queda FAILED con lo que tuviera en duda, la orden sigue, y al confirmar se
+    # reintenta en ese momento (immediate-retry) en vez de esperar a sync-retry.
+    sync:
+      parallelism: ${APP_STOCK_SYNC_PARALLELISM:4}
+      deadline: ${APP_STOCK_SYNC_DEADLINE:15s}
+      immediate-retry: ${APP_STOCK_SYNC_IMMEDIATE_RETRY:true}

@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -72,6 +73,29 @@ class StockSyncRetryServiceImpl implements StockSyncRetryService {
         }
         if (synchronizedLines > 0) {
             LOGGER.info("Stock retry synchronized {} of {} FAILED material line(s)", synchronizedLines, failed.size());
+        }
+        return synchronizedLines;
+    }
+
+    @Override
+    public int retryLines(UUID orderId, Collection<UUID> lineIds) {
+        int synchronizedLines = 0;
+        int attempted = 0;
+        for (UUID lineId : lineIds) {
+            attempted++;
+            try {
+                if (materialUsageService.sync(orderId, lineId).stockSyncStatus() != StockSyncStatus.FAILED) {
+                    synchronizedLines++;
+                }
+            } catch (StockUnavailableException unavailable) {
+                LOGGER.info("mto-stock still does not answer for order {}; {} deferred material line(s) left to the periodic retry: {}",
+                        orderId, lineIds.size() - attempted + 1, unavailable.getMessage());
+                break;
+            } catch (StockRejectedException rejected) {
+                LOGGER.info("Stock rejected deferred material line {} of order {}: {}", lineId, orderId, rejected.getMessage());
+            } catch (RuntimeException other) {
+                LOGGER.warn("Deferred material line {} of order {} could not be retried: {}", lineId, orderId, other.toString());
+            }
         }
         return synchronizedLines;
     }

@@ -31,6 +31,12 @@ public interface MaintenanceTaskService {
     /** Preventivo perfil a perfil: una tarea por PROFILE del tramo, ordenadas por kp. Idempotente. */
     GeneratePreventiveTasksResponse generatePreventiveTasks(UUID orderId, GeneratePreventiveTasksRequest request);
 
+    /**
+     * El ambito en el que las generaciones de una orden hacen fila: su EP ({@code EP-14}) o, sin EP, la
+     * propia orden. Es el {@code scope} de la operacion de fondo cuando se pide {@code respond-async}.
+     */
+    String generationScope(UUID orderId);
+
     MaintenanceTaskResponse start(UUID orderId, UUID taskId, StartTaskRequest request);
 
     MaintenanceTaskResponse complete(UUID orderId, UUID taskId, CompleteTaskRequest request);

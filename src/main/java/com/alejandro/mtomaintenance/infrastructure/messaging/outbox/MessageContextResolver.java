@@ -2,6 +2,7 @@ package com.alejandro.mtomaintenance.infrastructure.messaging.outbox;
 
 import com.alejandro.mtomaintenance.application.dto.messaging.MessageActor;
 import com.alejandro.mtomaintenance.configuration.security.CurrentUserService;
+import com.alejandro.mtomaintenance.infrastructure.persistence.audit.BackgroundOperationContext;
 import com.alejandro.mtomaintenance.infrastructure.persistence.audit.MessagingAuditContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -66,7 +67,13 @@ public class MessageContextResolver {
         }
 
         MessagingAuditContext.Context message = MessagingAuditContext.current();
-        return message == null ? null : message.messageId();
+        if (message != null) {
+            return message.messageId();
+        }
+
+        // Una operacion de fondo: la cabecera de la peticion que la pidio, copiada al apuntarla.
+        BackgroundOperationContext.Context operation = BackgroundOperationContext.current();
+        return operation == null ? null : operation.correlationId();
     }
 
     private static String requestHeader() {

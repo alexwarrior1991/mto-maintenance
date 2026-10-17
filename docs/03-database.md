@@ -11,8 +11,11 @@ with millimetre precision), quantities `numeric(19,6)`.
 `maintenance_priority`, `maintenance_task_status`, `shift_status`, `possession_type`,
 `functional_group`, `task_unit`, `inspection_kind`, `inspection_result`, `check_item_result`,
 `defect_severity`, `defect_status`, `stock_sync_status`, `inbox_message_status`,
-`section_insulator_installation` (`V7`), `stock_request_type` (`V12`). Values match the Java enums one to one; adding a value is a
-migration (`ALTER TYPE … ADD VALUE`).
+`section_insulator_installation` (`V7`), `stock_request_type` (`V12`), `disconnector_drive_type` (`V16`),
+`background_operation_status` (`V21`). Values match the Java enums one to one; adding a value is a
+migration (`ALTER TYPE … ADD VALUE`). The statuses, categories and mobilities of `mto-resources`
+(`V19`) are `varchar` on purpose: they are another service's, and a value added there breaks nothing
+here.
 
 ## Sequences
 
@@ -24,7 +27,7 @@ yearly reset.
 
 | Table | Purpose | Notable constraints |
 |---|---|---|
-| `maintenance_team` (+ `maintenance_team_execution_package`) | Teams A/B and the EPs they cover | `uq code` |
+| `maintenance_team` (+ `maintenance_team_execution_package`) | Teams (local, like the seeded A/B, or synchronized from `mto-resources` since `V19`) and the EPs they cover | `uq code` |
 | `maintenance_task_type` | `RG`/`RP` catalogue | `uq code`, minutes ≥ 0 |
 | `inspection_template`, `inspection_template_item` | Checklists per asset type | `uq (asset_type, version)`, `uq (template_id, code)`, `min ≤ max` |
 | `catenary_asset` | Assets | `uq code`, `uq (source_service, source_entity_id)`, source columns together, `start_kp ≤ end_kp`, `track_kind` only and always on `TRACK_SECTION`, interval > 0 |
@@ -51,11 +54,17 @@ Indexes follow the API filters: asset `(track_id, start_kp)`, `(type, enabled)`;
 
 `inbox_message`: copy of the `mto-stock` table. Unique `(message_id, source_service)`, `payload`
 as `json` (not `jsonb`, so the bytes keep matching `payload_hash`), statuses
-`RECEIVED`/`PROCESSING`/`PROCESSED`/`FAILED`, attempts and last error.
+`RECEIVED`/`PROCESSING`/`PROCESSED`/`FAILED`, attempts and last error. One table for both consumed
+channels: `source_service` is `mto-configuration` for the master data and, since `V19`,
+`mto-resources` for its people, teams and vehicles.
 
 ## Seeds (`V3`)
 
-- `maintenance_team`: `A` (Rishpon, EP 4/5/6) and `B` (Mishmar, EP 9/11/15).
+- `maintenance_team`: `A` (Team A - Rishpon) and `B` (Team B - Mishmar), with their base and vehicle
+  as text. No migration seeds their execution packages: `maintenance_team_execution_package` starts
+  empty for them (a local team gets its packages through `POST`/`PUT /teams`), and since `V19` a team
+  gets them from `mto-resources` when it is adopted, which also empties its base: a synchronized team
+  has none.
 - `maintenance_task_type`: the 30 codes of the OCS plan with functional group, standard minutes
   (those of the task sheet since `V18`), unit, fixed minutes, `requires_full_possession` and
   `is_diagnostic`.
@@ -238,8 +247,78 @@ migration. With the default types, a profile is now 34 min instead of 40 (`RG-08
 per track, do not change), a section insulator 80 with turnouts and 40 without (180 and 75 before), and
 a disconnector 20 (10 before), plus 20 with a motor (45) and 15 for a surge arrester (20).
 
+## Snapshots of `mto-resources` (`V19`)
+
+The people, teams and vehicles of `mto-resources` (`06-messaging.md`, "Consumed: resources"), kept
+as the snapshot a shift needs, like `catenary_asset` for the infrastructure. All written only with
+native SQL and the sequence watermark (`source_sequence_number`, the `sequenceNumber` header of the
+`mto-resources` outbox) inside the `WHERE`, never read-then-write, so **none has an `_aud` twin**:
+Envers would not see those writes, and the history lives in `mto-resources`. The ids are those of
+`mto-resources` (`uuid`).
+
+- `crew_person (id, code varchar(16), full_name varchar(260), username varchar(100), category
+  varchar(40), active, source_sequence_number, created_at, updated_at)`: no `created_by`/`updated_by`,
+  only the events write it. `source_sequence_number` is `NULL` for a person that arrived inside a team
+  event before its own, so its own event overwrites it whatever its number. Partial index on
+  `lower(username)` where it is set.
+- `fleet_vehicle (id, code varchar(32), name, type_code, type_name, mobility varchar(20), category
+  varchar(40), self_propelled, portable, towing, seats, operational_status varchar(30), available,
+  active, source_sequence_number, created_at, updated_at)`: what the crew rules read
+  (`02-domain-model.md`). `towing` is derived from the `TOWING` capability of the vehicle's model.
+- `maintenance_team` gains `source_service`, `source_entity_id` (`uuid`) and `source_sequence_number`
+  (`chk_maintenance_team_source`: the first two together or neither; partial unique index
+  `uq_maintenance_team_source_entity`, the conflict target of the upsert), `leader_person_id` and
+  `supervisor_person_id` (FKs to `crew_person`, `on delete restrict`) and `default_vehicle_id`
+  (**no FK**: the team event may arrive before the vehicle's). A local team has all of them `NULL`;
+  adopting it (`adoptByCode`) fills the source and empties `base_name`. The JPA entity maps them
+  read-only (`insertable = false, updatable = false`): only the native upsert writes them.
+- `maintenance_team_member (team_id, person_id)`: the linemen of a synchronized team (the leader
+  apart), replaced whole by every applied team event. PK on the pair, FK to the team `on delete
+  cascade`, to the person `on delete restrict`, index on `person_id`.
+- `maintenance_team_execution_package` (from `V1`) is now also written by the team event, replaced
+  whole like the members.
+
+## Shift crew and vehicles (`V20`)
+
+- `maintenance_shift` gains `team_leader_person_id` and `supervisor_person_id` (FKs to `crew_person`,
+  `on delete restrict`; partial index on the leader where set), also in `maintenance_shift_aud`.
+- `maintenance_shift_lineman (shift_id, person_id)`: the linemen of that night, a set replaced whole.
+  PK on the pair, FK to the shift `on delete cascade`, to the person `on delete restrict`, index on
+  `person_id`. Envers twin `maintenance_shift_lineman_aud (rev, shift_id, person_id, revtype)`.
+- `maintenance_shift_vehicle (id, shift_id, vehicle_id, parking_site_id uuid, parking_track_id
+  bigint, parking_kp numeric(12,3), parking_description varchar(500))` plus the audit columns: a child
+  entity and not a join table, because it carries where the vehicle was left. `uq (shift_id,
+  vehicle_id)`, FK to the shift `on delete cascade`, to `fleet_vehicle` `on delete restrict`, index on
+  `vehicle_id`. The parking site is an id of `mto-resources` and the track one of `mto-configuration`,
+  without FK like every external id. No `version`: it is edited through its shift. Envers twin
+  `maintenance_shift_vehicle_aud` (PK `(rev, id)`, no constraints).
+
+The double-booking check (`02-domain-model.md`) reads these tables by `shift_date` and status; the
+`(shift_date, team_id)` index of `V1` serves it, and the advisory locks per vehicle and person, not a
+constraint, keep two shifts saved at once apart.
+
+## Background operations (`V21`)
+
+`background_operation`: the operations answered with 202 (`02-domain-model.md`), the same table as
+`V4` of `mto-resources`, copied like the outbox. `id`, `kind` (`GENERATE_TASKS`), `scope`
+(`EP-14`; `NULL` when there is none), `status` (`background_operation_status`: `QUEUED`, `RUNNING`,
+`SUCCEEDED`, `FAILED`), `requested_by`, the request's `correlation_id`, `request_method` and
+`request_uri`; on success `result_status` and `result` (`json`: the body the synchronous call would
+have given); on failure `error_status`, `error_code` and `error_message`; `created_at`, `started_at`,
+`finished_at` and `heartbeat_at`. `chk_background_operation_finished` (`finished_at` exactly when
+`SUCCEEDED`/`FAILED`) and `chk_background_operation_failed_has_error`. Partial indexes for the cap
+(`(status, heartbeat_at)` of the live ones), the turn of a scope (`(scope, created_at)` of the live
+ones with a scope) and the purge (`finished_at` of the finished ones).
+
+Written only by the native, conditional statements of `BackgroundOperationRepository` (the cap and
+the turn are decided inside the statement that writes, by row count), each its own short
+transaction; JPA only reads it. No audit columns beyond `requested_by` and no `_aud` twin: it is its
+own history, and the purge deletes what finished more than `app.operations.retention` ago.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`
 twins of the nine audited entities plus `maintenance_task_task_type_aud` (and, since `V5`,
-`maintenance_shift_track_aud`, and since `V6` `maintenance_shift_disconnector_aud`). See `07-auditing.md`.
+`maintenance_shift_track_aud`, since `V6` `maintenance_shift_disconnector_aud`, and since `V20`
+`maintenance_shift_vehicle_aud`, the tenth audited entity, and `maintenance_shift_lineman_aud`). See
+`07-auditing.md`.

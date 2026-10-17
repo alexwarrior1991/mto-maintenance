@@ -1,5 +1,7 @@
 package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
+import com.alejandro.mtomaintenance.application.dto.operation.OperationResponse;
+import com.alejandro.mtomaintenance.application.dto.operation.OperationStatus;
 import com.alejandro.mtomaintenance.application.dto.order.CancelOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.CompleteOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRequest;
@@ -8,6 +10,7 @@ import com.alejandro.mtomaintenance.application.exception.AssetDisabledException
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.service.BudgetedOperations;
 import com.alejandro.mtomaintenance.application.service.CatenaryAssetService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceMaterialUsageService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceOrderService;
@@ -36,6 +39,9 @@ import com.alejandro.mtomaintenance.application.exception.StockUnavailableExcept
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 import java.util.List;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
@@ -109,6 +115,9 @@ class MaintenanceOrderControllerMockMvcTest {
 
     @MockitoBean
     private CatenaryAssetService assetService;
+
+    @MockitoBean
+    private BudgetedOperations operations;
 
     @Test
     void disablingAnAssetWithAPutNeedsTheDeleteRoleLikeTheDeleteAndTheRestOfThePutDoesNot() throws Exception {
@@ -480,6 +489,46 @@ class MaintenanceOrderControllerMockMvcTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.validationErrors[0].field").value("selections[0].assetType"));
         verify(taskService, times(1)).generatePreventiveTasks(any(), any());
+    }
+
+    @Test
+    void aGenerationWithPreferRespondAsyncThatOutlastsItsBudgetAnswers202WithItsOperation() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID operationId = UUID.randomUUID();
+        GeneratePreventiveTasksResponse generated = new GeneratePreventiveTasksResponse(3, 0, 3, java.math.BigDecimal.TEN, 1, 0,
+                java.util.Map.of(), 0, java.util.List.of(), 0, 0, false, java.util.List.of());
+        OperationResponse running = new OperationResponse(operationId, "GENERATE_TASKS", "EP-14", OperationStatus.RUNNING, "planner",
+                java.time.Instant.parse("2026-10-16T21:00:00Z"), java.time.Instant.parse("2026-10-16T21:00:00Z"), null, null, null, null);
+        when(taskService.generationScope(orderId)).thenReturn("EP-14");
+        doReturn(new BudgetedOperations.Outcome<>(running, null, false))
+                .when(operations).run(eq("GENERATE_TASKS"), eq("EP-14"), eq(200), eq(java.time.Duration.ofSeconds(2)), any());
+
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .header("Prefer", "respond-async, wait=2"))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string("Location", MaintenanceApiPaths.OPERATIONS + "/" + operationId))
+                .andExpect(header().string("Preference-Applied", "respond-async"))
+                .andExpect(jsonPath("$.status").value("RUNNING"))
+                .andExpect(jsonPath("$.scope").value("EP-14"));
+        verify(taskService, never()).generatePreventiveTasks(any(), any());
+
+        // Si termina dentro del presupuesto, la respuesta es la de siempre.
+        doReturn(new BudgetedOperations.Outcome<>(running, generated, true))
+                .when(operations).run(eq("GENERATE_TASKS"), eq("EP-14"), eq(200), isNull(), any());
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .header("Prefer", "respond-async"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createdTasks").value(3));
+
+        // Sin la cabecera, o al previsualizar, es sincrona: nada pasa por las operaciones de fondo.
+        when(taskService.generatePreventiveTasks(eq(orderId), any())).thenReturn(generated);
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .header("Prefer", "respond-async").contentType(MediaType.APPLICATION_JSON).content("{\"dryRun\":true}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post(ORDERS + "/{id}/tasks/generate", orderId).with(role(SecurityRoles.MAINTENANCE_WRITE)))
+                .andExpect(status().isOk());
+        verify(operations, times(2)).run(any(), any(), anyInt(), any(), any());
+        verify(taskService, times(2)).generatePreventiveTasks(eq(orderId), any());
     }
 
     @Test

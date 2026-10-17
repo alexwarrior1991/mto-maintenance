@@ -96,9 +96,17 @@ insulators, one on a disconnector only disconnectors.
   one that already has a task in the order, even cancelled, is skipped (`skippedAssets`,
   `skippedProfiles` for profiles, as before); and so is one with an open task (`PENDING` or
   `IN_PROGRESS`) in another preventive order that is not finished (`skippedInOtherOrders`,
-  `otherOrderCodes`). Generations in one package queue behind a PostgreSQL advisory lock
-  (`pg_advisory_xact_lock`, per package, or per order without one), taken also by a task added by
-  hand, so two at once never take the same asset as free.
+  `otherOrderCodes`). Generations in one package queue behind a PostgreSQL advisory lock (per
+  package, or per order without one), taken also by a task added by hand, so two at once never take
+  the same asset as free. A generation does not wait for it with a connection taken: each attempt is
+  its own transaction that tries the lock (`pg_try_advisory_xact_lock`) and, if another generation
+  holds it, rolls back, lets the connection go, sleeps with growing backoff
+  (`app.operations.poll-initial`, 200 ms, doubling up to `poll-max`, 2 s) and starts again reading
+  the order afresh. A task added by hand still waits on the lock inside its transaction
+  (`pg_advisory_xact_lock`): it is one row, not a package.
+- **`Prefer: respond-async`** turns a generation that does not finish in time into a background
+  operation (202, see [Background operations](#background-operations)); without the header, or with
+  `dryRun`, it stays synchronous.
 - **Order of the tasks**: track by track, in the order the tracks appear in what was asked, and by kp
   and code inside each: an insulator of another track that connects goes with the track it was found
   on, between the profiles around it.
@@ -129,17 +137,20 @@ minutes per unit are those of the plan's task sheet (`V18`, see `03-database.md`
 
 ## Shifts (`MaintenanceShift`) and teams (`MaintenanceTeam`)
 
-A shift is the unit of execution and the source of the daily report: date, team, base, vehicle,
-`possessionType` (`PARTIAL` on weekdays on main track, `FULL` on weekends), planned and actual
-window, `voltageCutoffAt`, `netWorkMinutes` (computed at close), the set of `blockingDisconnectors`
-opened to isolate the work zone (as many `DISCONNECTOR` assets as the cut needs, not a fixed pair),
-earthing points, parking place, the `trackIds` it covers (one or more tracks of the same night; a
-second execution package is a second shift), kp range, personnel, equipment, observations.
-States `PLANNED → IN_PROGRESS → CLOSED`, `CANCELLED` before closing. Closing requires the actual
-times and returns to `PENDING` (without shift) the tasks that were not completed. While the shift is
-`PLANNED` or `IN_PROGRESS` one open task can be taken out the same way
-(`POST /shifts/{id}/tasks/{taskId}/unassign`): a wrong assignment, or one that would stop the shift
-from losing a track or going partial; a completed or cancelled task stays in the shift it was worked in.
+A shift is the unit of execution and the source of the daily report: date, team, base and vehicle as
+free text (what a local team had), its crew and its vehicles from `mto-resources`
+([below](#shift-crew-and-vehicles)), `possessionType` (`PARTIAL` on weekdays on main track, `FULL`
+on weekends), planned and actual window, `voltageCutoffAt`, `netWorkMinutes` (computed at close),
+the set of `blockingDisconnectors` opened to isolate the work zone (as many `DISCONNECTOR` assets as
+the cut needs, not a fixed pair), earthing points, parking place, the `trackIds` it covers (one or
+more tracks of the same night; a second execution package is a second shift), kp range, personnel,
+equipment, observations. States `PLANNED → IN_PROGRESS → CLOSED`, `CANCELLED` before closing;
+starting, closing and cancelling publish `shift.started`, `shift.closed` and `shift.cancelled`.
+Closing requires the actual times, says where each vehicle was left, and returns to `PENDING`
+(without shift) the tasks that were not completed. While the shift is `PLANNED` or `IN_PROGRESS` one
+open task can be taken out the same way (`POST /shifts/{id}/tasks/{taskId}/unassign`): a wrong
+assignment, or one that would stop the shift from losing a track or going partial; a completed or
+cancelled task stays in the shift it was worked in.
 
 Window rules: a task's profile must be on one of the shift's tracks (an insulator or a disconnector
 that joins two tracks is on both, `connectedTrackId`, as in the reports by track; the asset summary
@@ -151,7 +162,68 @@ possession or a `DIVERTED` section, is 409 `SHF-001` naming the task. The profil
 tasks (`GET /shifts/{id}/profiles`). An inspection can be recorded in a shift (`shiftId`): the shift
 must be `IN_PROGRESS` or `CLOSED` (one done after midnight is often written down at the end) and work
 on the asset's track or the one it connects with, or it is 409 `SHF-001`. The shift report lists those
-inspections (`inspectionsRecorded`, `inspections[]`) after its task rows. Teams (`A` Rishpon, `B` Mishmar) carry the execution packages they cover.
+inspections (`inspectionsRecorded`, `inspections[]`) after its task rows, and its crew and its
+vehicles with where each was left (the `Crew` and `Vehicles` appendices of the .xlsx and the PDF; the
+JSON carries them in `shift`).
+
+### Teams
+
+A team is either **local**, created and edited here (`POST`/`PUT /teams`) with its base and vehicle
+as text and the execution packages it covers (`V3` seeds `A` Rishpon and `B` Mishmar, without
+packages), or **synchronized** from `mto-resources` (`V19`, `synchronizedFromResources`,
+`sourceService = mto-resources` + `sourceEntityId`), which owns the people, the organization tree and
+the fleet. A synchronized team carries its leader (the team leader, foreman of its vehicle), its
+supervisor (the head of the nearest supervision above it there), its linemen (`members`; the leader
+apart), its execution packages and its default vehicle (`defaultVehicleId`; `vehicle` is that
+vehicle's code), and **no base**: a vehicle is left wherever the night allows, and closing a shift
+says where. Only teams of discipline `MAINTENANCE` arrive; construction ones are ignored.
+
+- **Adopted by code.** The first event of a team of `mto-resources` takes over the local team of the
+  same code, which becomes synchronized and loses its base, so the shifts and orders that pointed at
+  it still do; without one, the team is created. Only a team that is not synchronized yet is
+  adopted, and only if that team of `mto-resources` is not here already (a later code change renames
+  its row).
+- **Read-only here.** `PUT /teams/{id}` on a synchronized team is 409 `TEA-001`
+  (`SynchronizedTeamException`): its name, leader, linemen, packages and vehicle change in
+  `mto-resources` and arrive by event. A local team is edited as before until it is adopted.
+- What arrives is a snapshot, written only with native SQL and the sequence watermark
+  (`docs/06-messaging.md`): `crew_person` for the people, `fleet_vehicle` for the vehicles, and the
+  team's columns, linemen and packages, the last two replaced whole by every applied event.
+
+## Shift crew and vehicles
+
+A shift carries who works that night and in what, all from `mto-resources` (`V20`): its `teamLeader`
+(the foreman), its `supervisor` (who has it in charge; one supervisor has several shifts at once), its
+`linemen` and its `vehicles`. They may differ from the team's (a substitute, someone on leave). At
+creation, what the request does not say of a synchronized team is copied from it: leader,
+supervisor, linemen, and its default vehicle if that vehicle has arrived; a local team brings nothing.
+They change with the rest of the shift (`vehicleIds`, `teamLeaderPersonId`, `supervisorPersonId`,
+`linemanPersonIds`): the two sets are replaced whole (a vehicle that stays keeps its parking), a
+`PATCH` may empty any of the four, but a leader is replaced, not emptied, while the shift has linemen
+(400 `VAL-001`). An unknown person or vehicle is 404 `CRW-404` / `FLT-404`. When nothing else gave
+the free `vehicle` text, it is filled with the codes of the shift's vehicles.
+
+`ShiftCrew` checks the rules on create, update and start, all 409 `SHF-001`:
+
+| Rule | When |
+|---|---|
+| At most 6 linemen; the leader is not one of them; a `WORKER` does not lead (any other category does, also one this service does not know yet: `mto-resources` decides); leader and linemen active there | Always |
+| Every vehicle active and `available`; one that neither moves by itself (`selfPropelled`) nor is carried (`portable`), a wagon or a trailer, goes with a vehicle of the shift that tows (`towing`: the `TOWING` capability of its model) | Always |
+| The crew (leader and linemen; the supervisor does not ride) fits in the seats of the self-propelled vehicles, checked only when every one of them declares its seats: a missing figure is not taken as zero | Always |
+| No vehicle, leader or lineman in another open shift (`PLANNED`/`IN_PROGRESS`) of the same `shiftDate` (the windows are often empty, so the date is compared; the supervisor is not checked). One transaction-scoped advisory lock per vehicle and person, taken in a fixed order, so two shifts saved at once queue and the second sees the first | On an open shift |
+| A complete crew: a leader and 2 to 6 linemen (`CrewComposition`, the copy of the rule `mto-resources` applies to its teams: 3 to 7 people in one vehicle) | To start, and on any change while `IN_PROGRESS`; only on a shift with a crew (`hasCrew()`: a leader, linemen, or a synchronized team). A shift of a local team without a crew starts as before |
+
+Closing says where each vehicle was left (`parkings[]` of `POST /shifts/{id}/close`, one per
+vehicle): a parking site of `mto-resources` (`parkingSiteId`), a track and kp (`trackId` of
+`mto-configuration` + `kp`), or a free description; at least one of them, and only for a vehicle of
+the shift (400 `VAL-001` otherwise). A rail-only vehicle (`mobility = RAIL_ONLY`) left by
+description only is 409 `SHF-001`: it stays on a track or at a site with rail access. Without
+`parkings` the shift's `parkingPlace` stands, as before. `mto-resources` reads it from `shift.closed`,
+and from `shift.cancelled` of a shift that had started, to move each vehicle's position.
+
+The response carries `teamLeader`, `supervisor`, `linemen` (by code) and `vehicles` (by fleet code,
+`vehiclesByCode()`) with their `parking` (`null` until closed with one); the shift events and the
+report carry the same.
 
 ## Inspections (`MaintenanceInspection`) and templates
 
@@ -256,6 +328,33 @@ concurrent edit at commit) leaves no trace here; its retry, if the body changed 
 refused with `IDEM-001` and the line says so. `FAILED` lines from before `V12` carry no request in
 doubt: nobody knows which request failed.
 
+An order transition talks to stock for all its lines at once: `plan` and `start` reserve
+(`reserveAll`), `complete` consumes (`consumeAll`), `cancel` releases (`releaseAll`). Each line's
+conversation runs on a virtual thread, at most `app.stock.sync.parallelism` (4) at a time, under one
+deadline for all of them, `app.stock.sync.deadline` (15 s): four slow lines take the time of one.
+
+- A conversation works on a detached copy of its line (`StockLine`), never on the entity nor the
+  database (the Hibernate session is not that thread's, and a lazy proxy would go to the database from
+  it). The transaction thread waits, applies each copy back to its line and publishes the
+  `material.*` events, in the order of the lines. The order's stock project is resolved once, before
+  copying.
+- A line not finished at the deadline is cut: it is left `FAILED` with whatever it knew, its request
+  in doubt included (`deferred: mto-stock did not answer within …`), and the order changes state
+  without waiting for it (`complete` refuses it like any `FAILED` line, 409 `MAT-001` unless `force`,
+  and keeps what stock did with the others). From then on its thread sends nothing more to stock (the
+  copy's gate, `StockLine.cancel`/`checkOpen`): only the call already in the air can still land, and
+  it is either in doubt (a reservation or an output, repeated with the same key) or found out by the
+  next attempt asking stock for the reservation (a release or a consume).
+- After commit, `DeferredStockSyncListener` retries those lines at once (`StockLinesDeferred`,
+  `StockSyncRetryService.retryLines`: a `sync` per line, each in its own transaction, stopping at the
+  first one stock still does not answer) instead of waiting for the 5-minute round. It first lets the
+  calls in the air finish, for at most 30 s, so the retry never crosses one of them.
+  `app.stock.sync.immediate-retry=false` leaves them to the round.
+- A step of one line stays on the caller's thread, one line after another and without deadline:
+  `sync` (`syncNow`), removing a line (`releaseNow`), reserving a line added to an order already
+  planned or the materials of a task completion (`reserve(usage)`), and `consume`/`release` of one
+  line.
+
 A line registered by mistake is removed, not cancelled (`DELETE /orders/{id}/materials/{usageId}`):
 the row goes and Envers keeps its last state as a DELETED revision. A reserved line is released in
 stock first; if stock does not answer, the removal fails with 503 and the line stays, because its
@@ -264,6 +363,44 @@ the warehouse, or unknown to stock) does not block it. A consumed line, one whos
 consumed from the warehouse, or a line of a completed or cancelled order, cannot be removed. There is no `CANCELLED` state on purpose: `stockSyncStatus`
 describes the conversation with stock, and the unique (order, task, material, warehouse) would
 stop the line from being registered again.
+
+## Background operations
+
+What may take longer than a request should wait becomes asynchronous when the client accepts it
+(`Prefer: respond-async`, RFC 7240); today only `POST /orders/{id}/tasks/generate` without `dryRun`.
+`BudgetedOperations` (copied from `mto-resources`) runs the work on a virtual thread of
+`AsyncConfiguration`'s executor and the request waits for it up to its budget: `Prefer: wait=N`,
+capped at `app.operations.max-wait` (10 s, below the gateway's 15 s read timeout), or
+`app.operations.default-wait` (5 s) without it; `wait=0` answers as soon as it is registered. If the
+work ends in time the answer is the synchronous one, errors included; if not, 202 with the operation,
+and `GET /operations/{id}` gives the same body when it ends.
+
+- **The scarce resource is the connection, not the thread.** Tomcat, `@Scheduled` and the RabbitMQ
+  listeners run on virtual threads (`spring.threads.virtual.enabled`), so every request waiting on the
+  database holds a Hikari connection and the pool (`DATABASE_POOL_MAX_SIZE`, 10)
+  is the limit of concurrency. A running operation holds one too, so there is a cap of live
+  operations (`QUEUED` or `RUNNING` with a fresh beat) for the whole deployment,
+  `app.operations.max-active` (4), chosen with the pool in view and decided inside the `insert` that
+  registers the operation, under an advisory lock: with three replicas an in-memory semaphore would
+  be three times the cap. Beyond it, 429 `OPS-429` with `Retry-After`.
+- **One at a time per scope.** Operations of one scope (`EP-<package>`, or `order-<id>` without a
+  package) start in order of arrival. One waiting is `QUEUED` and holds no connection: it looks with
+  a short transaction and, if it is not its turn, sleeps with growing backoff (`poll-initial` to
+  `poll-max`, the same as a generation waiting for its lock).
+- **Abandoned ones.** A live operation beats (`heartbeat_at`, every `app.operations.heartbeat`, 5 s);
+  one silent for `app.operations.stale-after` (1 min), because its replica died, is failed by any
+  replica (`app.operations.abandon-check`, 30 s) with the error `OPS-410`, and stops counting for the
+  cap and its scope. Finished ones are purged after `app.operations.retention` (7 days). The three
+  schedules are off in the tests (`app.operations.scheduling-enabled=false`), which call them.
+- **The request stays the author.** The work runs with the caller's `SecurityContext` and MDC, and
+  what the request can no longer give once it has answered (its `X-Correlation-Id`, method, URI,
+  address, user agent) is copied when the operation is registered (`BackgroundOperationContext`): a
+  revision written in the background still says `HTTP` with that URI and correlation, and its events
+  carry the same `correlationId`.
+- **Visibility.** An operation is shown to whoever asked for it, to `maintenance-supervise` and to
+  `ops-write`; to anyone else it does not exist (404). Its `result` is the body the synchronous call
+  would have given, with its `resultStatus`; its `error`, the status, code and message that call would
+  have answered (`ApiOperationErrorTranslator`, the same table as `GlobalExceptionHandler`).
 
 ## Status history
 

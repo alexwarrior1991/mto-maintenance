@@ -79,7 +79,8 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     /** Lo que un PATCH puede vaciar de un turno; fecha, posesion y vias son obligatorias. */
     private static final Set<String> CLEARABLE = Set.of("teamId", "baseName", "vehicle", "plannedStart", "plannedEnd",
             "blockingDisconnectorIds", "earthingPoints", "parkingPlace", "executionPackageId", "startKp", "endKp",
-            "personnel", "measurementEquipment", "observations");
+            "personnel", "measurementEquipment", "observations", "vehicleIds", "teamLeaderPersonId", "supervisorPersonId",
+            "linemanPersonIds");
 
     private final MaintenanceShiftRepository repository;
     private final MaintenanceTaskRepository taskRepository;
@@ -92,6 +93,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     private final MaintenanceCodeGenerator codeGenerator;
     private final EntityAuditService auditService;
     private final DomainEventPublisher events;
+    private final ShiftCrew crew;
 
     @Override
     @Transactional
@@ -124,7 +126,11 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
                 shift.setVehicle(shift.getTeam().getVehicle());
             }
         }
+        // La dotacion y los vehiculos: los de la peticion y, de un equipo sincronizado, lo que no diga.
+        crew.assignOnCreate(shift, request.vehicleIds(), request.teamLeaderPersonId(), request.supervisorPersonId(),
+                request.linemanPersonIds());
         validate(shift);
+        crew.check(shift, false);
         MaintenanceShift saved = repository.save(shift);
         LOGGER.info("Shift created: code={}, date={}, tracks={}, possession={}", saved.getCode(), saved.getShiftDate(), saved.getTrackIds(), saved.getPossessionType());
         return mapper.toResponse(saved);
@@ -185,7 +191,27 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         PatchRules.set(patch, "personnel", request.personnel(), shift::setPersonnel);
         PatchRules.set(patch, "measurementEquipment", request.measurementEquipment(), shift::setMeasurementEquipment);
         PatchRules.set(patch, "observations", request.observations(), shift::setObservations);
+        if (request.vehicleIds() != null || patch.clears("vehicleIds")) {
+            crew.replaceVehicles(shift, request.vehicleIds());
+        }
+        if (request.linemanPersonIds() != null || patch.clears("linemanPersonIds")) {
+            crew.replaceLinemen(shift, request.linemanPersonIds());
+        }
+        if (patch.clears("teamLeaderPersonId")) {
+            if (!shift.getLinemen().isEmpty()) {
+                throw new ValidationException("Shift " + shift.getCode() + " has its linemen: its team leader is replaced, not emptied");
+            }
+            crew.setLeader(shift, null);
+        } else if (request.teamLeaderPersonId() != null) {
+            crew.setLeader(shift, request.teamLeaderPersonId());
+        }
+        if (patch.clears("supervisorPersonId")) {
+            crew.setSupervisor(shift, null);
+        } else if (request.supervisorPersonId() != null) {
+            crew.setSupervisor(shift, request.supervisorPersonId());
+        }
         validate(shift);
+        crew.check(shift, shift.isInProgress());
         if (!tracksBefore.equals(shift.getTrackIds()) || possessionBefore != shift.getPossessionType()) {
             requireAssignedTasksStillFit(shift);
         }
@@ -225,6 +251,8 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         if (request.voltageCutoffAt() != null) {
             shift.setVoltageCutoffAt(request.voltageCutoffAt());
         }
+        // Para iniciarlo, la dotacion entera: un jefe y de 2 a 6 linemen, y sus vehiculos disponibles.
+        crew.check(shift, true);
         shift.setStatus(ShiftStatus.IN_PROGRESS);
         LOGGER.info("Shift {} started at {}", shift.getCode(), shift.getActualStart());
         MaintenanceShift saved = repository.save(shift);
@@ -259,6 +287,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         if (request.observations() != null) {
             shift.setObservations(request.observations());
         }
+        crew.park(shift, request.parkings());
 
         // Lo que no se termino en este turno vuelve a la cola de la orden, sin cancelarlo.
         releaseOpenTasks(shift);
@@ -279,7 +308,10 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         releaseOpenTasks(shift);
         shift.setObservations(shift.getObservations() == null ? "Cancelled: " + request.reason() : shift.getObservations() + "\nCancelled: " + request.reason());
         shift.setStatus(ShiftStatus.CANCELLED);
-        return mapper.toResponse(repository.save(shift));
+        MaintenanceShift saved = repository.save(shift);
+        // mto-resources devuelve a su sitio los vehiculos de un turno cancelado que llego a empezar.
+        events.publish(MaintenanceEvents.shiftCancelled(saved));
+        return mapper.toResponse(saved);
     }
 
     @Override

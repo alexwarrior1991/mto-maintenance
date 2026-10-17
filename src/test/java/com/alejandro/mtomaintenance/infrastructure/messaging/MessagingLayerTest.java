@@ -5,6 +5,7 @@ import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataChangedM
 import com.alejandro.mtomaintenance.application.dto.messaging.MasterDataOperation;
 import com.alejandro.mtomaintenance.application.dto.messaging.InboxMessageCommand;
 import com.alejandro.mtomaintenance.application.dto.messaging.InboxProcessingResult;
+import com.alejandro.mtomaintenance.application.service.IncomingEventProcessor;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor;
 import com.alejandro.mtomaintenance.configuration.messaging.MessagePayloadSignatureVerifier;
 import com.alejandro.mtomaintenance.configuration.messaging.MessagingConfiguration;
@@ -12,11 +13,13 @@ import com.alejandro.mtomaintenance.configuration.messaging.MessageSignatureMode
 import com.alejandro.mtomaintenance.configuration.messaging.MessageSignatureProperties;
 import com.alejandro.mtomaintenance.configuration.rabbitmq.MasterDataRabbitProperties;
 import com.alejandro.mtomaintenance.configuration.rabbitmq.RabbitMqConfiguration;
+import com.alejandro.mtomaintenance.configuration.rabbitmq.ResourcesRabbitProperties;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.InboxMessageCommandFactory;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataEventConsumer;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataMessageHeaders;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataRabbitMqNames;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.RabbitListenerContainerFactoryNames;
+import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.ResourcesRabbitMqNames;
 import com.alejandro.mtomaintenance.application.dto.messaging.AsynchronousMessage;
 import com.alejandro.mtomaintenance.application.dto.messaging.DomainEvent;
 import com.alejandro.mtomaintenance.application.dto.messaging.MessageActor;
@@ -53,6 +56,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
@@ -568,6 +572,23 @@ class MessagingLayerTest {
     }
 
     @Test
+    void theResourcesQueueIsBoundToPeopleTeamsAndVehiclesAndDeadLettersToItsOwnQueue() {
+        contextRunner.run(context -> {
+            Queue queue = context.getBean("resourcesQueue", Queue.class);
+            assertEquals(ResourcesRabbitMqNames.MAINTENANCE_RESOURCES_QUEUE, queue.getName());
+            assertEquals(ResourcesRabbitMqNames.MAINTENANCE_RESOURCES_DEAD_LETTER_EXCHANGE,
+                    queue.getArguments().get(MasterDataRabbitMqNames.ARG_DEAD_LETTER_EXCHANGE));
+            assertEquals(ResourcesRabbitMqNames.RESOURCES_EXCHANGE, context.getBean("resourcesExchange", TopicExchange.class).getName());
+            List<String> keys = context.getBean("resourcesBindings", Declarables.class).getDeclarablesByType(Binding.class).stream()
+                    .map(Binding::getRoutingKey).toList();
+            assertEquals(List.of("mto.resources.person.*", "mto.resources.team.*", "mto.resources.vehicle.*"), keys);
+            assertEquals(ResourcesRabbitMqNames.MAINTENANCE_RESOURCES_DEAD_LETTER_QUEUE,
+                    context.getBean("resourcesDeadLetterQueue", Queue.class).getName());
+            assertTrue(context.containsBean("resourcesEventConsumer"));
+        });
+    }
+
+    @Test
     void queueDeadLettersToItsOwnExchangeAndQueue() {
         contextRunner.run(context -> {
             Queue queue = context.getBean("masterDataQueue", Queue.class);
@@ -576,7 +597,7 @@ class MessagingLayerTest {
             assertEquals(MasterDataRabbitMqNames.MAINTENANCE_MASTER_DATA_DEAD_LETTER_ROUTING_KEY,
                     queue.getArguments().get(MasterDataRabbitMqNames.ARG_DEAD_LETTER_ROUTING_KEY));
 
-            DirectExchange deadLetterExchange = context.getBean(DirectExchange.class);
+            DirectExchange deadLetterExchange = context.getBean("masterDataDeadLetterExchange", DirectExchange.class);
             assertEquals(MasterDataRabbitMqNames.MAINTENANCE_MASTER_DATA_DEAD_LETTER_EXCHANGE, deadLetterExchange.getName());
 
             Queue deadLetterQueue = context.getBean("masterDataDeadLetterQueue", Queue.class);
@@ -885,7 +906,8 @@ class MessagingLayerTest {
      */
     private static MasterDataChangedMessage convert(String json) {
         MessageConverter converter = new RabbitMqConfiguration(
-                new MasterDataRabbitProperties(null, null, null, null, null, null), new MaintenanceEventsProperties(null))
+                new MasterDataRabbitProperties(null, null, null, null, null, null), new MaintenanceEventsProperties(null),
+                new ResourcesRabbitProperties(null, null, null, null, null, null))
                 .masterDataMessageConverter(JsonMapper.builder().build());
 
         MessageProperties properties = new MessageProperties();
@@ -954,6 +976,11 @@ class MessagingLayerTest {
         @Bean
         MasterDataEventProcessor masterDataEventProcessor() {
             return new RecordingProcessor(InboxProcessingResult.PROCESSED);
+        }
+
+        @Bean
+        IncomingEventProcessor incomingEventProcessor() {
+            return (command, message) -> InboxProcessingResult.PROCESSED;
         }
     }
 }
