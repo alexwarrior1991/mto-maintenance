@@ -80,7 +80,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     private static final Set<String> CLEARABLE = Set.of("teamId", "baseName", "vehicle", "plannedStart", "plannedEnd",
             "blockingDisconnectorIds", "earthingPoints", "parkingPlace", "executionPackageId", "startKp", "endKp",
             "personnel", "measurementEquipment", "observations", "vehicleIds", "teamLeaderPersonId", "supervisorPersonId",
-            "linemanPersonIds");
+            "linemanPersonIds", "instrumentIds");
 
     private final MaintenanceShiftRepository repository;
     private final MaintenanceTaskRepository taskRepository;
@@ -129,6 +129,8 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         // La dotacion y los vehiculos: los de la peticion y, de un equipo sincronizado, lo que no diga.
         crew.assignOnCreate(shift, request.vehicleIds(), request.teamLeaderPersonId(), request.supervisorPersonId(),
                 request.linemanPersonIds());
+        // Los instrumentos solo los que diga: un equipo no tiene instrumentos que copiar.
+        crew.replaceInstruments(shift, request.instrumentIds());
         validate(shift);
         crew.check(shift, false);
         MaintenanceShift saved = repository.save(shift);
@@ -210,6 +212,9 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         } else if (request.supervisorPersonId() != null) {
             crew.setSupervisor(shift, request.supervisorPersonId());
         }
+        if (request.instrumentIds() != null || patch.clears("instrumentIds")) {
+            crew.replaceInstruments(shift, request.instrumentIds());
+        }
         validate(shift);
         crew.check(shift, shift.isInProgress());
         if (!tracksBefore.equals(shift.getTrackIds()) || possessionBefore != shift.getPossessionType()) {
@@ -251,7 +256,8 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         if (request.voltageCutoffAt() != null) {
             shift.setVoltageCutoffAt(request.voltageCutoffAt());
         }
-        // Para iniciarlo, la dotacion entera: un jefe y de 2 a 6 linemen, y sus vehiculos disponibles.
+        // Para iniciarlo, la dotacion entera: un jefe y de 2 a 6 linemen, sus vehiculos disponibles, nada
+        // caducado y un conductor habilitado distinto por cada vehiculo que lo exige.
         crew.check(shift, true);
         shift.setStatus(ShiftStatus.IN_PROGRESS);
         LOGGER.info("Shift {} started at {}", shift.getCode(), shift.getActualStart());

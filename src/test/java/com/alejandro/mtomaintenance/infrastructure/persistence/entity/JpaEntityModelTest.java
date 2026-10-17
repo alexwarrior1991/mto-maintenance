@@ -3,6 +3,7 @@ package com.alejandro.mtomaintenance.infrastructure.persistence.entity;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.hibernate.envers.Audited;
+import org.hibernate.envers.RelationTargetAuditMode;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -42,6 +43,21 @@ class JpaEntityModelTest {
 
         audited.forEach(type -> assertTrue(type.isAnnotationPresent(Audited.class), type.getSimpleName() + " must be @Audited"));
         notAudited.forEach(type -> assertFalse(type.isAnnotationPresent(Audited.class), type.getSimpleName() + " must not be @Audited"));
+    }
+
+    /**
+     * Lo que un turno toma de mto-resources (la dotacion, los vehiculos y, desde V22, los instrumentos) no
+     * tiene gemela _aud: la revision del turno lo lee como esta ahora. Sin NOT_AUDITED, Envers buscaria
+     * maintenance_instrument_aud, que no existe.
+     */
+    @Test
+    void theSnapshotsOfMtoResourcesHangingFromAShiftAreReadAsTheyAreNow() throws NoSuchFieldException {
+        for (String field : List.of("teamLeader", "supervisor", "linemen", "instruments")) {
+            Audited audited = MaintenanceShift.class.getDeclaredField(field).getAnnotation(Audited.class);
+            assertTrue(audited != null && audited.targetAuditMode() == RelationTargetAuditMode.NOT_AUDITED, "MaintenanceShift." + field);
+        }
+        Audited vehicle = MaintenanceShiftVehicle.class.getDeclaredField("vehicle").getAnnotation(Audited.class);
+        assertTrue(vehicle != null && vehicle.targetAuditMode() == RelationTargetAuditMode.NOT_AUDITED, "MaintenanceShiftVehicle.vehicle");
     }
 
     @Test

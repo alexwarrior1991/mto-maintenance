@@ -205,6 +205,23 @@ public class MaintenanceShift extends VersionedEntity {
     @Builder.Default
     private List<MaintenanceShiftVehicle> vehicles = new ArrayList<>();
 
+    /**
+     * Los instrumentos que se llevan esa noche, de mto-resources ({@code V22}): un conjunto que se
+     * sustituye entero, como los linemen; el instrumento se lee como esta ahora. Ninguno retirado ni con
+     * la calibracion caducada a la fecha del turno ({@code ShiftQualifications}). Lo que se ensena sale
+     * de {@link #instrumentsByCode()}.
+     */
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+            name = "maintenance_shift_instrument",
+            joinColumns = @JoinColumn(name = "shift_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_instrument_shift")),
+            inverseJoinColumns = @JoinColumn(name = "instrument_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_instrument_instrument"))
+    )
+    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
+    @Builder.Default
+    private Set<MaintenanceInstrument> instruments = new LinkedHashSet<>();
+
+    /** El texto de antes: lo que llevaba un turno sin instrumentos de mto-resources. Se queda para esos. */
     @Size(max = 500)
     @Column(name = "measurement_equipment", length = 500)
     private String measurementEquipment;
@@ -229,6 +246,13 @@ public class MaintenanceShift extends VersionedEntity {
         return vehicles.stream()
                 .sorted(java.util.Comparator.comparing((MaintenanceShiftVehicle vehicle) -> vehicle.getVehicle().getCode())
                         .thenComparing(vehicle -> vehicle.getVehicle().getId()))
+                .toList();
+    }
+
+    /** Los instrumentos por su codigo: el orden de la respuesta, del evento y del parte. */
+    public List<MaintenanceInstrument> instrumentsByCode() {
+        return instruments.stream()
+                .sorted(java.util.Comparator.comparing(MaintenanceInstrument::getCode).thenComparing(MaintenanceInstrument::getId))
                 .toList();
     }
 

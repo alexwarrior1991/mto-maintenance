@@ -16,11 +16,13 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPersonRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.FleetVehicleRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInstrumentRepository;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
 import org.hibernate.envers.RevisionType;
 import jakarta.persistence.EntityManager;
@@ -88,6 +90,9 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
 
     @Autowired
     private FleetVehicleRepository vehicleRepository;
+
+    @Autowired
+    private MaintenanceInstrumentRepository instrumentRepository;
 
     @AfterEach
     void tearDown() {
@@ -194,6 +199,43 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         });
         assertEquals(31L, parked.getParkingTrackId());
         assertEquals("DR-" + vehicleId.toString().substring(0, 6), parked.getVehicle().getCode(), "The vehicle is read as it is now");
+    }
+
+    @Test
+    void theInstrumentsOfAShiftAreInItsHistoryAndAreReadAsTheyAreNow() {
+        // Llegan de mto-resources por SQL nativo, sin revision: la del turno los lee como estan ahora.
+        UUID poleId = UUID.randomUUID();
+        UUID detectorId = UUID.randomUUID();
+        String suffix = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        inTransaction(em -> {
+            instrumentRepository.upsertFromResources(poleId, "EP-" + suffix, "Earthing pole", "EARTHING_POLE", "SN-1", LocalDate.of(2027, 1, 10), true, 1L);
+            instrumentRepository.upsertFromResources(detectorId, "VD-" + suffix, "Voltage detector", "VOLTAGE_DETECTOR", null, null, true, 2L);
+            return null;
+        });
+        UUID shiftId = inTransaction(em -> {
+            MaintenanceShift shift = MaintenanceShift.builder().code("SH-INS-" + suffix).shiftDate(LocalDate.of(2026, 10, 16))
+                    .possessionType(PossessionType.FULL).trackIds(new java.util.LinkedHashSet<>(List.of(2L))).build();
+            shift.getInstruments().add(em.find(MaintenanceInstrument.class, poleId));
+            shift.getInstruments().add(em.find(MaintenanceInstrument.class, detectorId));
+            em.persist(shift);
+            return shift.getId();
+        });
+        inTransaction(em -> {
+            em.find(MaintenanceShift.class, shiftId).getInstruments().removeIf(instrument -> instrument.getId().equals(detectorId));
+            return null;
+        });
+        // La calibracion se renueva en mto-resources despues: la revision no la guarda, la lee.
+        inTransaction(em -> instrumentRepository.upsertFromResources(poleId, "EP-" + suffix, "Earthing pole", "EARTHING_POLE", "SN-1",
+                LocalDate.of(2028, 1, 10), true, 3L));
+
+        List<Number> revisions = reading(reader -> reader.getRevisions(MaintenanceShift.class, shiftId));
+        assertEquals(2, revisions.size(), "Taking an instrument out is a revision of the shift");
+        List<String> atFirst = reading(reader -> reader.find(MaintenanceShift.class, shiftId, revisions.getFirst()).instrumentsByCode().stream()
+                .map(MaintenanceInstrument::getCode).toList());
+        assertEquals(List.of("EP-" + suffix, "VD-" + suffix), atFirst);
+        List<LocalDate> atLast = reading(reader -> reader.find(MaintenanceShift.class, shiftId, revisions.getLast()).instrumentsByCode().stream()
+                .map(MaintenanceInstrument::getCalibrationExpiresOn).toList());
+        assertEquals(List.of(LocalDate.of(2028, 1, 10)), atLast, "The instrument is read as it is now");
     }
 
     private <T> T inTransaction(Function<EntityManager, T> work) {

@@ -34,9 +34,10 @@ GET/POST        /shifts                       date, dateFrom, dateTo, teamId, tr
 GET/PUT         /shifts/{id}                  POST /shifts/{id}/start | /close | /cancel
 GET             /shifts/{id}/tasks?status= | /profiles?status= | /report?format= | /revisions
                                               /profiles: PROFILE assets of the shift's tasks by kp (default status=COMPLETED = reviewed)
-                                              a shift answers teamLeader, supervisor, linemen[] (by code) and vehicles[] (by code:
+                                              a shift answers teamLeader, supervisor, linemen[] (by code), vehicles[] (by code:
                                               vehicleId, code, name, mobility, category, available, parking{siteId, trackId, kp,
-                                              description} or null until closed with one) — "Shifts: crew and vehicles" below
+                                              description} or null until closed with one) and instruments[] (by code: id, code,
+                                              name, kind, calibrationExpiresOn) — "Shifts: crew and vehicles" below
 POST            /shifts/{id}/tasks/{taskId}   assigns a task to the shift (track and window rules)
 POST            /shifts/{id}/tasks/{taskId}/unassign
                                               takes an open task out of the shift: back to its order, PENDING and without
@@ -167,8 +168,9 @@ and once purged (`app.operations.retention`, 7 days), it is 404 `APP-404`.
 
 ## Shifts: crew and vehicles
 
-`POST /shifts` and `PUT`/`PATCH /shifts/{id}` take, besides the fields of before, the crew and the
-vehicles of that night from `mto-resources` (`02-domain-model.md`, "Shift crew and vehicles"):
+`POST /shifts` and `PUT`/`PATCH /shifts/{id}` take, besides the fields of before, the crew, the
+vehicles and the instruments of that night from `mto-resources` (`02-domain-model.md`, "Shift crew and
+vehicles" and "Qualifications and expiries"):
 
 ```jsonc
 {
@@ -176,18 +178,38 @@ vehicles of that night from `mto-resources` (`02-domain-model.md`, "Shift crew a
   "vehicleIds": ["…(DR-02)"],                  // a set, replaced whole; a vehicle that stays keeps its parking
   "teamLeaderPersonId": "…",                   // TEAM_LEADER or above (anything but WORKER)
   "supervisorPersonId": "…",
-  "linemanPersonIds": ["…", "…", "…"]          // a set, replaced whole; 2 to 6 to start
+  "linemanPersonIds": ["…", "…", "…"],        // a set, replaced whole; 2 to 6 to start
+  "instrumentIds": ["…(EP-07)", "…(VD-02)"]    // a set, replaced whole (V22); none retired nor with its calibration expired
 }
 ```
 
 With a synchronized team, what `POST` does not say is copied from the team (leader, supervisor,
-linemen, default vehicle). A `PATCH` may empty the four; emptying `teamLeaderPersonId` while the
-shift has linemen is 400 `VAL-001` (replace it instead). An unknown person or vehicle is 404
-`CRW-404` / `FLT-404`; a broken crew rule (more than 6 linemen, the leader among them, a `WORKER` as
-leader, someone deactivated, a vehicle not available, one that needs towing without a towing vehicle,
-not enough seats, a vehicle or a person already in another open shift of the same date) is 409
-`SHF-001`, and so is starting, or changing a shift `IN_PROGRESS`, without a leader and 2 to 6 linemen
-when the shift has a crew.
+linemen, default vehicle); instruments are never copied, a team has none. A `PATCH` may empty the
+five (`null` in `application/merge-patch+json`; a `PUT` without the key leaves the set as it is);
+emptying `teamLeaderPersonId` while the shift has linemen is 400 `VAL-001` (replace it instead). An
+unknown person, vehicle or instrument (one that has not arrived from `mto-resources` yet) is 404
+`CRW-404` / `FLT-404` / `MSI-404`, and nothing is replaced; a broken crew rule (more than 6 linemen,
+the leader among them, a `WORKER` as leader, someone deactivated, a vehicle not available, one that
+needs towing without a towing vehicle, not enough seats, a vehicle or a person already in another open
+shift of the same date) is 409 `SHF-001`, and so is starting, or changing a shift `IN_PROGRESS`,
+without a leader and 2 to 6 linemen when the shift has a crew.
+
+Nothing expired gets into a shift (`V22`): on create, on any change and on start, an expired
+qualification of the leader, the supervisor or a lineman, an expired document of one of its vehicles,
+an instrument retired in `mto-resources` or whose calibration expired, all of them at the shift's
+`shiftDate` (`expiresOn < shiftDate`; the last day still counts), is 409 `SHF-001` whose message lists
+everything that has expired, to renew it or take it out at once:
+
+```text
+Shift SH-000077 on 2026-10-17 cannot take what has expired: Yossi Cohen (PER-000003): qualification
+RAIL-DRIVER expired on 2026-09-30; vehicle RR-07: ROAD_INSPECTION ITV-2026-118 expired on 2026-10-01;
+instrument VD-02: calibration expired on 2026-10-07. Renew it in mto-resources or take it out of the shift
+```
+
+To start, and on any change while `IN_PROGRESS`, each self-propelled vehicle whose model requires a
+driver qualification needs a different person of the crew (the leader or a lineman, not the
+supervisor) holding it, valid that day; otherwise 409 `SHF-001`: `Shift SH-000077 has no qualified
+driver for RR-07 (RR-OPERATOR) on 2026-10-17: …`. A shift still `PLANNED` may lack its drivers.
 
 `POST /shifts/{id}/close` takes `parkings`, where each vehicle was left:
 
@@ -211,8 +233,8 @@ the parameter is absent; the download is an ordinary URL, so it can be linked or
 | `format` | `Content-Type` | Notes |
 |---|---|---|
 | `json`, absent | `application/json` | Unchanged |
-| `xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | One sheet, header pairs above the table, frozen and filtered header, real dates and numbers; the shift report adds the `Inspections`, `Crew` and `Vehicles` sheets |
-| `pdf` | `application/pdf` | A4 landscape (shift, progress) or portrait (monthly), header repeated on every page; the shift report's inspections, crew and vehicles follow its totals |
+| `xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | One sheet, header pairs above the table, frozen and filtered header, real dates and numbers; the shift report adds the `Inspections`, `Crew`, `Vehicles` and `Instruments` sheets |
+| `pdf` | `application/pdf` | A4 landscape (shift, progress) or portrait (monthly), header repeated on every page; the shift report's inspections, crew, vehicles and instruments follow its totals |
 
 The value is case insensitive; an unknown one is `400 VAL-001`. The file arrives as
 `Content-Disposition: attachment` with a stable, sortable ASCII name — `shift-report-<date>-<code>`,
@@ -241,7 +263,10 @@ Two deliberate differences from the JSON:
   `Username`, `Category`: the leader, the supervisor, each lineman) and the vehicles (`Code`, `Name`,
   `Mobility`, `Category`, `Parking`, as `track 31, kp 4.250 — site … — description`) are two more
   appendices after it, and the header adds `Team leader`, `Supervisor`, `Linemen` (the count) and
-  `Vehicles` (the codes); the JSON carries them in `shift`.
+  `Vehicles` (the codes); the JSON carries them in `shift`. The instruments of `mto-resources` (`V22`:
+  `Code`, `Name`, `Kind`, `Calibrated until`, a real date, empty without a calibration) are the last
+  appendix; the header's `Measurement equipment`, the free text of before, stays for the shifts that
+  carry no instruments.
 - `photoRefs` are printed as text in both formats. They are references that resolve to nothing until
   the photo storage in `05-development-roadmap.md` exists, but they are the only record that the
   photo was taken, so dropping them would lose what the paper report used to carry.
@@ -251,7 +276,7 @@ Transitions are `POST` with a body: `PlanOrderRequest{plannedDate, comment}`,
 `CompleteOrderRequest{closingNotes, force, comment}`, `CancelOrderRequest{reason}`;
 `CompleteTaskRequest{shiftId, taskTypeCodes, notes, defectsFound, workComplete, repairPlannedDate,
 inlineDefects[], materials[], photoRefs[]}`; `MaintenanceShiftRequest{shiftDate, teamId, possessionType, trackIds[], blockingDisconnectorIds[], …,
-vehicleIds[], teamLeaderPersonId, supervisorPersonId, linemanPersonIds[]}`,
+vehicleIds[], teamLeaderPersonId, supervisorPersonId, linemanPersonIds[], instrumentIds[]}`,
 `StartShiftRequest{actualStart, voltageCutoffAt}`, `CloseShiftRequest{actualEnd,
 voltageCutoffAt, netWorkMinutes, observations, parkings[{vehicleId, parkingSiteId, trackId, kp,
 description}]}`; `ResolveDefectRequest{resolutionNotes, correctionType, partsReplaced,
@@ -276,7 +301,7 @@ their items, defects, material lines — takes the same body two ways:
 | Order | `description`, `plannedDate`, `teamId`, `assignedUser`, `closingNotes`, `executionPackageId`, `trackId`, `stationId`, `startKp`, `endKp`, `stockProjectId` |
 | Task | `assignedUser`, `taskTypeCodes`, `notes`, `defectsFound`, `photoRefs` |
 | Check item (task or inspection) | `measuredValue`, `valueAfterAdjustment`, `itemResult`, `notes` |
-| Shift | `teamId`, `baseName`, `vehicle`, `plannedStart`, `plannedEnd`, `blockingDisconnectorIds`, `earthingPoints`, `parkingPlace`, `executionPackageId`, `startKp`, `endKp`, `personnel`, `measurementEquipment`, `observations`, `vehicleIds`, `teamLeaderPersonId` (only with no linemen left), `supervisorPersonId`, `linemanPersonIds` (not below 2 while `IN_PROGRESS`) |
+| Shift | `teamId`, `baseName`, `vehicle`, `plannedStart`, `plannedEnd`, `blockingDisconnectorIds`, `earthingPoints`, `parkingPlace`, `executionPackageId`, `startKp`, `endKp`, `personnel`, `measurementEquipment`, `observations`, `vehicleIds`, `teamLeaderPersonId` (only with no linemen left), `supervisorPersonId`, `linemanPersonIds` (not below 2 while `IN_PROGRESS`), `instrumentIds` |
 | Inspection | `inspector`, `description`, `detectedDefects`, `recommendedActions`, `kp` |
 | Defect | `technicalNotes`, `correctionType`, `partsReplaced`, `repairPlannedDate`, `photoRefs` |
 | Asset | `description`, `preventiveIntervalDays`, and on an own section `executionPackageId` and `stationId` |
@@ -304,7 +329,7 @@ themselves:
   UTC day for an hour or two), and resolving one that was still dated in the future is 400 `VAL-001`
   (it was 409 `APP-409`).
 - A `null` inside a list (`taskTypeCodes`, `inlineDefects`, `materials`, `photoRefs`, `trackIds`,
-  `blockingDisconnectorIds`, a shift's `vehicleIds`, `linemanPersonIds` and `parkings`, a team's
+  `blockingDisconnectorIds`, a shift's `vehicleIds`, `linemanPersonIds`, `instrumentIds` and `parkings`, a team's
   `executionPackageIds`) is 400 `REQ-VALIDATION` on that list. It was a 500 for task types, defects
   and materials, a 409 `APP-409` for tracks and packages, and a photo stored as the text `null`.
 
@@ -329,12 +354,12 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 400 `REQ-VALIDATION` / `VAL-001` | Bean Validation / domain invariant (kp range, quantity, unknown task type, unknown export `format`, a blank required text, a `PATCH` that empties a required field or has an unknown key, a `null` inside a list, a defect detected in the future, a shift closed with its voltage cut-off after the end) |
 | 400 `REQ-400` | Malformed body, a parameter of the wrong type, a missing required parameter (`month` of the monthly report) or a `sort` on a property the entity does not have |
 | 401 `AUTH-401` / 403 `AUTH-403` | No token / missing role |
-| 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `INS`, `TPL`, `DEF`, `MAT`, and `CRW` for a person or `FLT` for a vehicle of `mto-resources` named in a shift); a task type, a check item, an inspection item and a background operation (unknown, purged or someone else's) answer `APP-404` |
+| 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `INS`, `TPL`, `DEF`, `MAT`, and `CRW` for a person, `FLT` for a vehicle or `MSI` for an instrument of `mto-resources` named in a shift); a task type, a check item, an inspection item and a background operation (unknown, purged or someone else's) answer `APP-404` |
 | 404 `HTTP-404` | Unknown route |
 | 405 `REQ-405` | The route exists but not for that method; the `Allow` header lists the ones it takes |
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset; changing a field of a synchronized asset that only `mto-configuration` changes (sending it with the value it already has is accepted); `enabled=true` on an asset disabled at the source |
-| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them, and an inspection recorded in a shift that is not in progress or closed, or that does not work on its asset's track nor on the one it connects with; a crew or vehicle rule (more than 6 linemen, the leader among them or a `WORKER`, someone deactivated, a vehicle not available or needing a tow, not enough seats, a vehicle or a person in another open shift of the same date, starting or changing a shift in progress without a leader and 2 to 6 linemen), and a rail-only vehicle left by description only on close |
+| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them, and an inspection recorded in a shift that is not in progress or closed, or that does not work on its asset's track nor on the one it connects with; a crew or vehicle rule (more than 6 linemen, the leader among them or a `WORKER`, someone deactivated, a vehicle not available or needing a tow, not enough seats, a vehicle or a person in another open shift of the same date, starting or changing a shift in progress without a leader and 2 to 6 linemen), something expired at the shift's date (a qualification of its crew, a document of its vehicles, the calibration of its instruments) or an instrument retired, starting or changing a shift in progress without a different qualified driver for each self-propelled vehicle that requires one, and a rail-only vehicle left by description only on close |
 | 409 `TEA-001` | `PUT /teams/{id}` of a team synchronized from `mto-resources`: it is changed there |
 | 409 `MAT-001` | Over-consumption (also taking `allowOverConsumption` off a line consumed above plan), duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |

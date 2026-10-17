@@ -309,7 +309,7 @@ and every event has a real JSON example in `docs/messaging/examples/` that
 | `inspection.item-failed` | a checklist item that becomes `DEFECT` (`PATCH/PUT .../items/{id}`); staying `DEFECT` does not fail again | inspection + `itemId`, `itemCode`, `itemLabel`, `itemResult`, `measuredValue`, `valueAfterAdjustment`, `unit`, `minValue`, `maxValue`, `notes` |
 | `inspection.defect-created` | `POST /inspections/{id}/defect` (the defect also publishes its own `defect.created`) | inspection + `defectId`, `defectCode`, `severity`, `description` |
 | `inspection.corrective-order-created` | `POST /inspections/{id}/corrective-order` (the order also publishes its own `order.created`) | inspection + `orderId`, `orderCode`, `orderType`, `priority`, `defectId`, `defectCode` |
-| `shift.started` / `shift.closed` / `shift.cancelled` | `POST /shifts/{id}/start`, `/close` and `/cancel` | shift (`code`, `status`, `shiftDate`, `possessionType`, team, `baseName`, `vehicle`, `trackIds`, `executionPackageId`, kp range, planned and actual instants, `voltageCutoffAt`, `netWorkMinutes`, `parkingPlace`) and its crew and vehicles: `vehicles[]` (`id`, `code`, `parking` `{siteId, trackId, kp, description}` or `null`), `vehicleIds`, `vehicleCodes`, `teamLeaderPersonId`, `teamLeaderUsername` (whom to notify), `supervisorPersonId`, `linemanPersonIds` (sorted). Only ids, codes and the leader's username: `mto-notification` copies `values` whole into its registry |
+| `shift.started` / `shift.closed` / `shift.cancelled` | `POST /shifts/{id}/start`, `/close` and `/cancel` | shift (`code`, `status`, `shiftDate`, `possessionType`, team, `baseName`, `vehicle`, `trackIds`, `executionPackageId`, kp range, planned and actual instants, `voltageCutoffAt`, `netWorkMinutes`, `parkingPlace`) and its crew and vehicles: `vehicles[]` (`id`, `code`, `parking` `{siteId, trackId, kp, description}` or `null`), `vehicleIds`, `vehicleCodes`, `teamLeaderPersonId`, `teamLeaderUsername` (whom to notify), `supervisorPersonId`, `linemanPersonIds` (sorted), and last (`V22`) `instrumentIds` and `instrumentCodes` (by code). Only ids, codes and the leader's username: `mto-notification` copies `values` whole into its registry |
 | `material.rejected` | a material line `mto-stock` said no to (`REJECTED`), on any step | line (`orderCode`, `orderStatus`, `taskId`, `materialId`, `materialCode`, `materialDescription`, `warehouseId`, quantities, `unit`, `stockReservationId`, `stockSyncStatus`, `request`) + `step`, `reason`, `stockErrorCode` (`STK-001` is no stock), `stockHttpStatus` |
 | `material.in-doubt` | a reservation or an output sent to `mto-stock` that got no answer (`FAILED` with `stockRequestInDoubt`) | line + `step`, `reason`; `request` says which one (`RESERVATION`/`OUTPUT`) |
 | `material.failed` | `mto-stock` did not answer and nothing is in doubt (the request never left, e.g. resolving the project) | line + `step`, `reason` |
@@ -322,9 +322,10 @@ vehicles of the shift (its `MaintenanceShiftEventHandler`, which reads `code`, `
 `vehicles[].parking`): on the track (a road-only one, on the road) at `started`, parked where
 `vehicles[].parking` says (else at `parkingPlace`) at `closed`, and the same at `cancelled` of a
 shift that had started (`actualStart` set); a shift cancelled before starting moved nothing.
-`shift.cancelled`, `parkingPlace` and the crew and vehicle keys arrived with `V20`, added to the
-contract without renaming anything; both consumers copy `shift-started.json`, `shift-closed.json`
-and `shift-cancelled.json` as fixtures.
+`shift.cancelled`, `parkingPlace` and the crew and vehicle keys arrived with `V20`, and
+`instrumentIds`/`instrumentCodes` (the instruments of `mto-resources` taken that night, ordered by
+code) with `V22`, all added to the contract at the end without renaming anything; both consumers copy
+`shift-started.json`, `shift-closed.json` and `shift-cancelled.json` as fixtures.
 
 The three `material.*` events are published when the line's state changes, not on every attempt: a
 retry that fails the same way (the automatic one every 5 minutes while stock is down, or a repeated

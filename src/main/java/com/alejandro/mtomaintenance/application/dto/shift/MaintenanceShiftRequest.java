@@ -14,15 +14,17 @@ import java.util.Set;
 
 /**
  * Alta de un turno nocturno: fecha, equipo, ventana, posesion, vias y seccionadores de bloqueo, y su
- * dotacion y sus vehiculos de mto-resources. Con un equipo sincronizado, lo que no se dice (jefe,
- * supervisor, linemen, vehiculos) se copia del equipo; iniciarlo exige un jefe y de 2 a 6 linemen.
+ * dotacion, sus vehiculos y sus instrumentos de mto-resources. Con un equipo sincronizado, lo que no se
+ * dice (jefe, supervisor, linemen, vehiculos) se copia del equipo; los instrumentos no, un equipo no los
+ * tiene. Iniciarlo exige un jefe y de 2 a 6 linemen, y nada caducado entra en el turno.
  *
  * <p>Ejemplo, {@code POST /shifts}:</p>
  * <pre>{@code
  * {"shiftDate": "2026-01-27", "teamId": "…(Team A)", "possessionType": "PARTIAL", "plannedStart": "2026-01-27T19:00:00Z",
  *  "plannedEnd": "2026-01-28T03:00:00Z", "blockingDisconnectorIds": ["…(DSC-77)", "…(DSC-81)", "…(DSC-84)"],
  *  "executionPackageId": 6, "trackIds": [2], "startKp": 12847.990, "endKp": 14078.090,
- *  "vehicleIds": ["…(DR-02)"], "teamLeaderPersonId": "…", "linemanPersonIds": ["…", "…", "…"]}
+ *  "vehicleIds": ["…(DR-02)"], "teamLeaderPersonId": "…", "linemanPersonIds": ["…", "…", "…"],
+ *  "instrumentIds": ["…(EP-07)", "…(VD-02)"]}
  * }</pre>
  */
 public record MaintenanceShiftRequest(
@@ -46,7 +48,8 @@ public record MaintenanceShiftRequest(
         Set<@NotNull UUID> vehicleIds,
         UUID teamLeaderPersonId,
         UUID supervisorPersonId,
-        Set<@NotNull UUID> linemanPersonIds
+        Set<@NotNull UUID> linemanPersonIds,
+        Set<@NotNull UUID> instrumentIds
 ) {
 
     /** Sin dotacion ni vehiculos: los copia del equipo si esta sincronizado, como hacia antes con el texto. */
@@ -56,6 +59,17 @@ public record MaintenanceShiftRequest(
                                    String personnel, String measurementEquipment, String observations) {
         this(shiftDate, teamId, baseName, vehicle, possessionType, plannedStart, plannedEnd, blockingDisconnectorIds, earthingPoints,
                 parkingPlace, executionPackageId, trackIds, startKp, endKp, personnel, measurementEquipment, observations,
-                null, null, null, null);
+                null, null, null, null, null);
+    }
+
+    /** Con dotacion y vehiculos, sin instrumentos. */
+    public MaintenanceShiftRequest(LocalDate shiftDate, UUID teamId, String baseName, String vehicle, PossessionType possessionType,
+                                   Instant plannedStart, Instant plannedEnd, Set<UUID> blockingDisconnectorIds, String earthingPoints,
+                                   String parkingPlace, Long executionPackageId, Set<Long> trackIds, BigDecimal startKp, BigDecimal endKp,
+                                   String personnel, String measurementEquipment, String observations, Set<UUID> vehicleIds,
+                                   UUID teamLeaderPersonId, UUID supervisorPersonId, Set<UUID> linemanPersonIds) {
+        this(shiftDate, teamId, baseName, vehicle, possessionType, plannedStart, plannedEnd, blockingDisconnectorIds, earthingPoints,
+                parkingPlace, executionPackageId, trackIds, startKp, endKp, personnel, measurementEquipment, observations,
+                vehicleIds, teamLeaderPersonId, supervisorPersonId, linemanPersonIds, null);
     }
 }

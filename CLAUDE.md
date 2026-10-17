@@ -61,7 +61,9 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
 
 - `domain/model` — framework-free rules: `OrderStateMachine`, `DefectStateMachine`,
   `ShiftStateMachine`, `KilometricRange`, `Quantity`, `WorkloadEstimate`, `DomainValidations`,
-  `CrewComposition` (the copy of `mto-resources`' crew rule; returns the reason, does not throw).
+  `CrewComposition` (the copy of `mto-resources`' crew rule; returns the reason, does not throw),
+  `ShiftQualifications` (nothing expired at the shift's date and a different qualified driver per
+  self-propelled vehicle, a bipartite matching; returns the reason too).
   An `IllegalArgumentException` from here is turned into a 400 by `DomainGuard` in the services.
 - `application` — `dto` (one package per resource), `service` + `service.impl` (package-private
   impls behind public interfaces; `MaintenanceLookups`, `ShiftRules`, `ShiftCrew`, `ChecklistRules`,
@@ -140,9 +142,14 @@ or more tracks) with its crew and vehicles of `mto-resources` (`V20`, copied fro
 when not given). `ShiftCrew` keeps them in rule, 409 `SHF-001`: at most 6 linemen, the leader not
 among them and not a `WORKER`, everyone active, every vehicle active and available, one that neither
 moves by itself nor is portable with a towing one, the crew within the seats (only when every
-self-propelled vehicle declares them), and no vehicle, leader or lineman in two open shifts of one
-date (advisory locks); to start and while `IN_PROGRESS`, a leader and 2 to 6 linemen
-(`CrewComposition`), only on a shift with a crew (`hasCrew()`). Closing says where each vehicle was
+self-propelled vehicle declares them), no vehicle, leader or lineman in two open shifts of one
+date (advisory locks), and nothing expired at the `shiftDate` (`ShiftQualifications`, `V22`: a
+qualification of the leader, the supervisor or a lineman, a document of a vehicle, the calibration of
+an instrument, or an instrument retired; `expiresOn < shiftDate`); to start and while `IN_PROGRESS`, a
+leader and 2 to 6 linemen (`CrewComposition`), only on a shift with a crew (`hasCrew()`), and a
+different person of the crew holding the qualification its model requires for each self-propelled
+vehicle (a matching, not a loop). A shift also carries its instruments of `mto-resources`
+(`instrumentIds`, a set; unknown is 404 `MSI-404`). Closing says where each vehicle was
 left (`parkings`: a site, a track and kp, or a text; a rail-only one never by text alone), and
 starting, closing and cancelling publish `shift.started`/`closed`/`cancelled`, which `mto-resources`
 reads to move the vehicles. A task can
@@ -219,7 +226,8 @@ door, and it is called inside the business transaction**: the event goes to `out
 (`OutboxRabbitPublisher` refuses to start without them). The hooks: `StatusHistoryServiceImpl`
 (`order.created`/`status-changed`/`reassigned`, `defect.created`/`status-changed`: every order and
 defect transition passes through it), `MaintenanceShiftServiceImpl.start/close/cancel`
-(`shift.started`/`closed`/`cancelled`, with the crew, the vehicles and where each was left: also
+(`shift.started`/`closed`/`cancelled`, with the crew, the vehicles and where each was left, and at the
+end the instruments' ids and codes: also
 read by `mto-resources`, through its own queue on `mto.maintenance.shift.*`),
 `MaterialStockSynchronizer.record` (`material.rejected`/`in-doubt`/`failed`, only when the line's
 state changes: the 5-minute retry must not publish one per round),
@@ -288,8 +296,8 @@ The three reports (`GET /shifts/{id}/report`, `/reports/progress`, `/reports/mon
 `?format=json|xlsx|pdf`, `json` by default: same routes, same `MAINTENANCE_READ` rule, unchanged JSON
 contract. Each report is turned into one format-neutral `ReportDocument`
 (`application/dto/export`: header pairs, an optional table, totals, titled appendix tables — the
-shift's inspections, its crew and its vehicles with where each was left, each a sheet of its own in
-the .xlsx —, typed `ReportValue`s) by its
+shift's inspections, its crew, its vehicles with where each was left and its instruments with their
+calibration, each a sheet of its own in the .xlsx —, typed `ReportValue`s) by its
 layout in `application/service/impl`, and `ReportExportServiceImpl` hands it to the `ReportExporter`
 of the requested format. The exporters are `@Component`s indexed by format at startup — the same
 registry-by-key as the master-data handlers, failing the startup on a duplicate or a missing one — so
@@ -304,7 +312,7 @@ and the columns the PDF leaves out.
 
 ### Auditing
 
-Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track, blocking-disconnector and lineman collections),
+Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track, blocking-disconnector, lineman and instrument collections),
 `MaintenanceShiftVehicle` (a vehicle of a shift and where it was left, `V20`), `MaintenanceTaskCheckItem`,
 `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`, `MaintenanceMaterialUsage`.
 Not audited on purpose: `MaintenanceStatusHistory`
@@ -315,9 +323,9 @@ Not audited on purpose: `MaintenanceStatusHistory`
 `GET /<resource>/{id}/revisions`. The `asset` of an order, a task, an inspection and a defect is
 `@Audited(targetAuditMode = NOT_AUDITED)`, like a shift's disconnectors: an asset that only arrived
 by master data has no revision (native SQL), so a revision reads it as it is now instead of looking
-for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`). The leader, supervisor and
-linemen of a shift and the vehicle of each `MaintenanceShiftVehicle` are `NOT_AUDITED` targets for the
-same reason. A shift's vehicles are `@OrderBy("id ASC")`, never by an audit column: Envers applies the
+for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`). The leader, supervisor,
+linemen and instruments of a shift and the vehicle of each `MaintenanceShiftVehicle` are `NOT_AUDITED`
+targets for the same reason (`JpaEntityModelTest` guards them). A shift's vehicles are `@OrderBy("id ASC")`, never by an audit column: Envers applies the
 `@OrderBy` to `maintenance_shift_vehicle_aud`, which has none; `vehiclesByCode()` orders what is shown.
 A background operation keeps its request's source, URI and correlation in its revisions
 (`BackgroundOperationContext`, read by `AuditRevisionListener`).
@@ -348,7 +356,10 @@ A background operation keeps its request's source, URI and correlation in its re
   transaction and the work runs on a virtual thread). Add a method to the
   matching class instead of a new class; the events of each hook are methods of `BusinessLayerTest`
   (`RecordingEventPublisher`) and the envelope, the actor and the correlation of `MessagingLayerTest`.
-  The crew rules, the parallel stock transitions and the deferred retry are methods of
-  `BusinessLayerTest`; the resources handlers against PostgreSQL (adoption, the watermark, a team of
-  construction) of `MasterDataAssetSyncDataJpaTest`; the resources topology of `MessagingLayerTest`;
+  The crew rules (the expiries and the drivers too; the matching itself is `DomainModelTest`), the
+  parallel stock transitions and the deferred retry are methods of `BusinessLayerTest`; the resources
+  handlers against PostgreSQL (adoption, the watermark, a team of construction, the `jsonb`
+  qualifications and documents, the instruments) of `MasterDataAssetSyncDataJpaTest`; the resources
+  topology of `MessagingLayerTest`; the shift report's appendices in the real .xlsx and .pdf of
+  `ReportExportLayerTest`;
 the 202 of `Prefer: respond-async` of `MaintenanceOrderControllerMockMvcTest`.

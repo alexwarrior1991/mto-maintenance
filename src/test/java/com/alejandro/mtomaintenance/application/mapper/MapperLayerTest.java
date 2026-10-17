@@ -12,6 +12,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionTemplateItem;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskCheckItem;
@@ -42,6 +43,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TaskUnit;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.BeanUtils;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -133,6 +135,35 @@ class MapperLayerTest {
             assertEquals("HSA-NS5", response.blockingDisconnectors().getFirst().name());
             assertNotNull(response.status());
         });
+    }
+
+    @Test
+    void shiftMapperListsTheInstrumentsByCodeWithTheirCalibration() {
+        contextRunner.run(context -> {
+            MaintenanceShiftMapper mapper = context.getBean(MaintenanceShiftMapper.class);
+            MaintenanceShift shift = MaintenanceShift.builder().code("SH-000002").shiftDate(LocalDate.of(2026, 10, 17))
+                    .possessionType(PossessionType.FULL).trackIds(new LinkedHashSet<>(List.of(2L))).build();
+            shift.getInstruments().add(instrument("VD-02", "VOLTAGE_DETECTOR", null));
+            shift.getInstruments().add(instrument("EP-07", "EARTHING_POLE", LocalDate.of(2027, 1, 10)));
+
+            MaintenanceShiftResponse response = mapper.toResponse(shift);
+
+            assertEquals(List.of("EP-07", "VD-02"), response.instruments().stream().map(instrument -> instrument.code()).toList());
+            assertEquals("EARTHING_POLE", response.instruments().getFirst().kind());
+            assertEquals(LocalDate.of(2027, 1, 10), response.instruments().getFirst().calibrationExpiresOn());
+            assertNull(response.instruments().getLast().calibrationExpiresOn());
+        });
+    }
+
+    private static MaintenanceInstrument instrument(String code, String kind, LocalDate calibrationExpiresOn) {
+        MaintenanceInstrument instrument = BeanUtils.instantiateClass(MaintenanceInstrument.class);
+        ReflectionTestUtils.setField(instrument, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(instrument, "code", code);
+        ReflectionTestUtils.setField(instrument, "name", "Instrument " + code);
+        ReflectionTestUtils.setField(instrument, "kind", kind);
+        ReflectionTestUtils.setField(instrument, "active", true);
+        ReflectionTestUtils.setField(instrument, "calibrationExpiresOn", calibrationExpiresOn);
+        return instrument;
     }
 
     @Test

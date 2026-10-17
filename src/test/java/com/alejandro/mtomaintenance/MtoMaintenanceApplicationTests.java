@@ -56,7 +56,13 @@ import com.alejandro.mtomaintenance.application.dto.task.GenerationSelection;
 import com.alejandro.mtomaintenance.application.dto.task.InlineDefectRequest;
 import com.alejandro.mtomaintenance.application.dto.task.MaintenanceTaskResponse;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
+import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
+import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftUpdateRequest;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftInstrumentResponse;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInstrumentRepository;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.alejandro.mtomaintenance.configuration.async.AsyncConfiguration;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetSwitch;
@@ -184,6 +190,12 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
 
     @Autowired
     private OutboxMessageRepository outboxMessageRepository;
+
+    @Autowired
+    private MaintenanceInstrumentRepository instrumentRepository;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @Test
     void contextLoads() {
@@ -396,6 +408,40 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         assertTrue(monthly.ordersCompleted() >= 1);
         assertTrue(monthly.profilesChecked() >= 2);
         assertTrue(monthly.defectsResolved() >= 1);
+    }
+
+    /**
+     * Los instrumentos de un turno contra la base de verdad: llegan de mto-resources por su upsert nativo,
+     * el turno los lleva por codigo, uno con la calibracion caducada esa noche no entra y uno que no ha
+     * llegado es 404 MSI-404, sin tocar lo guardado.
+     */
+    @Test
+    void aShiftTakesItsInstrumentsAndRefusesOneWhoseCalibrationExpiredOrThatHasNotArrived() {
+        LocalDate night = LocalDate.now(ZoneOffset.UTC).plusDays(3);
+        UUID pole = UUID.randomUUID();
+        UUID detector = UUID.randomUUID();
+        UUID lapsed = UUID.randomUUID();
+        String suffix = pole.toString().substring(0, 6).toUpperCase();
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            instrumentRepository.upsertFromResources(pole, "EP-" + suffix, "Earthing pole", "EARTHING_POLE", "SN-1", night, true, 1L);
+            instrumentRepository.upsertFromResources(detector, "VD-" + suffix, "Voltage detector", "VOLTAGE_DETECTOR", null, null, true, 2L);
+            instrumentRepository.upsertFromResources(lapsed, "MS-" + suffix, "Dynamometer", "MEASURING", null, night.minusDays(1), true, 3L);
+        });
+
+        MaintenanceShiftResponse shift = shiftService.create(new MaintenanceShiftRequest(night, null, null, null, PossessionType.FULL, null, null,
+                null, null, null, 6L, Set.of(System.nanoTime()), null, null, null, null, null, null, null, null, null, Set.of(detector, pole)));
+        assertEquals(List.of("EP-" + suffix, "VD-" + suffix), shift.instruments().stream().map(ShiftInstrumentResponse::code).toList());
+        assertEquals(night, shift.instruments().getFirst().calibrationExpiresOn(), "Its last valid day is the night of the shift");
+
+        ShiftException expired = assertThrows(ShiftException.class, () -> shiftService.update(shift.id(), new MaintenanceShiftUpdateRequest(
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                Set.of(pole, lapsed), shift.version())));
+        assertTrue(expired.getMessage().contains("instrument MS-" + suffix + ": calibration expired"), expired.getMessage());
+        NotFoundException unknown = assertThrows(NotFoundException.class, () -> shiftService.update(shift.id(), new MaintenanceShiftUpdateRequest(
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                Set.of(UUID.randomUUID()), shift.version())));
+        assertEquals("Maintenance instrument", unknown.getAggregate());
+        assertEquals(2, shiftService.findById(shift.id()).instruments().size(), "A refused change leaves the instruments as they were");
     }
 
     /** Inspeccion -> defecto -> orden correctiva, con la idempotencia de los dos pasos y el enlace del defecto a la orden. */

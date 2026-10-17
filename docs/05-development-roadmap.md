@@ -30,6 +30,11 @@
   generation of a package waiting for its lock without holding a connection.
 - Order transitions talk to `mto-stock` for all their lines at once, on virtual threads, under one
   deadline; a line cut by it is `FAILED` and retried right after commit.
+- Qualifications and expiries (`V22`): the qualifications of the people, the documents of the
+  vehicles and the instruments of `mto-resources` in the snapshots; nothing expired at the shift's
+  date gets into a shift (`ShiftQualifications`, 409 `SHF-001`), each self-propelled vehicle starts
+  with a different qualified driver, and the instruments of a shift (`instrumentIds`, `MSI-404`) in
+  its events and in the `Instruments` appendix of its report.
 
 ## Next
 

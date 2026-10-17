@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDe
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspection;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspectionItem;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
@@ -263,9 +264,10 @@ public final class MaintenanceEvents {
     }
 
     /**
-     * La dotacion y los vehiculos de mto-resources: solo ids, codigos y el usuario del jefe (a quien se
-     * avisa), porque mto-notification copia el {@code values} entero a su registro. {@code vehicles}
-     * lleva donde se dejo cada uno, que es lo que lee mto-resources al cerrar.
+     * La dotacion, los vehiculos y los instrumentos de mto-resources: solo ids, codigos y el usuario del
+     * jefe (a quien se avisa), porque mto-notification copia el {@code values} entero a su registro.
+     * {@code vehicles} lleva donde se dejo cada uno, que es lo que lee mto-resources al cerrar. Los
+     * instrumentos ({@code V22}) van al final, por codigo, como los vehiculos.
      */
     private static void crew(Map<String, Object> values, MaintenanceShift shift) {
         List<Map<String, Object>> vehicles = new ArrayList<>();
@@ -298,6 +300,9 @@ public final class MaintenanceEvents {
         values.put("supervisorPersonId", shift.getSupervisor() == null ? null : id(shift.getSupervisor().getId()));
         values.put("linemanPersonIds", shift.getLinemen() == null ? List.of()
                 : shift.getLinemen().stream().map(person -> person.getId().toString()).sorted().toList());
+        List<MaintenanceInstrument> instruments = shift.getInstruments() == null ? List.of() : shift.instrumentsByCode();
+        values.put("instrumentIds", instruments.stream().map(instrument -> id(instrument.getId())).toList());
+        values.put("instrumentCodes", instruments.stream().map(MaintenanceInstrument::getCode).toList());
     }
 
     // ---------------------------------------------------------------------------- materials

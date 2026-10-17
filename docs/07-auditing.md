@@ -14,10 +14,11 @@ Hibernate Envers, `audit_revision` as the custom revision entity (instant, usern
 source `HTTP`/`MESSAGING`/`SYSTEM`). Audited: `CatenaryAsset`, `MaintenanceOrder`,
 `MaintenanceTask` (with `maintenance_task_task_type_aud`), `MaintenanceTaskCheckItem`,
 `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`,
-`MaintenanceMaterialUsage`, `MaintenanceShift` (with its tracks, its blocking disconnectors and,
-since `V20`, its linemen, `maintenance_shift_lineman_aud`) and `MaintenanceShiftVehicle` (`V20`, a
-vehicle of a shift with where it was left). Who went out that night and in what is history of the
-shift: its leader, supervisor and linemen are in its revisions, and parking a vehicle at close is a
+`MaintenanceMaterialUsage`, `MaintenanceShift` (with its tracks, its blocking disconnectors, since
+`V20` its linemen, `maintenance_shift_lineman_aud`, and since `V22` its instruments,
+`maintenance_shift_instrument_aud`) and `MaintenanceShiftVehicle` (`V20`, a vehicle of a shift with
+where it was left). Who went out that night, in what and with what is history of the shift: its
+leader, supervisor, linemen and instruments are in its revisions, and parking a vehicle at close is a
 revision of that vehicle line, not of the shift.
 
 Not audited, on purpose: `MaintenanceStatusHistory` (append-only, a twin would duplicate it),
@@ -49,8 +50,9 @@ revision reads the asset as it is now. No request changes the asset of any of th
 the history of an order, an inspection or a defect on a profile, a disconnector or a section
 insulator answered 500. The crew of a shift is read the same way: its `teamLeader` and `supervisor`
 (columns of `maintenance_shift_aud`), its `linemen` (the join is audited, the person is not) and the
-`vehicle` of each `MaintenanceShiftVehicle` are `NOT_AUDITED` targets, so a revision shows the
-snapshot of `mto-resources` as it is now.
+`vehicle` of each `MaintenanceShiftVehicle` are `NOT_AUDITED` targets, and so are its `instruments`
+(`V22`; the join is audited, the instrument is not), so a revision shows the snapshot of
+`mto-resources` as it is now: a calibration renewed after the night reads with its new date.
 
 The vehicles of a shift are ordered by `id` (`@OrderBy("id ASC")`), not by `createdAt`: Envers
 applies the `@OrderBy` of a collection to its `_aud` table too, and `maintenance_shift_vehicle_aud`
