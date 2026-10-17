@@ -200,8 +200,8 @@ public class RabbitMqConfiguration {
 
     /**
      * El exchange de {@code mto-resources}, redeclarado con sus mismos atributos (topic, durable), como
-     * el de datos maestros: personas, equipos y vehiculos de los que salen la dotacion y los vehiculos
-     * de un turno. La cola, su DLX y su DLQ son de este servicio.
+     * el de datos maestros: personas, equipos, vehiculos e instrumentos de los que salen la dotacion, los
+     * vehiculos y los instrumentos de un turno. La cola, su DLX y su DLQ son de este servicio.
      */
     @Bean
     public TopicExchange resourcesExchange() {
@@ -216,7 +216,7 @@ public class RabbitMqConfiguration {
                 .build();
     }
 
-    /** Un binding por clave ({@code mto.resources.person.*}, {@code team.*}, {@code vehicle.*}): nada mas llega aqui. */
+    /** Un binding por clave ({@code mto.resources.person.*}, {@code team.*}, {@code vehicle.*}, {@code instrument.*}): nada mas llega aqui. */
     @Bean
     public Declarables resourcesBindings(Queue resourcesQueue, TopicExchange resourcesExchange) {
         return new Declarables(resourcesProperties.routingKeys().stream()

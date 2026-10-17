@@ -22,8 +22,9 @@ insulators) belongs to `mto-configuration` and arrives here as events; the mater
 stock belong to `mto-stock` and are reached through its REST API; the people, the organization and
 the fleet belong to `mto-resources` and arrive here as events. **Nothing of them is re-modelled
 here**: `catenary_asset` keeps only the snapshot a maintenance job needs (code, kp, track, station,
-sectioning), `crew_person`/`fleet_vehicle`/a synchronized `maintenance_team` only what a shift needs,
-and every material line stores the `mto-stock` ids.
+sectioning), `crew_person`/`fleet_vehicle`/`maintenance_instrument`/a synchronized `maintenance_team`
+only what a shift needs (with the qualifications, documents and calibration dates its expiry rules
+read, `V22`), and every material line stores the `mto-stock` ids.
 
 ⚠️ The local infrastructure (PostgreSQL, RabbitMQ, Keycloak, the trace collector, and `mto-stock`
 itself) is brought up by `mto-platform`. `compose.yaml` here holds **only the application**.
@@ -68,7 +69,7 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
   on) and `MaterialLineFactory` are shared helpers; `BudgetedOperations` runs the background
   operations; the `IncomingEvent*` pipeline, `IdempotentIncomingEventProcessor` →
   `DispatchingIncomingEventHandler` → `ResourcesPersonHandler`/`ResourcesVehicleHandler`/
-  `ResourcesTeamHandler`, applies the events of `mto-resources`), `mapper` (MapStruct,
+  `ResourcesTeamHandler`/`ResourcesInstrumentHandler`, applies the events of `mto-resources`), `mapper` (MapStruct,
   **entity → response only**: entities are built in the services with their Lombok builders because
   MapStruct cannot call the protected constructors), `exception`.
 - `infrastructure` — `persistence.entity` (JPA), `persistence.repository` (Spring Data + native
@@ -166,17 +167,19 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
 - Ids of `mto-configuration` entities are `bigint` columns (`track_id`, `station_id`,
   `execution_package_id`, `parking_track_id`); ids of `mto-stock` entities are `uuid` columns
   (`material_id`, `warehouse_id`, `stock_reservation_id`, `stock_project_id`); ids of `mto-resources`
-  are `uuid` too, the primary key of its snapshots (`crew_person`, `fleet_vehicle`), a team's
+  are `uuid` too, the primary key of its snapshots (`crew_person`, `fleet_vehicle`, `maintenance_instrument`), a team's
   `source_entity_id`, and `default_vehicle_id`/`parking_site_id` without FK. Its enums are `varchar`.
 - Codes come from sequences (`MO-000001`, `SH-`, `INS-`, `DEF-`), never from `MAX + 1`.
 - `CatenaryAssetRepository.upsertFromMasterData`/`deactivateFromMasterData` are native SQL with the
   sequence watermark inside the `WHERE` (never read-then-write), which is why master-data changes
   leave no Envers revision. They write `enabled_at_source` and recompute `enabled`, never
   `disabled_locally`; `deactivateByTrack` advances the watermark of what it disables (the sequence of
-  `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle` and the
-  synchronized team (`upsertFromResources`, watermark = the `sequenceNumber` of the `mto-resources`
-  outbox, not its `version`), and for `background_operation` (`V21`), whose cap and turn per scope
-  are decided by row count inside the writing statement.
+  `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle`,
+  `maintenance_instrument` and the synchronized team (`upsertFromResources`, watermark = the
+  `sequenceNumber` of the `mto-resources` outbox, not its `version`; the `jsonb` qualifications and
+  documents of `V22` go in the same statement, and an event without the key keeps the stored ones),
+  and for `background_operation` (`V21`), whose cap and turn per scope are decided by row count inside
+  the writing statement.
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
   `CHECK` that exactly one is set.
 - Every entity edited through the API extends `VersionedEntity` (`@Version`, `V11`): its response
@@ -198,12 +201,15 @@ The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before 
 `application/dto/messaging`.
 
 Consumer of `mto-resources` too (`mto.resources.exchange`, own queue
-`mto.maintenance.resources.queue` bound to `mto.resources.{person,team,vehicle}.*`, with DLX/DLQ,
+`mto.maintenance.resources.queue` bound to `mto.resources.{person,team,vehicle,instrument}.*`, with DLX/DLQ,
 `app.rabbitmq.resources.*`) through the same inbox (`source_service = mto-resources`):
 `ResourcesEventConsumer` checks the signature, the `origin` and that `data` has `entityName` and
 `eventName`, and `DispatchingIncomingEventHandler` routes by source and entity to the
-`IncomingEventHandler`s `person`, `vehicle` and `team` (only `MAINTENANCE` teams; the people a team
-carries are inserted with `ON CONFLICT DO NOTHING` until their own event arrives). This queue must
+`IncomingEventHandler`s `person` (with its `qualifications`), `vehicle` (with its `documents` and
+`type.requiredDriverQualification`), `team` (only `MAINTENANCE` teams; the people a team carries are
+inserted with `ON CONFLICT DO NOTHING` until their own event arrives) and `instrument` (`V22`). Its
+expiry warnings (`qualification.*`, `vehicle-document.*`, `calibration.*`) are not bound here: the
+shift reads the dates from the snapshot. This queue must
 exist before `mto-resources` publishes (`mandatory=true` there): deploy this service first.
 
 Producer of its own events for `mto-notification` (`mto.maintenance.exchange`, routing key
@@ -302,8 +308,8 @@ Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-typ
 `MaintenanceShiftVehicle` (a vehicle of a shift and where it was left, `V20`), `MaintenanceTaskCheckItem`,
 `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`, `MaintenanceMaterialUsage`.
 Not audited on purpose: `MaintenanceStatusHistory`
-(append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `CrewPerson`
-and `FleetVehicle` (snapshots of `mto-resources`, native SQL only), `BackgroundOperation` and
+(append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `CrewPerson`,
+`FleetVehicle` and `MaintenanceInstrument` (snapshots of `mto-resources`, native SQL only), `BackgroundOperation` and
 `OutboxMessage` (their own history), `MaintenanceTeam`, `MaintenanceTaskType`,
 `InspectionTemplate`/`Item` (catalogues). `JpaEntityModelTest` guards the split. History at
 `GET /<resource>/{id}/revisions`. The `asset` of an order, a task, an inspection and a defect is

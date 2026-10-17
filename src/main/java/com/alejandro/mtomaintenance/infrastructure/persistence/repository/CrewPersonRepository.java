@@ -15,17 +15,25 @@ import java.util.UUID;
  */
 public interface CrewPersonRepository extends JpaRepository<CrewPerson, UUID> {
 
-    /** De su propio evento ({@code person.*}). Sin marca, se aplica y conserva la guardada. */
+    /**
+     * De su propio evento ({@code person.*}). Sin marca, se aplica y conserva la guardada.
+     *
+     * <p>{@code qualifications} es la lista de la persona ya en JSON ({@code [{code, kind, drivingLicence,
+     * expiresOn}]}), escrita en la misma sentencia y con la misma marca; {@code null} (un evento de un
+     * mto-resources anterior, sin la clave) deja la que habia.</p>
+     */
     @Modifying
     @Query(value = """
-            insert into crew_person (id, code, full_name, username, category, active, source_sequence_number, created_at, updated_at)
-            values (:id, :code, :fullName, cast(:username as varchar), :category, :active, cast(:sequenceNumber as bigint), now(), now())
+            insert into crew_person (id, code, full_name, username, category, active, qualifications, source_sequence_number, created_at, updated_at)
+            values (:id, :code, :fullName, cast(:username as varchar), :category, :active,
+                    coalesce(cast(:qualifications as jsonb), '[]'::jsonb), cast(:sequenceNumber as bigint), now(), now())
             on conflict (id) do update
                set code = excluded.code,
                    full_name = excluded.full_name,
                    username = excluded.username,
                    category = excluded.category,
                    active = excluded.active,
+                   qualifications = coalesce(cast(:qualifications as jsonb), crew_person.qualifications),
                    source_sequence_number = coalesce(excluded.source_sequence_number, crew_person.source_sequence_number),
                    updated_at = now()
              where crew_person.source_sequence_number is null
@@ -34,7 +42,7 @@ public interface CrewPersonRepository extends JpaRepository<CrewPerson, UUID> {
             """, nativeQuery = true)
     int upsertFromResources(@Param("id") UUID id, @Param("code") String code, @Param("fullName") String fullName,
                             @Param("username") String username, @Param("category") String category, @Param("active") boolean active,
-                            @Param("sequenceNumber") Long sequenceNumber);
+                            @Param("qualifications") String qualifications, @Param("sequenceNumber") Long sequenceNumber);
 
     /**
      * De dentro del evento de un equipo, que puede llegar antes que el de la persona: solo si no estaba,

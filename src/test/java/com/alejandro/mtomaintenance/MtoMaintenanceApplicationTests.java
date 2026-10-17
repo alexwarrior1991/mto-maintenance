@@ -17,6 +17,7 @@ import com.alejandro.mtomaintenance.application.service.MaintenanceShiftService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTaskTypeService;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTeamService;
+import com.alejandro.mtomaintenance.application.service.IncomingEventHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEntityHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventHandler;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor;
@@ -140,6 +141,9 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
     private List<MasterDataEntityHandler> masterDataEntityHandlers;
 
     @Autowired(required = false)
+    private List<IncomingEventHandler> incomingEventHandlers;
+
+    @Autowired(required = false)
     private Tracer tracer;
 
     @Autowired
@@ -228,6 +232,18 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         assertThat(masterDataEntityHandlers)
                 .extracting(MasterDataEntityHandler::entityName)
                 .containsAll(BusinessServices.HANDLED_ENTITIES);
+    }
+
+    /** Las entidades de mto-resources que llegan por su cola tienen cada una su manejador (V19, y V22 los instrumentos). */
+    @Test
+    void theResourcesHandlersAreRegistered() {
+        assertThat(incomingEventHandlers)
+                .withFailMessage("No hay ningun IncomingEventHandler en el contexto")
+                .isNotNull();
+        assertThat(incomingEventHandlers)
+                .filteredOn(handler -> "mto-resources".equals(handler.sourceService()))
+                .extracting(IncomingEventHandler::entityName)
+                .containsExactlyInAnyOrder("person", "team", "vehicle", "instrument");
     }
 
     @Test

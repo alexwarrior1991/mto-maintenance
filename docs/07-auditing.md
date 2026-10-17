@@ -25,9 +25,10 @@ Not audited, on purpose: `MaintenanceStatusHistory` (append-only, a twin would d
 and read as "never changed"; the switches' history lives in `mto-configuration`), `OutboxMessage`
 (written only by the outbox; its history is itself), `MaintenanceTeam`,
 `MaintenanceTaskType`, `InspectionTemplate`/`Item` (catalogues managed by migrations; a team
-synchronized from `mto-resources` is written by native SQL anyway), `CrewPerson` and `FleetVehicle`
-(snapshots of `mto-resources` written only with native SQL, like `CatenaryAssetSwitch`: a twin would
-sit empty; their history lives in `mto-resources`) and `BackgroundOperation` (`V21`: written only by
+synchronized from `mto-resources` is written by native SQL anyway), `CrewPerson`, `FleetVehicle` and
+`MaintenanceInstrument` (`V22`) (snapshots of `mto-resources` written only with native SQL, like
+`CatenaryAssetSwitch`: a twin would sit empty; their history, their qualifications, documents and
+calibrations included, lives in `mto-resources`) and `BackgroundOperation` (`V21`: written only by
 its native statements, its own history, and purged).
 `@Audited` goes on each entity, never on `AuditableEntity`; `JpaEntityModelTest` guards the
 partition and `EnversAuditDataJpaTest` checks the revisions end to end (it disables the test

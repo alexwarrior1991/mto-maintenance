@@ -135,9 +135,10 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         assertTrue(tables.containsAll(List.of("catenary_asset_aud", "maintenance_order_aud", "maintenance_task_aud", "maintenance_shift_aud",
                 "maintenance_inspection_aud", "catenary_defect_aud", "maintenance_material_usage_aud", "maintenance_task_task_type_aud",
                 "maintenance_shift_track_aud", "maintenance_shift_disconnector_aud", "maintenance_shift_vehicle_aud",
-                "maintenance_shift_lineman_aud")));
+                "maintenance_shift_lineman_aud", "maintenance_shift_instrument_aud")));
         assertFalse(tables.contains("crew_person_aud"), "A snapshot of mto-resources written only with native SQL");
         assertFalse(tables.contains("fleet_vehicle_aud"));
+        assertFalse(tables.contains("maintenance_instrument_aud"));
         assertFalse(tables.contains("maintenance_status_history_aud"));
         assertFalse(tables.contains("maintenance_task_type_aud"));
         assertFalse(tables.contains("inbox_message_aud"));
@@ -151,11 +152,11 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         UUID linemanB = UUID.randomUUID();
         UUID vehicleId = UUID.randomUUID();
         inTransaction(em -> {
-            personRepository.upsertFromResources(leaderId, "PER-" + leaderId.toString().substring(0, 8), "Yossi Cohen", "equipo.jefe", "TEAM_LEADER", true, 1L);
-            personRepository.upsertFromResources(linemanA, "PER-" + linemanA.toString().substring(0, 8), "Eli Katz", null, "WORKER", true, 1L);
-            personRepository.upsertFromResources(linemanB, "PER-" + linemanB.toString().substring(0, 8), "Noam Biton", null, "WORKER", true, 1L);
+            personRepository.upsertFromResources(leaderId, "PER-" + leaderId.toString().substring(0, 8), "Yossi Cohen", "equipo.jefe", "TEAM_LEADER", true, null, 1L);
+            personRepository.upsertFromResources(linemanA, "PER-" + linemanA.toString().substring(0, 8), "Eli Katz", null, "WORKER", true, null, 1L);
+            personRepository.upsertFromResources(linemanB, "PER-" + linemanB.toString().substring(0, 8), "Noam Biton", null, "WORKER", true, null, 1L);
             vehicleRepository.upsertFromResources(vehicleId, "DR-" + vehicleId.toString().substring(0, 6), "Tower car", "MTW", "Plasser MTW",
-                    "RAIL_ONLY", "CATENARY_TOWER_CAR", true, false, true, 8, "OPERATIONAL", true, true, 1L);
+                    "RAIL_ONLY", "CATENARY_TOWER_CAR", true, false, true, 8, "OPERATIONAL", true, true, null, null, false, 1L);
             return null;
         });
         String suffix = UUID.randomUUID().toString().substring(0, 8);
