@@ -234,7 +234,7 @@ stays.
 | `RG-03` | 30 | 20 | | `RP-02` | 45 | 20 |
 | `RG-04` | 45 | 20 | | `RP-03` | 60 | 20 |
 | `RG-06` | 20 | 15 | | `RP-04` | 30 | 15 |
-| `RG-09` | 20 | 15 | | `RP-05` | 20 | 3 |
+| `RG-09` | 20 | 15 | | `RP-05` (per span, `V22`) | 20 | 3 |
 | `RG-12` (per span) | 5 | 3 | | `RP-06` | 45 | 20 |
 | `RG-13` | 5 | 2 | | `RP-07` | 10 | 20 |
 | `RG-14` (per km) | 2 | 3 | | `RP-08` | 5 | 4 |
@@ -246,6 +246,10 @@ unit and is not carried. Tasks store no minutes, so the estimate of existing ord
 migration. With the default types, a profile is now 34 min instead of 40 (`RG-08` and `RG-10`, once
 per track, do not change), a section insulator 80 with turnouts and 40 without (180 and 75 before), and
 a disconnector 20 (10 before), plus 20 with a motor (45) and 15 for a surge arrester (20).
+
+`V22` changes the `unit` of `RP-05` from `DEFECT` to `SPAN`: the sheet gives its 3 minutes per span,
+like `RG-12`. The estimate does not change, because every unit but `KM` counts once per task; only what
+the catalogue says does.
 
 ## Snapshots of `mto-resources` (`V19`)
 
