@@ -13,9 +13,13 @@ public final class ResourcesRabbitMqNames {
 
     public static final String RESOURCES_EXCHANGE = "mto.resources.exchange";
 
-    /** Solo lo que un turno necesita: personas, equipos y vehiculos. Las ubicaciones no llegan aqui. */
+    /**
+     * Solo lo que un turno necesita: personas, equipos, vehiculos e instrumentos ({@code V22}). Las
+     * ubicaciones y los avisos de caducidad ({@code qualification.*}, {@code vehicle-document.*},
+     * {@code calibration.*}) no llegan aqui: la fecha la mira el turno sobre la instantanea.
+     */
     public static final List<String> RESOURCES_ROUTING_KEYS = List.of(
-            "mto.resources.person.*", "mto.resources.team.*", "mto.resources.vehicle.*");
+            "mto.resources.person.*", "mto.resources.team.*", "mto.resources.vehicle.*", "mto.resources.instrument.*");
 
     public static final String MAINTENANCE_RESOURCES_QUEUE = "mto.maintenance.resources.queue";
 

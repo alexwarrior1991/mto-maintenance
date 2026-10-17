@@ -166,6 +166,11 @@ class GlobalExceptionHandlerTest {
         assertEquals("TEA-409", codeOf(handler.handleDuplicateCode(new DuplicateCodeException("Maintenance team", "A"), request), HttpStatus.CONFLICT));
         assertEquals("SHF-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance shift", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
         assertEquals("TSK-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance task", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
+        // Lo que un turno nombra de mto-resources y aun no ha llegado por evento: una persona, un vehiculo, un instrumento.
+        assertEquals("CRW-404", codeOf(handler.handleNotFound(new NotFoundException("Crew person", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
+        assertEquals("FLT-404", codeOf(handler.handleNotFound(new NotFoundException("Fleet vehicle", UUID.randomUUID()), request), HttpStatus.NOT_FOUND));
+        assertEquals("MSI-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance instrument", UUID.randomUUID()), request),
+                HttpStatus.NOT_FOUND));
         // Un tipo de tarea se busca por codigo y su 404 no lleva agregado: Map.of no admite get(null), y
         // el NPE dentro del manejador acababa en un 500.
         assertEquals("APP-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance task type 'RG-99' was not found"), request),

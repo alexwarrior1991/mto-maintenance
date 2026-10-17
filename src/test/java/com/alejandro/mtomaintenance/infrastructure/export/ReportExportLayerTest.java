@@ -5,6 +5,14 @@ import com.alejandro.mtomaintenance.application.dto.export.ReportDocument;
 import com.alejandro.mtomaintenance.application.dto.export.ReportFormat;
 import com.alejandro.mtomaintenance.application.dto.export.ReportMediaTypes;
 import com.alejandro.mtomaintenance.application.dto.export.ReportValue;
+import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftInstrumentResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
+import com.alejandro.mtomaintenance.application.service.ReportExportService;
+import com.alejandro.mtomaintenance.application.service.ReportExporter;
+import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import com.lowagie.text.pdf.PdfReader;
 import com.lowagie.text.pdf.parser.PdfTextExtractor;
 import org.apache.poi.ss.usermodel.Cell;
@@ -17,6 +25,8 @@ import org.apache.poi.ss.util.PaneInformation;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.BeanUtils;
+import org.springframework.util.ClassUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -26,6 +36,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -222,6 +233,50 @@ class ReportExportLayerTest {
         assertFalse(printed.contains("SI-W41"), "a column with weight 0 is not printed in an appendix either");
     }
 
+    /**
+     * El parte de un turno de punta a punta, de su JSON al fichero: los instrumentos de mto-resources
+     * ({@code V22}) en su anexo, con la calibracion como fecha de verdad en el .xlsx y despues de los
+     * totales en el PDF.
+     */
+    @Test
+    void theShiftReportCarriesItsInstrumentsInTheirOwnAppendixInBothFormats() throws IOException {
+        ReportExportService exports = exportService();
+        ShiftReportResponse report = shiftReportWith(List.of(
+                new ShiftInstrumentResponse(UUID.randomUUID(), "EP-07", "Earthing pole 7", "EARTHING_POLE", LocalDate.of(2027, 1, 10)),
+                new ShiftInstrumentResponse(UUID.randomUUID(), "VD-02", "Voltage detector 2", "VOLTAGE_DETECTOR", null)));
+
+        byte[] workbookBytes = exports.exportShiftReport(report, ReportFormat.XLSX).content();
+        try (XSSFWorkbook workbook = (XSSFWorkbook) WorkbookFactory.create(new ByteArrayInputStream(workbookBytes))) {
+            XSSFSheet sheet = workbook.getSheet("Instruments");
+            assertNotNull(sheet, "the instruments are an appendix of their own, after the crew and the vehicles");
+            assertEquals(workbook.getSheetIndex("Vehicles") + 1, workbook.getSheetIndex(sheet));
+            int headerRow = 2;
+            assertEquals(List.of("Code", "Name", "Kind", "Calibrated until"), headers(sheet, headerRow));
+            Row pole = sheet.getRow(headerRow + 1);
+            assertEquals("EP-07", pole.getCell(0).getStringCellValue());
+            assertEquals("EARTHING_POLE", pole.getCell(2).getStringCellValue());
+            assertTrue(DateUtil.isCellDateFormatted(pole.getCell(3)), "the calibration date stays a date");
+            assertEquals(LocalDate.of(2027, 1, 10), pole.getCell(3).getLocalDateTimeCellValue().toLocalDate());
+            Row detector = sheet.getRow(headerRow + 2);
+            assertEquals("VD-02", detector.getCell(0).getStringCellValue());
+            Cell noCalibration = detector.getCell(3);
+            assertTrue(noCalibration == null || noCalibration.getCellType() == CellType.BLANK, "without a calibration the cell is empty");
+        }
+
+        byte[] pdfBytes = exports.exportShiftReport(report, ReportFormat.PDF).content();
+        StringBuilder all = new StringBuilder();
+        try (PdfReader reader = new PdfReader(pdfBytes)) {
+            for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+                all.append(textOf(pdfBytes, page)).append('\n');
+            }
+        }
+        String printed = all.toString();
+        assertTrue(printed.contains("Instruments"), printed);
+        assertTrue(printed.contains("Calibrated until"), printed);
+        assertTrue(printed.contains("10/01/2027"), "the date is printed as a date: " + printed);
+        assertTrue(printed.indexOf("VD-02") > printed.indexOf("Tasks completed"), "the appendix comes after the totals: " + printed);
+    }
+
     @Test
     void anAppendixNeedsATitleAndColumns() {
         ReportDocument.Table table = new ReportDocument.Table(List.of(new ReportDocument.Column("Code", 1)), List.of());
@@ -230,6 +285,30 @@ class ReportExportLayerTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new ReportDocument.Appendix("Inspections", new ReportDocument.Table(List.of(), List.of())));
         assertEquals(List.of(), document(rows(1)).appendices(), "a report without appendices has an empty list, not null");
+    }
+
+    /**
+     * El servicio de exportacion con los dos exportadores de verdad. Su implementacion es package-private,
+     * como todas las de {@code service.impl}: se construye por reflexion, como la construye Spring, para
+     * probar por su interfaz publica la disposicion real del parte y no una copia de ella.
+     */
+    private ReportExportService exportService() {
+        try {
+            Class<?> type = ClassUtils.forName("com.alejandro.mtomaintenance.application.service.impl.ReportExportServiceImpl",
+                    ReportExportLayerTest.class.getClassLoader());
+            return (ReportExportService) BeanUtils.instantiateClass(type.getDeclaredConstructor(List.class, ReportProperties.class),
+                    List.<ReportExporter>of(xlsx, pdf), new ReportProperties("UTC"));
+        } catch (ReflectiveOperationException missing) {
+            throw new AssertionError("the export service implementation is not where the layout expects it", missing);
+        }
+    }
+
+    private static ShiftReportResponse shiftReportWith(List<ShiftInstrumentResponse> instruments) {
+        MaintenanceShiftResponse shift = new MaintenanceShiftResponse(UUID.randomUUID(), "SH-000001", LocalDate.of(2026, 1, 27),
+                null, null, null, PossessionType.FULL, null, null, null, null, null, null,
+                List.of(), null, null, 6L, List.of(2L), null, null, null, null, null, List.of(), List.of(), instruments, null,
+                ShiftStatus.PLANNED, null, null, null);
+        return new ShiftReportResponse(shift, 0, 0, 0, 0, 0, List.of(), 0, List.of());
     }
 
     private static String flattened(String text) {

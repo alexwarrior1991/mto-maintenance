@@ -45,7 +45,8 @@ final class BusinessErrorCodeResolver {
             Map.entry("MaintenanceMaterialUsage", "MAT"),
             Map.entry("Material usage", "MAT"),
             Map.entry("Crew person", "CRW"),
-            Map.entry("Fleet vehicle", "FLT")
+            Map.entry("Fleet vehicle", "FLT"),
+            Map.entry("Maintenance instrument", "MSI")
     );
 
     private BusinessErrorCodeResolver() {

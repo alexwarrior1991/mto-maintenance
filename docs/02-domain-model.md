@@ -41,10 +41,20 @@ creation; optional `teamId`, `assignedUser`, `plannedDate`, `stockProjectId` (re
 stock project `EP-<executionPackageId>` when present). `estimatedMinutes` and `estimatedShifts`
 are computed from the task types (4.5 effective hours per shift), never stored.
 
+**An order of a team of `mto-resources` without a user goes to its leader** (`fillLeader`): at
+creation, on `assign` without `assignedUser` and on a `PATCH`/`PUT` that changes the team without
+touching `assignedUser`, the order takes the username of the team's leader; one that still had the
+leader of the previous team (given by this same rule) moves to the new one; on `assign`, an
+`assignedUser` equal to the one the order already has is not a choice (the dialogs send it back) and
+follows the same rule. A user given explicitly
+wins, and a local team (no leader) or a leader without a Keycloak user change nothing. The
+`order.status-changed`/`reassigned` event already carries `assignedUser`, so the
+`maintenance-order-assigned` rule of `mto-notification` tells the leader.
+
 | Transition | From | Rules |
 |---|---|---|
 | `plan` | `DRAFT` | `plannedDate` not in the past; reserves every `NOT_REQUESTED` material in stock |
-| `assign` | `PLANNED`, `ASSIGNED` → `ASSIGNED`; `IN_PROGRESS` keeps its status | `teamId` or `assignedUser` |
+| `assign` | `PLANNED`, `ASSIGNED` → `ASSIGNED`; `IN_PROGRESS` keeps its status | `teamId` or `assignedUser`; without a user, the leader of a team of `mto-resources` |
 | `start` | `PLANNED`, `ASSIGNED`; `DRAFT` only for `URGENT` | sets `actualStartDate` |
 | `complete` | `IN_PROGRESS` | no task `PENDING`/`IN_PROGRESS`; at least one `COMPLETED` task or `closingNotes`; `INSPECTION` needs an inspection with `originOrderId`; a `FAILED` or `REJECTED` material line blocks unless `force` (supervise), and the other lines keep what stock did even when that rejects the completion; consumes reservations or registers direct outputs; `PREVENTIVE` updates `asset.lastPreventiveCompletedAt` |
 | `cancel` | any non-terminal | reason required; releases reservations; open tasks → `CANCELLED`; linked defect `IN_PROGRESS` → `OPEN` |
@@ -138,7 +148,7 @@ minutes per unit are those of the plan's task sheet (`V18`, see `03-database.md`
 ## Shifts (`MaintenanceShift`) and teams (`MaintenanceTeam`)
 
 A shift is the unit of execution and the source of the daily report: date, team, base and vehicle as
-free text (what a local team had), its crew and its vehicles from `mto-resources`
+free text (what a local team had), its crew, its vehicles and its instruments from `mto-resources`
 ([below](#shift-crew-and-vehicles)), `possessionType` (`PARTIAL` on weekdays on main track, `FULL`
 on weekends), planned and actual window, `voltageCutoffAt`, `netWorkMinutes` (computed at close),
 the set of `blockingDisconnectors` opened to isolate the work zone (as many `DISCONNECTOR` assets as
@@ -162,9 +172,9 @@ possession or a `DIVERTED` section, is 409 `SHF-001` naming the task. The profil
 tasks (`GET /shifts/{id}/profiles`). An inspection can be recorded in a shift (`shiftId`): the shift
 must be `IN_PROGRESS` or `CLOSED` (one done after midnight is often written down at the end) and work
 on the asset's track or the one it connects with, or it is 409 `SHF-001`. The shift report lists those
-inspections (`inspectionsRecorded`, `inspections[]`) after its task rows, and its crew and its
-vehicles with where each was left (the `Crew` and `Vehicles` appendices of the .xlsx and the PDF; the
-JSON carries them in `shift`).
+inspections (`inspectionsRecorded`, `inspections[]`) after its task rows, its crew, its vehicles with
+where each was left and its instruments with their calibration (the `Crew`, `Vehicles` and
+`Instruments` appendices of the .xlsx and the PDF; the JSON carries them in `shift`).
 
 ### Teams
 
@@ -212,6 +222,8 @@ the free `vehicle` text, it is filled with the codes of the shift's vehicles.
 | The crew (leader and linemen; the supervisor does not ride) fits in the seats of the self-propelled vehicles, checked only when every one of them declares its seats: a missing figure is not taken as zero | Always |
 | No vehicle, leader or lineman in another open shift (`PLANNED`/`IN_PROGRESS`) of the same `shiftDate` (the windows are often empty, so the date is compared; the supervisor is not checked). One transaction-scoped advisory lock per vehicle and person, taken in a fixed order, so two shifts saved at once queue and the second sees the first | On an open shift |
 | A complete crew: a leader and 2 to 6 linemen (`CrewComposition`, the copy of the rule `mto-resources` applies to its teams: 3 to 7 people in one vehicle) | To start, and on any change while `IN_PROGRESS`; only on a shift with a crew (`hasCrew()`: a leader, linemen, or a synchronized team). A shift of a local team without a crew starts as before |
+| Nothing expired at the shift's date: a qualification of the leader, the supervisor or a lineman, a document of a vehicle, the calibration of an instrument; and no instrument retired (`ShiftQualifications`, [below](#qualifications-and-expiries)) | Always |
+| A different qualified driver for each self-propelled vehicle whose model requires a qualification | To start, and on any change while `IN_PROGRESS` |
 
 Closing says where each vehicle was left (`parkings[]` of `POST /shifts/{id}/close`, one per
 vehicle): a parking site of `mto-resources` (`parkingSiteId`), a track and kp (`trackId` of
@@ -221,9 +233,49 @@ description only is 409 `SHF-001`: it stays on a track or at a site with rail ac
 `parkings` the shift's `parkingPlace` stands, as before. `mto-resources` reads it from `shift.closed`,
 and from `shift.cancelled` of a shift that had started, to move each vehicle's position.
 
-The response carries `teamLeader`, `supervisor`, `linemen` (by code) and `vehicles` (by fleet code,
-`vehiclesByCode()`) with their `parking` (`null` until closed with one); the shift events and the
-report carry the same.
+The instruments taken that night (`V22`: earthing poles, voltage detectors, measuring equipment of
+`mto-resources`, `maintenance_instrument`) are a set chosen in the shift (`instrumentIds`), replaced
+whole like the linemen, never copied from the team; an unknown one is 404 `MSI-404`. The free
+`measurementEquipment` text stays for the shifts of before.
+
+The response carries `teamLeader`, `supervisor`, `linemen` (by code), `vehicles` (by fleet code,
+`vehiclesByCode()`) with their `parking` (`null` until closed with one) and `instruments` (by code,
+`instrumentsByCode()`: `id`, `code`, `name`, `kind`, `calibrationExpiresOn`); the shift events and the
+report carry the same (the events, only the instruments' ids and codes).
+
+## Qualifications and expiries
+
+What expires belongs to `mto-resources`: the qualifications of a person (a driving licence `LIC-B`, the
+rail auxiliary vehicle driver `RAIL-DRIVER`, the road-rail machine operator `RR-OPERATOR`...), the
+documents of a vehicle (road or rail inspection, insurance, crane or platform certificate) and the
+calibration of an instrument. Its events bring them into the snapshots (`V22`, `03-database.md`):
+`crew_person.qualifications` (`code`, `kind`, `drivingLicence`, `expiresOn`; all of them, also the
+expired ones), `fleet_vehicle.documents` (`kind`, `reference`, `expiresOn`), the qualification a
+vehicle's model requires of its driver (`fleet_vehicle.required_driver_qualification`) and
+`maintenance_instrument.calibration_expires_on`. Warning about what is about to expire is
+`mto-notification`'s (its `qualification.*`, `vehicle-document.*` and `calibration.*` events); here
+**what has expired does not get into a shift**.
+
+`ShiftQualifications` (`domain/model`, framework-free; it returns the reason, `ShiftCrew.check` turns it
+into a 409 `SHF-001`) reads everything at the shift's `shiftDate`, the night it is worked and not
+today: a shift planned for next week does not take what expires tomorrow. Expired is `expiresOn <
+shiftDate` (the last day still counts); a missing date never expires.
+
+- **Always** (create, any change, start): no expired qualification on the leader, the supervisor or a
+  lineman; no expired document on a vehicle of the shift; no instrument retired or with its
+  calibration expired. One message lists everything that has expired, so it is fixed at once.
+- **To start, and on any change while `IN_PROGRESS`**: each self-propelled vehicle whose model requires
+  a driver qualification gets a **different** person of the crew (the leader or a lineman; the
+  supervisor does not ride) holding it, valid that day. It is a bipartite matching (an augmenting path
+  per vehicle), not a loop that hands each vehicle the first who can drive it: a leader who could drive
+  the tower car and the road-rail drives one, and a lineman who only drives tower cars takes the
+  other. A shift still `PLANNED` may lack its drivers; a vehicle that does not move by itself, or whose
+  model requires nothing, needs none.
+
+A shift without crew, vehicles or instruments of `mto-resources` has nothing to check, so the shifts
+of before behave as they did. Renewing something in `mto-resources` reaches the snapshot by event and
+the next check sees it. Nothing re-checks a shift by itself; a change made after midnight is still
+weighed at the shift's date, and closing and cancelling never check.
 
 ## Inspections (`MaintenanceInspection`) and templates
 

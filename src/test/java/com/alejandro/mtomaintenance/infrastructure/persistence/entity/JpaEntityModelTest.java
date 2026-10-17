@@ -3,6 +3,7 @@ package com.alejandro.mtomaintenance.infrastructure.persistence.entity;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.hibernate.envers.Audited;
+import org.hibernate.envers.RelationTargetAuditMode;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -26,8 +27,9 @@ class JpaEntityModelTest {
         List<Class<?>> audited = List.of(CatenaryAsset.class, MaintenanceShift.class, MaintenanceOrder.class, MaintenanceTask.class,
                 MaintenanceTaskCheckItem.class, MaintenanceInspection.class, MaintenanceInspectionItem.class,
                 CatenaryDefect.class, MaintenanceMaterialUsage.class, MaintenanceShiftVehicle.class);
-        // CrewPerson y FleetVehicle son instantaneas de mto-resources escritas solo con SQL nativo: como
-        // CatenaryAssetSwitch, una gemela _aud se quedaria vacia. Su historial vive en mto-resources.
+        // CrewPerson, FleetVehicle y MaintenanceInstrument (V22) son instantaneas de mto-resources escritas
+        // solo con SQL nativo: como CatenaryAssetSwitch, una gemela _aud se quedaria vacia. Su historial vive
+        // en mto-resources.
         // CatenaryAssetSwitch se queda fuera por lo mismo que InboxMessage: sus filas las escribe
         // UNICAMENTE el manejador de datos maestros, asi que una gemela _aud se quedaria vacia y se
         // leeria como "nunca cambio". El historial del aislador vive en mto-configuration.
@@ -35,11 +37,27 @@ class JpaEntityModelTest {
         // BackgroundOperation (V21): la escriben sus sentencias nativas y es su propio historico.
         List<Class<?>> notAudited = List.of(MaintenanceStatusHistory.class, InboxMessage.class, MaintenanceTeam.class,
                 MaintenanceTaskType.class, InspectionTemplate.class, InspectionTemplateItem.class,
-                CatenaryAssetSwitch.class, CrewPerson.class, FleetVehicle.class, BackgroundOperation.class, AuditableEntity.class,
+                CatenaryAssetSwitch.class, CrewPerson.class, FleetVehicle.class, MaintenanceInstrument.class, BackgroundOperation.class,
+                AuditableEntity.class,
                 com.alejandro.mtomaintenance.infrastructure.messaging.outbox.OutboxMessage.class);
 
         audited.forEach(type -> assertTrue(type.isAnnotationPresent(Audited.class), type.getSimpleName() + " must be @Audited"));
         notAudited.forEach(type -> assertFalse(type.isAnnotationPresent(Audited.class), type.getSimpleName() + " must not be @Audited"));
+    }
+
+    /**
+     * Lo que un turno toma de mto-resources (la dotacion, los vehiculos y, desde V22, los instrumentos) no
+     * tiene gemela _aud: la revision del turno lo lee como esta ahora. Sin NOT_AUDITED, Envers buscaria
+     * maintenance_instrument_aud, que no existe.
+     */
+    @Test
+    void theSnapshotsOfMtoResourcesHangingFromAShiftAreReadAsTheyAreNow() throws NoSuchFieldException {
+        for (String field : List.of("teamLeader", "supervisor", "linemen", "instruments")) {
+            Audited audited = MaintenanceShift.class.getDeclaredField(field).getAnnotation(Audited.class);
+            assertTrue(audited != null && audited.targetAuditMode() == RelationTargetAuditMode.NOT_AUDITED, "MaintenanceShift." + field);
+        }
+        Audited vehicle = MaintenanceShiftVehicle.class.getDeclaredField("vehicle").getAnnotation(Audited.class);
+        assertTrue(vehicle != null && vehicle.targetAuditMode() == RelationTargetAuditMode.NOT_AUDITED, "MaintenanceShiftVehicle.vehicle");
     }
 
     @Test

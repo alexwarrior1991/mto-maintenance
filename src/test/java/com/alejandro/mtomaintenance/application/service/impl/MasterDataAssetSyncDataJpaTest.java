@@ -24,7 +24,13 @@ import com.alejandro.mtomaintenance.application.dto.messaging.IncomingEvent;
 import com.alejandro.mtomaintenance.application.dto.messaging.IncomingEventContext;
 import com.alejandro.mtomaintenance.application.service.IncomingEventHandler;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
+import com.alejandro.mtomaintenance.application.exception.ValidationException;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPersonRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.FleetVehicleRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInstrumentRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTeamRepository;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
 import jakarta.persistence.EntityManager;
@@ -40,6 +46,7 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,6 +55,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Los eventos de datos maestros, de punta a punta: inbox idempotente, upsert con marca de agua y desactivacion. */
@@ -83,6 +91,12 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
 
     @Autowired
     private CrewPersonRepository personRepository;
+
+    @Autowired
+    private FleetVehicleRepository vehicleRepository;
+
+    @Autowired
+    private MaintenanceInstrumentRepository instrumentRepository;
 
     @Test
     void twoDeliveriesOfAProfileLeaveASingleSynchronizedAssetAndOneProcessedInboxRow() {
@@ -866,6 +880,131 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         assertEquals(2L, person.getSourceSequenceNumber());
     }
 
+    @Test
+    void aPersonKeepsItsQualificationsWithTheirExpiryAndAnEventWithoutThemKeepsTheStoredOnes() {
+        UUID personId = UUID.randomUUID();
+        String code = "PER-" + personId.toString().substring(0, 8);
+        IncomingEventHandler people = new ResourcesPersonHandler(personRepository);
+        Map<String, Object> licence = qualification("LIC-B", "DRIVING_LICENCE", "B", null);
+        licence.put("name", "Driving licence B"); // una clave que aqui no se guarda
+        Map<String, Object> event = personValues(code, "Eli Katz", "TEAM_LEADER", true);
+        event.put("qualifications", List.of(licence, qualification("RAIL-DRIVER", "VEHICLE_OPERATION", null, "2027-03-31")));
+
+        people.handle(new IncomingEvent("person", personId.toString(), "updated", event), resourcesContext(5L));
+        entityManager.flush();
+        entityManager.clear();
+        CrewPerson stored = personRepository.findById(personId).orElseThrow();
+        assertEquals(List.of(new CrewPerson.Qualification("LIC-B", "DRIVING_LICENCE", "B", null),
+                new CrewPerson.Qualification("RAIL-DRIVER", "VEHICLE_OPERATION", null, LocalDate.of(2027, 3, 31))), stored.getQualifications());
+
+        // Un mto-resources anterior no trae la clave: lo demas se aplica y las cualificaciones se quedan.
+        people.handle(personEvent(personId, code, "Eli Katz (renamed)", "TEAM_LEADER", true), resourcesContext(6L));
+        // Uno que llega tarde no las vacia.
+        Map<String, Object> late = personValues(code, "Eli Katz (old)", "TEAM_LEADER", true);
+        late.put("qualifications", List.of());
+        people.handle(new IncomingEvent("person", personId.toString(), "updated", late), resourcesContext(4L));
+        entityManager.flush();
+        entityManager.clear();
+        CrewPerson kept = personRepository.findById(personId).orElseThrow();
+        assertEquals("Eli Katz (renamed)", kept.getFullName());
+        assertEquals(2, kept.getQualifications().size(), "Without the key the stored qualifications stay");
+        assertEquals(6L, kept.getSourceSequenceNumber());
+
+        Map<String, Object> none = personValues(code, "Eli Katz (renamed)", "TEAM_LEADER", true);
+        none.put("qualifications", List.of());
+        people.handle(new IncomingEvent("person", personId.toString(), "updated", none), resourcesContext(7L));
+        entityManager.flush();
+        entityManager.clear();
+        assertEquals(List.of(), personRepository.findById(personId).orElseThrow().getQualifications(), "An empty list empties them");
+
+        Map<String, Object> garbled = personValues(code, "Eli Katz", "TEAM_LEADER", true);
+        garbled.put("qualifications", List.of(qualification("RAIL-DRIVER", "VEHICLE_OPERATION", null, "31/03/2027")));
+        assertThrows(ValidationException.class, () -> people.handle(new IncomingEvent("person", personId.toString(), "updated", garbled),
+                resourcesContext(8L)), "A date that cannot be read is not taken for one that never expires");
+    }
+
+    @Test
+    void aPersonThatArrivesInsideATeamHasNoQualificationsUntilItsOwnEvent() {
+        Map<String, Object> lineman = crewMember("WORKER");
+        new ResourcesTeamHandler(teamRepository, personRepository).handle(teamEvent(UUID.randomUUID(),
+                "Q" + (System.nanoTime() % 1_000_000_000L), "Team", crewMember("TEAM_LEADER"), null, List.of(lineman, crewMember("WORKER")),
+                List.of()), resourcesContext(3L));
+        entityManager.flush();
+        entityManager.clear();
+
+        assertEquals(List.of(), personRepository.findById(UUID.fromString((String) lineman.get("personId"))).orElseThrow().getQualifications());
+    }
+
+    @Test
+    void aVehicleKeepsItsDocumentsAndTheQualificationItsDriverNeedsAndAnEventWithoutThemKeepsThem() {
+        UUID vehicleId = UUID.randomUUID();
+        String code = "RR-" + vehicleId.toString().substring(0, 6);
+        IncomingEventHandler vehicles = new ResourcesVehicleHandler(vehicleRepository);
+        Map<String, Object> created = vehicleValues(code, "RR-OPERATOR");
+        created.put("documents", List.of(document("INSURANCE", "POL-9", "2026-12-31"), document("ROAD_INSPECTION", "ITV-2026-118", "2027-02-28")));
+
+        vehicles.handle(new IncomingEvent("vehicle", vehicleId.toString(), "created", created), resourcesContext(3L));
+        entityManager.flush();
+        entityManager.clear();
+        FleetVehicle stored = vehicleRepository.findById(vehicleId).orElseThrow();
+        assertEquals("RR-OPERATOR", stored.getRequiredDriverQualification());
+        assertEquals(List.of(new FleetVehicle.Document("INSURANCE", "POL-9", LocalDate.of(2026, 12, 31)),
+                new FleetVehicle.Document("ROAD_INSPECTION", "ITV-2026-118", LocalDate.of(2027, 2, 28))), stored.getDocuments());
+
+        // Sin documents ni type.requiredDriverQualification (un mto-resources anterior): se quedan.
+        Map<String, Object> older = vehicleValues(code, null);
+        ((Map<?, ?>) older.get("type")).remove("requiredDriverQualification");
+        older.put("name", "Renamed");
+        vehicles.handle(new IncomingEvent("vehicle", vehicleId.toString(), "updated", older), resourcesContext(4L));
+        // Uno que llega tarde no los vacia.
+        Map<String, Object> late = vehicleValues(code, null);
+        late.put("documents", List.of());
+        vehicles.handle(new IncomingEvent("vehicle", vehicleId.toString(), "updated", late), resourcesContext(2L));
+        entityManager.flush();
+        entityManager.clear();
+        FleetVehicle kept = vehicleRepository.findById(vehicleId).orElseThrow();
+        assertEquals("Renamed", kept.getName());
+        assertEquals("RR-OPERATOR", kept.getRequiredDriverQualification());
+        assertEquals(2, kept.getDocuments().size());
+
+        // Con la clave a null, su modelo ya no exige nada; con la lista vacia, no tiene documentos.
+        Map<String, Object> cleared = vehicleValues(code, null);
+        cleared.put("documents", List.of());
+        vehicles.handle(new IncomingEvent("vehicle", vehicleId.toString(), "updated", cleared), resourcesContext(5L));
+        entityManager.flush();
+        entityManager.clear();
+        FleetVehicle now = vehicleRepository.findById(vehicleId).orElseThrow();
+        assertNull(now.getRequiredDriverQualification());
+        assertEquals(List.of(), now.getDocuments());
+    }
+
+    @Test
+    void anInstrumentArrivesAsItsSnapshotAndALateEventIsDiscarded() {
+        UUID instrumentId = UUID.randomUUID();
+        String code = "EP-" + instrumentId.toString().substring(0, 6).toUpperCase();
+        IncomingEventHandler instruments = new ResourcesInstrumentHandler(instrumentRepository);
+
+        instruments.handle(instrumentEvent(instrumentId, "created", code, "2027-01-10", true), resourcesContext(10L));
+        instruments.handle(instrumentEvent(instrumentId, "updated", code, "2026-01-10", false), resourcesContext(9L));
+        entityManager.flush();
+        entityManager.clear();
+        MaintenanceInstrument stored = instrumentRepository.findById(instrumentId).orElseThrow();
+        assertEquals(code, stored.getCode());
+        assertEquals("Earthing pole " + code, stored.getName());
+        assertEquals("EARTHING_POLE", stored.getKind());
+        assertEquals("SN-" + code, stored.getSerialNumber());
+        assertEquals(LocalDate.of(2027, 1, 10), stored.getCalibrationExpiresOn());
+        assertTrue(stored.getActive(), "The late event is discarded");
+        assertEquals(10L, stored.getSourceSequenceNumber());
+
+        instruments.handle(instrumentEvent(instrumentId, "deactivated", code, null, false), resourcesContext(11L));
+        entityManager.flush();
+        entityManager.clear();
+        MaintenanceInstrument retired = instrumentRepository.findById(instrumentId).orElseThrow();
+        assertFalse(retired.getActive());
+        assertNull(retired.getCalibrationExpiresOn(), "Without a calibration there is nothing that expires");
+    }
+
     /** El mismo mensaje con {@code station} a null: un seccionador que no es de ninguna estacion. */
     private static MasterDataChangedMessage withoutStation(MasterDataChangedMessage message) {
         Map<String, Object> values = new HashMap<>(message.data().values());
@@ -944,6 +1083,66 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         values.put("supervisor", supervisor);
         values.put("members", members);
         return new IncomingEvent("team", teamId.toString(), "updated", values);
+    }
+
+    /** Una cualificacion como la publica mto-resources en {@code person.*.qualifications}. */
+    private static Map<String, Object> qualification(String code, String kind, String drivingLicence, String expiresOn) {
+        Map<String, Object> qualification = new HashMap<>();
+        qualification.put("code", code);
+        qualification.put("kind", kind);
+        qualification.put("drivingLicence", drivingLicence);
+        qualification.put("expiresOn", expiresOn);
+        return qualification;
+    }
+
+    private static Map<String, Object> personValues(String code, String fullName, String category, boolean active) {
+        return new HashMap<>(personEvent(UUID.randomUUID(), code, fullName, category, active).values());
+    }
+
+    /** Un documento como lo publica mto-resources en {@code vehicle.*.documents}. */
+    private static Map<String, Object> document(String kind, String reference, String expiresOn) {
+        Map<String, Object> document = new HashMap<>();
+        document.put("kind", kind);
+        document.put("reference", reference);
+        document.put("expiresOn", expiresOn);
+        return document;
+    }
+
+    /** Un vehiculo de un modelo bivial como lo publica mto-resources, con lo que su modelo exige al conductor. */
+    private static Map<String, Object> vehicleValues(String code, String requiredDriverQualification) {
+        Map<String, Object> type = new HashMap<>();
+        type.put("code", "RR-9A");
+        type.put("name", "Road-rail 9A");
+        type.put("mobility", "ROAD_RAIL");
+        type.put("category", "ROAD_RAIL_PLATFORM");
+        type.put("selfPropelled", true);
+        type.put("portable", false);
+        type.put("seats", 5);
+        type.put("capabilities", List.of("PLATFORM"));
+        type.put("requiredDriverQualification", requiredDriverQualification);
+        Map<String, Object> values = new HashMap<>();
+        values.put("code", code);
+        values.put("name", "Road-rail " + code);
+        values.put("type", type);
+        values.put("operationalStatus", "OPERATIONAL");
+        values.put("available", true);
+        values.put("active", true);
+        return values;
+    }
+
+    /** Un instrumento con las claves de {@code instrument.*} de mto-resources. */
+    private static IncomingEvent instrumentEvent(UUID instrumentId, String eventName, String code, String calibrationExpiresOn, boolean active) {
+        Map<String, Object> values = new HashMap<>();
+        values.put("code", code);
+        values.put("name", "Earthing pole " + code);
+        values.put("kind", "EARTHING_POLE");
+        values.put("serialNumber", "SN-" + code);
+        values.put("calibratedOn", calibrationExpiresOn == null ? null : "2026-01-10");
+        values.put("calibrationExpiresOn", calibrationExpiresOn);
+        values.put("active", active);
+        values.put("version", 0);
+        values.put("republished", false);
+        return new IncomingEvent("instrument", instrumentId.toString(), eventName, values);
     }
 
     private static IncomingEvent personEvent(UUID personId, String code, String fullName, String category, boolean active) {

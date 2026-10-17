@@ -22,8 +22,9 @@ insulators) belongs to `mto-configuration` and arrives here as events; the mater
 stock belong to `mto-stock` and are reached through its REST API; the people, the organization and
 the fleet belong to `mto-resources` and arrive here as events. **Nothing of them is re-modelled
 here**: `catenary_asset` keeps only the snapshot a maintenance job needs (code, kp, track, station,
-sectioning), `crew_person`/`fleet_vehicle`/a synchronized `maintenance_team` only what a shift needs,
-and every material line stores the `mto-stock` ids.
+sectioning), `crew_person`/`fleet_vehicle`/`maintenance_instrument`/a synchronized `maintenance_team`
+only what a shift needs (with the qualifications, documents and calibration dates its expiry rules
+read, `V22`), and every material line stores the `mto-stock` ids.
 
 ⚠️ The local infrastructure (PostgreSQL, RabbitMQ, Keycloak, the trace collector, and `mto-stock`
 itself) is brought up by `mto-platform`. `compose.yaml` here holds **only the application**.
@@ -60,7 +61,9 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
 
 - `domain/model` — framework-free rules: `OrderStateMachine`, `DefectStateMachine`,
   `ShiftStateMachine`, `KilometricRange`, `Quantity`, `WorkloadEstimate`, `DomainValidations`,
-  `CrewComposition` (the copy of `mto-resources`' crew rule; returns the reason, does not throw).
+  `CrewComposition` (the copy of `mto-resources`' crew rule; returns the reason, does not throw),
+  `ShiftQualifications` (nothing expired at the shift's date and a different qualified driver per
+  self-propelled vehicle, a bipartite matching; returns the reason too).
   An `IllegalArgumentException` from here is turned into a 400 by `DomainGuard` in the services.
 - `application` — `dto` (one package per resource), `service` + `service.impl` (package-private
   impls behind public interfaces; `MaintenanceLookups`, `ShiftRules`, `ShiftCrew`, `ChecklistRules`,
@@ -68,7 +71,7 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
   on) and `MaterialLineFactory` are shared helpers; `BudgetedOperations` runs the background
   operations; the `IncomingEvent*` pipeline, `IdempotentIncomingEventProcessor` →
   `DispatchingIncomingEventHandler` → `ResourcesPersonHandler`/`ResourcesVehicleHandler`/
-  `ResourcesTeamHandler`, applies the events of `mto-resources`), `mapper` (MapStruct,
+  `ResourcesTeamHandler`/`ResourcesInstrumentHandler`, applies the events of `mto-resources`), `mapper` (MapStruct,
   **entity → response only**: entities are built in the services with their Lombok builders because
   MapStruct cannot call the protected constructors), `exception`.
 - `infrastructure` — `persistence.entity` (JPA), `persistence.repository` (Spring Data + native
@@ -132,14 +135,21 @@ disconnector plus `RP-06` when its `driveType` (`V16`) is `MOTOR` and `RG-06` wh
 A `MaintenanceTeam` is local (edited here, `A`/`B` seeded) or synchronized from `mto-resources`
 (`V19`: leader, supervisor, linemen, packages and default vehicle; no base), which adopts the local
 team of its code on its first event; from then on it is read-only here (`PUT` is 409 `TEA-001`).
+An order of a synchronized team left without a user goes to the username of its leader
+(`fillLeader`, at creation, `assign` and a team change; an explicit user wins).
 Tasks are executed inside a `MaintenanceShift` (team, night window, possession `PARTIAL`/`FULL`, one
 or more tracks) with its crew and vehicles of `mto-resources` (`V20`, copied from a synchronized team
 when not given). `ShiftCrew` keeps them in rule, 409 `SHF-001`: at most 6 linemen, the leader not
 among them and not a `WORKER`, everyone active, every vehicle active and available, one that neither
 moves by itself nor is portable with a towing one, the crew within the seats (only when every
-self-propelled vehicle declares them), and no vehicle, leader or lineman in two open shifts of one
-date (advisory locks); to start and while `IN_PROGRESS`, a leader and 2 to 6 linemen
-(`CrewComposition`), only on a shift with a crew (`hasCrew()`). Closing says where each vehicle was
+self-propelled vehicle declares them), no vehicle, leader or lineman in two open shifts of one
+date (advisory locks), and nothing expired at the `shiftDate` (`ShiftQualifications`, `V22`: a
+qualification of the leader, the supervisor or a lineman, a document of a vehicle, the calibration of
+an instrument, or an instrument retired; `expiresOn < shiftDate`); to start and while `IN_PROGRESS`, a
+leader and 2 to 6 linemen (`CrewComposition`), only on a shift with a crew (`hasCrew()`), and a
+different person of the crew holding the qualification its model requires for each self-propelled
+vehicle (a matching, not a loop). A shift also carries its instruments of `mto-resources`
+(`instrumentIds`, a set; unknown is 404 `MSI-404`). Closing says where each vehicle was
 left (`parkings`: a site, a track and kp, or a text; a rail-only one never by text alone), and
 starting, closing and cancelling publish `shift.started`/`closed`/`cancelled`, which `mto-resources`
 reads to move the vehicles. A task can
@@ -164,17 +174,19 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
 - Ids of `mto-configuration` entities are `bigint` columns (`track_id`, `station_id`,
   `execution_package_id`, `parking_track_id`); ids of `mto-stock` entities are `uuid` columns
   (`material_id`, `warehouse_id`, `stock_reservation_id`, `stock_project_id`); ids of `mto-resources`
-  are `uuid` too, the primary key of its snapshots (`crew_person`, `fleet_vehicle`), a team's
+  are `uuid` too, the primary key of its snapshots (`crew_person`, `fleet_vehicle`, `maintenance_instrument`), a team's
   `source_entity_id`, and `default_vehicle_id`/`parking_site_id` without FK. Its enums are `varchar`.
 - Codes come from sequences (`MO-000001`, `SH-`, `INS-`, `DEF-`), never from `MAX + 1`.
 - `CatenaryAssetRepository.upsertFromMasterData`/`deactivateFromMasterData` are native SQL with the
   sequence watermark inside the `WHERE` (never read-then-write), which is why master-data changes
   leave no Envers revision. They write `enabled_at_source` and recompute `enabled`, never
   `disabled_locally`; `deactivateByTrack` advances the watermark of what it disables (the sequence of
-  `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle` and the
-  synchronized team (`upsertFromResources`, watermark = the `sequenceNumber` of the `mto-resources`
-  outbox, not its `version`), and for `background_operation` (`V21`), whose cap and turn per scope
-  are decided by row count inside the writing statement.
+  `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle`,
+  `maintenance_instrument` and the synchronized team (`upsertFromResources`, watermark = the
+  `sequenceNumber` of the `mto-resources` outbox, not its `version`; the `jsonb` qualifications and
+  documents of `V22` go in the same statement, and an event without the key keeps the stored ones),
+  and for `background_operation` (`V21`), whose cap and turn per scope are decided by row count inside
+  the writing statement.
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
   `CHECK` that exactly one is set.
 - Every entity edited through the API extends `VersionedEntity` (`@Version`, `V11`): its response
@@ -196,12 +208,15 @@ The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before 
 `application/dto/messaging`.
 
 Consumer of `mto-resources` too (`mto.resources.exchange`, own queue
-`mto.maintenance.resources.queue` bound to `mto.resources.{person,team,vehicle}.*`, with DLX/DLQ,
+`mto.maintenance.resources.queue` bound to `mto.resources.{person,team,vehicle,instrument}.*`, with DLX/DLQ,
 `app.rabbitmq.resources.*`) through the same inbox (`source_service = mto-resources`):
 `ResourcesEventConsumer` checks the signature, the `origin` and that `data` has `entityName` and
 `eventName`, and `DispatchingIncomingEventHandler` routes by source and entity to the
-`IncomingEventHandler`s `person`, `vehicle` and `team` (only `MAINTENANCE` teams; the people a team
-carries are inserted with `ON CONFLICT DO NOTHING` until their own event arrives). This queue must
+`IncomingEventHandler`s `person` (with its `qualifications`), `vehicle` (with its `documents` and
+`type.requiredDriverQualification`), `team` (only `MAINTENANCE` teams; the people a team carries are
+inserted with `ON CONFLICT DO NOTHING` until their own event arrives) and `instrument` (`V22`). Its
+expiry warnings (`qualification.*`, `vehicle-document.*`, `calibration.*`) are not bound here: the
+shift reads the dates from the snapshot. This queue must
 exist before `mto-resources` publishes (`mandatory=true` there): deploy this service first.
 
 Producer of its own events for `mto-notification` (`mto.maintenance.exchange`, routing key
@@ -211,7 +226,8 @@ door, and it is called inside the business transaction**: the event goes to `out
 (`OutboxRabbitPublisher` refuses to start without them). The hooks: `StatusHistoryServiceImpl`
 (`order.created`/`status-changed`/`reassigned`, `defect.created`/`status-changed`: every order and
 defect transition passes through it), `MaintenanceShiftServiceImpl.start/close/cancel`
-(`shift.started`/`closed`/`cancelled`, with the crew, the vehicles and where each was left: also
+(`shift.started`/`closed`/`cancelled`, with the crew, the vehicles and where each was left, and at the
+end the instruments' ids and codes: also
 read by `mto-resources`, through its own queue on `mto.maintenance.shift.*`),
 `MaterialStockSynchronizer.record` (`material.rejected`/`in-doubt`/`failed`, only when the line's
 state changes: the 5-minute retry must not publish one per round),
@@ -280,8 +296,8 @@ The three reports (`GET /shifts/{id}/report`, `/reports/progress`, `/reports/mon
 `?format=json|xlsx|pdf`, `json` by default: same routes, same `MAINTENANCE_READ` rule, unchanged JSON
 contract. Each report is turned into one format-neutral `ReportDocument`
 (`application/dto/export`: header pairs, an optional table, totals, titled appendix tables — the
-shift's inspections, its crew and its vehicles with where each was left, each a sheet of its own in
-the .xlsx —, typed `ReportValue`s) by its
+shift's inspections, its crew, its vehicles with where each was left and its instruments with their
+calibration, each a sheet of its own in the .xlsx —, typed `ReportValue`s) by its
 layout in `application/service/impl`, and `ReportExportServiceImpl` hands it to the `ReportExporter`
 of the requested format. The exporters are `@Component`s indexed by format at startup — the same
 registry-by-key as the master-data handlers, failing the startup on a duplicate or a missing one — so
@@ -296,20 +312,20 @@ and the columns the PDF leaves out.
 
 ### Auditing
 
-Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track, blocking-disconnector and lineman collections),
+Envers on `CatenaryAsset`, `MaintenanceOrder`, `MaintenanceTask` (+ its task-type join), `MaintenanceShift` (+ its track, blocking-disconnector, lineman and instrument collections),
 `MaintenanceShiftVehicle` (a vehicle of a shift and where it was left, `V20`), `MaintenanceTaskCheckItem`,
 `MaintenanceInspection`, `MaintenanceInspectionItem`, `CatenaryDefect`, `MaintenanceMaterialUsage`.
 Not audited on purpose: `MaintenanceStatusHistory`
-(append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `CrewPerson`
-and `FleetVehicle` (snapshots of `mto-resources`, native SQL only), `BackgroundOperation` and
+(append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `CrewPerson`,
+`FleetVehicle` and `MaintenanceInstrument` (snapshots of `mto-resources`, native SQL only), `BackgroundOperation` and
 `OutboxMessage` (their own history), `MaintenanceTeam`, `MaintenanceTaskType`,
 `InspectionTemplate`/`Item` (catalogues). `JpaEntityModelTest` guards the split. History at
 `GET /<resource>/{id}/revisions`. The `asset` of an order, a task, an inspection and a defect is
 `@Audited(targetAuditMode = NOT_AUDITED)`, like a shift's disconnectors: an asset that only arrived
 by master data has no revision (native SQL), so a revision reads it as it is now instead of looking
-for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`). The leader, supervisor and
-linemen of a shift and the vehicle of each `MaintenanceShiftVehicle` are `NOT_AUDITED` targets for the
-same reason. A shift's vehicles are `@OrderBy("id ASC")`, never by an audit column: Envers applies the
+for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`). The leader, supervisor,
+linemen and instruments of a shift and the vehicle of each `MaintenanceShiftVehicle` are `NOT_AUDITED`
+targets for the same reason (`JpaEntityModelTest` guards them). A shift's vehicles are `@OrderBy("id ASC")`, never by an audit column: Envers applies the
 `@OrderBy` to `maintenance_shift_vehicle_aud`, which has none; `vehiclesByCode()` orders what is shown.
 A background operation keeps its request's source, URI and correlation in its revisions
 (`BackgroundOperationContext`, read by `AuditRevisionListener`).
@@ -340,7 +356,10 @@ A background operation keeps its request's source, URI and correlation in its re
   transaction and the work runs on a virtual thread). Add a method to the
   matching class instead of a new class; the events of each hook are methods of `BusinessLayerTest`
   (`RecordingEventPublisher`) and the envelope, the actor and the correlation of `MessagingLayerTest`.
-  The crew rules, the parallel stock transitions and the deferred retry are methods of
-  `BusinessLayerTest`; the resources handlers against PostgreSQL (adoption, the watermark, a team of
-  construction) of `MasterDataAssetSyncDataJpaTest`; the resources topology of `MessagingLayerTest`;
+  The crew rules (the expiries and the drivers too; the matching itself is `DomainModelTest`), the
+  parallel stock transitions and the deferred retry are methods of `BusinessLayerTest`; the resources
+  handlers against PostgreSQL (adoption, the watermark, a team of construction, the `jsonb`
+  qualifications and documents, the instruments) of `MasterDataAssetSyncDataJpaTest`; the resources
+  topology of `MessagingLayerTest`; the shift report's appendices in the real .xlsx and .pdf of
+  `ReportExportLayerTest`;
 the 202 of `Prefer: respond-async` of `MaintenanceOrderControllerMockMvcTest`.

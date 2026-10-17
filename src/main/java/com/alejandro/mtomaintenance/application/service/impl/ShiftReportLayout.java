@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftRespon
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportInspectionResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftReportRowResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftInstrumentResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftVehicleResponse;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamSummaryResponse;
 
@@ -104,6 +105,19 @@ final class ShiftReportLayout {
             new ReportDocument.Column("Category", 8),
             new ReportDocument.Column("Parking", 16));
 
+    private static final String INSTRUMENTS = "Instruments";
+
+    /**
+     * Con que instrumentos de mto-resources se trabajo ({@code V22}) y hasta cuando valia su calibracion:
+     * ninguno caducado a la fecha del turno, o no habria entrado. "Measurement equipment", el texto de la
+     * cabecera, se queda para los turnos de antes, que no los llevan.
+     */
+    private static final List<ReportDocument.Column> INSTRUMENT_COLUMNS = List.of(
+            new ReportDocument.Column("Code", 5),
+            new ReportDocument.Column("Name", 12),
+            new ReportDocument.Column("Kind", 7),
+            new ReportDocument.Column("Calibrated until", 6));
+
     private ShiftReportLayout() {
     }
 
@@ -124,7 +138,8 @@ final class ShiftReportLayout {
                 totals(report),
                 List.of(new ReportDocument.Appendix(INSPECTIONS, new ReportDocument.Table(INSPECTION_COLUMNS, inspections)),
                         new ReportDocument.Appendix(CREW, new ReportDocument.Table(CREW_COLUMNS, crew(shift))),
-                        new ReportDocument.Appendix(VEHICLES, new ReportDocument.Table(VEHICLE_COLUMNS, vehicles(shift)))));
+                        new ReportDocument.Appendix(VEHICLES, new ReportDocument.Table(VEHICLE_COLUMNS, vehicles(shift))),
+                        new ReportDocument.Appendix(INSTRUMENTS, new ReportDocument.Table(INSTRUMENT_COLUMNS, instruments(shift)))));
     }
 
     private static String subtitle(MaintenanceShiftResponse shift) {
@@ -249,6 +264,21 @@ final class ShiftReportLayout {
                 ReportValue.text(vehicle.mobility()),
                 ReportValue.text(vehicle.category()),
                 ReportValue.text(parking(vehicle.parking())))).toList();
+    }
+
+    private static List<List<ReportValue>> instruments(MaintenanceShiftResponse shift) {
+        if (shift.instruments() == null) {
+            return List.of();
+        }
+        return shift.instruments().stream().map(ShiftReportLayout::instrument).toList();
+    }
+
+    private static List<ReportValue> instrument(ShiftInstrumentResponse instrument) {
+        return List.of(
+                ReportValue.text(instrument.code()),
+                ReportValue.text(instrument.name()),
+                ReportValue.text(instrument.kind()),
+                ReportValue.date(instrument.calibrationExpiresOn()));
     }
 
     /** {@code track 31, kp 4.250 — Siding north of Herzliya}; un sitio del catalogo va por su id de mto-resources. */

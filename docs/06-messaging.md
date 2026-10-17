@@ -146,17 +146,19 @@ tested in `MasterDataAssetSyncDataJpaTest`:
 
 ## Consumed: resources from `mto-resources`
 
-`mto-resources` owns the people, the organization tree and the fleet. A shift needs three of its
-entities, the people (`person`), the teams (`team`) and the vehicles (`vehicle`), and keeps of each the
-snapshot it reads (`crew_person`, `maintenance_team`, `fleet_vehicle`, `V19`; `02-domain-model.md`,
-"Teams" and "Shift crew and vehicles"). Nothing here calls `mto-resources`; it calls nobody either.
+`mto-resources` owns the people, the organization tree, the fleet and the instruments. A shift needs
+four of its entities, the people (`person`), the teams (`team`), the vehicles (`vehicle`) and the
+instruments (`instrument`, `V22`), and keeps of each the snapshot it reads (`crew_person`,
+`maintenance_team`, `fleet_vehicle`, `V19`; `maintenance_instrument`, `V22`; `02-domain-model.md`,
+"Teams", "Shift crew and vehicles" and "Qualifications and expiries"). Nothing here calls
+`mto-resources`; it calls nobody either.
 
 ### Topology
 
 | | Value |
 |---|---|
 | Exchange (publisher's) | `mto.resources.exchange` (topic, durable; redeclared with the same attributes) |
-| Bindings | `mto.resources.person.*`, `mto.resources.team.*`, `mto.resources.vehicle.*` (`app.rabbitmq.resources.routing-keys`): nothing else it publishes reaches this queue |
+| Bindings | `mto.resources.person.*`, `mto.resources.team.*`, `mto.resources.vehicle.*`, `mto.resources.instrument.*` (`app.rabbitmq.resources.routing-keys`; the last since `V22`): nothing else it publishes reaches this queue. Its expiry warnings (`qualification.*`, `vehicle-document.*`, `calibration.*`) are for `mto-notification`: here the shift reads the dates from the snapshot |
 | Queue (own) | `mto.maintenance.resources.queue` |
 | Dead letter | `mto.maintenance.resources.queue.dlx` → `mto.maintenance.resources.queue.dlq` |
 | Listener factory | `resourcesRabbitListenerContainerFactory`: the master-data converter, nothing rejected is requeued |
@@ -191,13 +193,15 @@ more handler.
 
 | Entity | Handler | Effect |
 |---|---|---|
-| `person` (`created`, `updated`, `deactivated`) | `ResourcesPersonHandler` | Upsert `crew_person` by `entityId`: `code`, `fullName`, `username`, `category`, `active` |
-| `vehicle` (the same three) | `ResourcesVehicleHandler` | Upsert `fleet_vehicle` by `entityId`: `code`, `name`, `type.{code, name, mobility, category, selfPropelled, portable, seats}`, `towing` (`TOWING` in `type.capabilities`), `operationalStatus`, `available`, `active` |
+| `person` (`created`, `updated`, `deactivated`) | `ResourcesPersonHandler` | Upsert `crew_person` by `entityId`: `code`, `fullName`, `username`, `category`, `active`, and `qualifications` (`V22`: each reduced to `{code, kind, drivingLicence, expiresOn}`, all of them, also the expired ones; without the key, the stored ones stay) |
+| `vehicle` (the same three) | `ResourcesVehicleHandler` | Upsert `fleet_vehicle` by `entityId`: `code`, `name`, `type.{code, name, mobility, category, selfPropelled, portable, seats}`, `towing` (`TOWING` in `type.capabilities`), `operationalStatus`, `available`, `active`, and (`V22`) `documents` (each `{kind, reference, expiresOn}`) and `type.requiredDriverQualification` (a qualification code or `null`); without either key, what was stored stays |
+| `instrument` (the same three, `V22`) | `ResourcesInstrumentHandler` | Upsert `maintenance_instrument` by `entityId`: `code`, `name`, `kind`, `serialNumber`, `calibrationExpiresOn`, `active` (`calibratedOn`, `version` and `republished` are not read) |
 | `team` (the same three) | `ResourcesTeamHandler` | Only `discipline = MAINTENANCE`; the rest is logged and ignored. Inserts the people it carries (`leader`, `supervisor`, `members[]`, each `{personId, code, fullName, username, category}`) that are not there yet, `ON CONFLICT DO NOTHING` and without watermark, so the person's own event then overwrites them whatever its number; adopts the local team of its `code` the first time (`adoptByCode`); upserts the team by `source_entity_id` (`code`, `name`, `active`, leader, supervisor, `defaultVehicle.id`, `vehicle` = `defaultVehicle.code`, no base); and only if that applied, replaces its `members` and its `executionPackageIds` whole |
 
 `chiefSupervisor`, `linemen` (a count), `parentId`, `departmentId` and `version` are not read; a
 deactivation is the same upsert with `active: false`. Every write is native SQL in
-`CrewPersonRepository`, `FleetVehicleRepository` and `MaintenanceTeamRepository` with the
+`CrewPersonRepository`, `FleetVehicleRepository`, `MaintenanceInstrumentRepository` and
+`MaintenanceTeamRepository` with the
 `sequenceNumber` watermark inside the `WHERE` (applied when nothing is stored, when nothing arrives or
 when it is not lower): an older event returns 0 rows and is discarded, and a late team event touches
 neither its members nor its packages. **The watermark is the outbox `sequenceNumber`, not
@@ -205,7 +209,14 @@ neither its members nor its packages. **The watermark is the outbox `sequenceNum
 versions, and `mto-resources` locks those rows in id order before publishing, so the sequence follows
 the commits. A missing sequence applies and keeps the stored watermark. An `entityId` that is not a
 UUID, or a missing `code`, `fullName`, `category` or vehicle `type.mobility`/`type.category`, fails the
-handler (retried, then the DLQ). None of it leaves an Envers revision (`07-auditing.md`).
+handler (retried, then the DLQ), and so does an `expiresOn` or `calibrationExpiresOn` that is not an ISO
+date: it is not taken for one that never expires. None of it leaves an Envers revision (`07-auditing.md`).
+
+The qualifications, the documents and the required driver qualification travel inside the row's own
+statement (`coalesce(cast(:qualifications as jsonb), crew_person.qualifications)` and the like), so a
+late event changes them no more than the rest of the row. Their keys arrived with `V8` of
+`mto-resources`, added to its contract without renaming anything; this service reads them tolerantly
+(an element without `code` or `kind` is skipped, unknown keys are not stored).
 
 ## Published events
 
@@ -298,7 +309,7 @@ and every event has a real JSON example in `docs/messaging/examples/` that
 | `inspection.item-failed` | a checklist item that becomes `DEFECT` (`PATCH/PUT .../items/{id}`); staying `DEFECT` does not fail again | inspection + `itemId`, `itemCode`, `itemLabel`, `itemResult`, `measuredValue`, `valueAfterAdjustment`, `unit`, `minValue`, `maxValue`, `notes` |
 | `inspection.defect-created` | `POST /inspections/{id}/defect` (the defect also publishes its own `defect.created`) | inspection + `defectId`, `defectCode`, `severity`, `description` |
 | `inspection.corrective-order-created` | `POST /inspections/{id}/corrective-order` (the order also publishes its own `order.created`) | inspection + `orderId`, `orderCode`, `orderType`, `priority`, `defectId`, `defectCode` |
-| `shift.started` / `shift.closed` / `shift.cancelled` | `POST /shifts/{id}/start`, `/close` and `/cancel` | shift (`code`, `status`, `shiftDate`, `possessionType`, team, `baseName`, `vehicle`, `trackIds`, `executionPackageId`, kp range, planned and actual instants, `voltageCutoffAt`, `netWorkMinutes`, `parkingPlace`) and its crew and vehicles: `vehicles[]` (`id`, `code`, `parking` `{siteId, trackId, kp, description}` or `null`), `vehicleIds`, `vehicleCodes`, `teamLeaderPersonId`, `teamLeaderUsername` (whom to notify), `supervisorPersonId`, `linemanPersonIds` (sorted). Only ids, codes and the leader's username: `mto-notification` copies `values` whole into its registry |
+| `shift.started` / `shift.closed` / `shift.cancelled` | `POST /shifts/{id}/start`, `/close` and `/cancel` | shift (`code`, `status`, `shiftDate`, `possessionType`, team, `baseName`, `vehicle`, `trackIds`, `executionPackageId`, kp range, planned and actual instants, `voltageCutoffAt`, `netWorkMinutes`, `parkingPlace`) and its crew and vehicles: `vehicles[]` (`id`, `code`, `parking` `{siteId, trackId, kp, description}` or `null`), `vehicleIds`, `vehicleCodes`, `teamLeaderPersonId`, `teamLeaderUsername` (whom to notify), `supervisorPersonId`, `linemanPersonIds` (sorted), and last (`V22`) `instrumentIds` and `instrumentCodes` (by code). Only ids, codes and the leader's username: `mto-notification` copies `values` whole into its registry |
 | `material.rejected` | a material line `mto-stock` said no to (`REJECTED`), on any step | line (`orderCode`, `orderStatus`, `taskId`, `materialId`, `materialCode`, `materialDescription`, `warehouseId`, quantities, `unit`, `stockReservationId`, `stockSyncStatus`, `request`) + `step`, `reason`, `stockErrorCode` (`STK-001` is no stock), `stockHttpStatus` |
 | `material.in-doubt` | a reservation or an output sent to `mto-stock` that got no answer (`FAILED` with `stockRequestInDoubt`) | line + `step`, `reason`; `request` says which one (`RESERVATION`/`OUTPUT`) |
 | `material.failed` | `mto-stock` did not answer and nothing is in doubt (the request never left, e.g. resolving the project) | line + `step`, `reason` |
@@ -311,9 +322,10 @@ vehicles of the shift (its `MaintenanceShiftEventHandler`, which reads `code`, `
 `vehicles[].parking`): on the track (a road-only one, on the road) at `started`, parked where
 `vehicles[].parking` says (else at `parkingPlace`) at `closed`, and the same at `cancelled` of a
 shift that had started (`actualStart` set); a shift cancelled before starting moved nothing.
-`shift.cancelled`, `parkingPlace` and the crew and vehicle keys arrived with `V20`, added to the
-contract without renaming anything; both consumers copy `shift-started.json`, `shift-closed.json`
-and `shift-cancelled.json` as fixtures.
+`shift.cancelled`, `parkingPlace` and the crew and vehicle keys arrived with `V20`, and
+`instrumentIds`/`instrumentCodes` (the instruments of `mto-resources` taken that night, ordered by
+code) with `V22`, all added to the contract at the end without renaming anything; both consumers copy
+`shift-started.json`, `shift-closed.json` and `shift-cancelled.json` as fixtures.
 
 The three `material.*` events are published when the line's state changes, not on every attempt: a
 retry that fails the same way (the automatic one every 5 minutes while stock is down, or a repeated
