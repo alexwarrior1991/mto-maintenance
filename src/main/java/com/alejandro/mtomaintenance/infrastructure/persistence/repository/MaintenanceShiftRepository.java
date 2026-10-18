@@ -39,9 +39,18 @@ public interface MaintenanceShiftRepository extends JpaRepository<MaintenanceShi
     List<String> findOpenShiftCodesWithCrew(@Param("personIds") Collection<UUID> personIds, @Param("shiftDate") LocalDate shiftDate,
                                             @Param("statuses") Collection<ShiftStatus> statuses, @Param("shiftId") UUID shiftId);
 
+    /** Lo mismo con los instrumentos: una pertiga o un detector van en un solo turno por noche. */
+    @Query("""
+            select distinct s.code from MaintenanceShift s join s.instruments instrument
+             where instrument.id in :instrumentIds and s.shiftDate = :shiftDate and s.status in :statuses and s.id <> :shiftId
+            """)
+    List<String> findOpenShiftCodesWithInstruments(@Param("instrumentIds") Collection<UUID> instrumentIds,
+                                                   @Param("shiftDate") LocalDate shiftDate,
+                                                   @Param("statuses") Collection<ShiftStatus> statuses, @Param("shiftId") UUID shiftId);
+
     /**
-     * Bloqueo asesor hasta el final de la transaccion, por vehiculo o persona: dos turnos de la misma
-     * noche que se los llevan a la vez se ponen en fila y el segundo ve al primero.
+     * Bloqueo asesor hasta el final de la transaccion, por vehiculo, persona o instrumento: dos turnos de
+     * la misma noche que se los llevan a la vez se ponen en fila y el segundo ve al primero.
      * {@code pg_advisory_xact_lock} devuelve {@code void}; por eso se envuelve.
      */
     @Query(value = "select 1 from (select pg_advisory_xact_lock(:key)) as locked", nativeQuery = true)

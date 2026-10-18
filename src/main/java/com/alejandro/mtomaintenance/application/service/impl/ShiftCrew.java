@@ -51,8 +51,8 @@ import java.util.stream.Collectors;
  *       calibracion de un instrumento) ni un instrumento retirado; para iniciarlo y en curso, un conductor
  *       habilitado distinto por cada vehiculo autopropulsado que lo exige. Un turno sin dotacion, vehiculos
  *       ni instrumentos de mto-resources no tiene nada que mirar y sigue como antes.</li>
- *   <li><b>Doble asignacion</b>: ni un vehiculo ni el jefe ni un lineman van en dos turnos abiertos de la
- *       misma fecha, con un bloqueo asesor por cada uno.</li>
+ *   <li><b>Doble asignacion</b>: ni un vehiculo ni el jefe ni un lineman ni un instrumento van en dos
+ *       turnos abiertos de la misma fecha, con un bloqueo asesor por cada uno.</li>
  * </ul>
  */
 @Component
@@ -267,12 +267,15 @@ class ShiftCrew {
             personIds.add(shift.getTeamLeader().getId());
         }
         shift.getLinemen().forEach(lineman -> personIds.add(lineman.getId()));
-        if (vehicleIds.isEmpty() && personIds.isEmpty()) {
+        Set<UUID> instrumentIds = shift.getInstruments().stream().map(MaintenanceInstrument::getId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (vehicleIds.isEmpty() && personIds.isEmpty() && instrumentIds.isEmpty()) {
             return;
         }
         List<String> keys = new ArrayList<>();
         vehicleIds.forEach(id -> keys.add("vehicle:" + id));
         personIds.forEach(id -> keys.add("person:" + id));
+        instrumentIds.forEach(id -> keys.add("instrument:" + id));
         keys.stream().sorted().forEach(key -> shiftRepository.lockResource(("mto-maintenance:shift-resource:" + key).hashCode()));
 
         UUID self = shift.getId() == null ? NO_SHIFT : shift.getId();
@@ -288,6 +291,13 @@ class ShiftCrew {
             if (!taken.isEmpty()) {
                 throw new ShiftException("Someone of the crew of " + label + " is already in shift " + String.join(", ", taken)
                         + " on " + shift.getShiftDate() + ": a person works in one shift a night");
+            }
+        }
+        if (!instrumentIds.isEmpty()) {
+            List<String> taken = shiftRepository.findOpenShiftCodesWithInstruments(instrumentIds, shift.getShiftDate(), OPEN, self);
+            if (!taken.isEmpty()) {
+                throw new ShiftException("An instrument of " + label + " is already in shift " + String.join(", ", taken)
+                        + " on " + shift.getShiftDate() + ": an instrument works in one shift a night");
             }
         }
     }

@@ -2358,6 +2358,22 @@ class BusinessLayerTest {
     }
 
     @Test
+    void anInstrumentInAnotherOpenShiftOfTheSameNightIsRefused() {
+        ShiftFixture fixture = new ShiftFixture();
+        MaintenanceShift shift = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        MaintenanceInstrument detector = instrument("VD-02", true, LocalDate.now().plusMonths(3));
+        shift.getInstruments().add(detector);
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        when(fixture.repository.findOpenShiftCodesWithInstruments(eq(Set.of(detector.getId())), eq(shift.getShiftDate()), any(),
+                eq(shift.getId()))).thenReturn(List.of("SH-000099"));
+
+        ShiftException refused = assertThrows(ShiftException.class, () -> fixture.service.start(shift.getId(), new StartShiftRequest(null, null)));
+        assertTrue(refused.getMessage().contains("SH-000099") && refused.getMessage().contains("an instrument works in one shift a night"),
+                refused.getMessage());
+        verify(fixture.repository).lockResource(("mto-maintenance:shift-resource:instrument:" + detector.getId()).hashCode());
+    }
+
+    @Test
     void theCrewFitsInTheSeatsAndAWagonGoesWithSomethingThatTowsIt() {
         ShiftFixture fixture = new ShiftFixture();
         MaintenanceShift crowded = crewedShift(crewPerson("TEAM_LEADER"), 4);
