@@ -88,18 +88,11 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
 
     /**
      * Un cerrojo de aviso de PostgreSQL ligado a la transaccion, esperando a que lo suelte quien lo
-     * tenga: lo que pone en fila las generaciones de tareas de un mismo EP, para que dos a la vez no
-     * den el mismo activo por libre. {@code pg_advisory_xact_lock} devuelve {@code void}, que no se
-     * puede leer; de ahi el {@code select 1} que lo envuelve. Se suelta al terminar la transaccion.
+     * tenga: lo que pone en fila las generaciones de tareas de un mismo EP entre instancias (en una,
+     * ya hicieron fila en {@code GenerationLocks}, sin conexion), para que dos a la vez no den el mismo
+     * activo por libre. {@code pg_advisory_xact_lock} devuelve {@code void}, que no se puede leer; de ahi
+     * el {@code select 1} que lo envuelve. Se suelta al terminar la transaccion.
      */
     @Query(value = "select 1 from (select pg_advisory_xact_lock(:key)) as locked", nativeQuery = true)
     int advisoryTransactionLock(@Param("key") long key);
-
-    /**
-     * El mismo cerrojo sin esperar: {@code true} si se ha tomado (hasta el final de la transaccion),
-     * {@code false} si lo tiene otra. La generacion de un EP lo usa para no esperar con la conexion
-     * cogida: si no lo consigue, suelta la transaccion, duerme y vuelve a probar.
-     */
-    @Query(value = "select pg_try_advisory_xact_lock(:key)", nativeQuery = true)
-    boolean tryAdvisoryTransactionLock(@Param("key") long key);
 }

@@ -27,7 +27,8 @@
 - Virtual threads and background operations (`V21`): Tomcat, `@Scheduled` and the listeners on
   virtual threads with the Hikari pool as the limit, `BudgetedOperations` with a deployment-wide cap
   (`OPS-429`), `Prefer: respond-async` on `tasks/generate` (202, `GET /operations/{id}`), and the
-  generation of a package waiting for its lock without holding a connection.
+  generation of a package waiting for its turn in the instance without holding a connection
+  (`GenerationLocks`), behind the advisory lock between instances.
 - Order transitions talk to `mto-stock` for all their lines at once, on virtual threads, under one
   deadline; a line cut by it is `FAILED` and retried right after commit.
 - Qualifications and expiries (`V23`): the qualifications of the people, the documents of the
