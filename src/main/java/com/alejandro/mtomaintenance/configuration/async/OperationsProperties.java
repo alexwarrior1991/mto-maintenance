@@ -15,7 +15,8 @@ import java.time.Duration;
  *                       retiene una conexion de Hikari: el tope se elige con el pool a la vista
  * @param heartbeat      cada cuanto late una operacion viva
  * @param staleAfter     sin latido en este tiempo, una viva se da por abandonada
- * @param pollInitial    primera espera de una en cola antes de volver a mirar si es su turno
+ * @param pollInitial    primera espera de una en cola antes de volver a mirar si es su turno, cuando otra
+ *                       replica tiene su ambito (en una instancia espera en un cerrojo, sin mirar)
  * @param pollMax        la espera mas larga entre miradas (crece al doble desde {@code pollInitial})
  * @param retention      cuanto se guarda una terminada
  * @param purgeBatchSize filas que borra cada pasada de la purga

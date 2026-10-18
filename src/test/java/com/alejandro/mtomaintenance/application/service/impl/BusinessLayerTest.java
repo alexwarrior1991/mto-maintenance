@@ -665,6 +665,67 @@ class BusinessLayerTest {
         assertEquals("free", locks.withLock("EP-6", () -> "free"));
     }
 
+    @Test
+    void operationScopeLocksQueueTheWorkOfOneScopeAndLetAnotherScopeThrough() throws Exception {
+        OperationScopeLocks locks = new OperationScopeLocks();
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean secondRan = new AtomicBoolean();
+        try (ExecutorService threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<String> first = threads.submit(() -> locks.withLock("EP-6", () -> {
+                holding.countDown();
+                awaitLatch(release);
+                return "first";
+            }));
+            assertTrue(holding.await(5, TimeUnit.SECONDS));
+            Future<String> second = threads.submit(() -> locks.withLock("EP-6", () -> {
+                secondRan.set(true);
+                return "second";
+            }));
+
+            assertEquals("other", locks.withLock("EP-7", () -> "other"), "Another package does not wait");
+            assertFalse(secondRan.get(), "The same package waits for the operation that has the turn");
+            assertFalse(second.isDone());
+
+            release.countDown();
+            assertEquals("first", first.get(5, TimeUnit.SECONDS));
+            assertEquals("second", second.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void anOperationInterruptedWhileWaitingForItsScopeFailsAndKeepsItsInterrupt() throws Exception {
+        OperationScopeLocks locks = new OperationScopeLocks();
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread owner = Thread.ofVirtual().start(() -> locks.withLock("EP-6", () -> {
+            holding.countDown();
+            awaitLatch(release);
+            return null;
+        }));
+        assertTrue(holding.await(5, TimeUnit.SECONDS));
+        AtomicReference<RuntimeException> failure = new AtomicReference<>();
+        AtomicBoolean interruptKept = new AtomicBoolean();
+        Thread waiting = Thread.ofVirtual().start(() -> {
+            try {
+                locks.withLock("EP-6", () -> fail("It never gets the turn"));
+            } catch (RuntimeException expected) {
+                failure.set(expected);
+                interruptKept.set(Thread.currentThread().isInterrupted());
+            }
+        });
+
+        waiting.interrupt();
+        assertTrue(waiting.join(Duration.ofSeconds(5)));
+
+        assertTrue(failure.get() instanceof IllegalStateException, () -> "Failed with " + failure.get());
+        assertTrue(failure.get().getCause() instanceof InterruptedException);
+        assertTrue(interruptKept.get(), "Whoever called it still sees the interrupt");
+        release.countDown();
+        assertTrue(owner.join(Duration.ofSeconds(5)), "The one with the turn is not disturbed");
+        assertEquals("free", locks.withLock("EP-6", () -> "free"));
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             assertTrue(latch.await(5, TimeUnit.SECONDS));

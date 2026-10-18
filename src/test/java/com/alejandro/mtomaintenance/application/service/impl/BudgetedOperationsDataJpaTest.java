@@ -41,6 +41,7 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -93,7 +94,7 @@ class BudgetedOperationsDataJpaTest extends PostgreSQLTestContainer {
                 failure -> failure instanceof ShiftException
                         ? new OperationError(409, "SHF-001", failure.getMessage())
                         : new OperationError(500, "APP-500", failure.getMessage()),
-                new CurrentUserService(), properties, JsonMapper.builder().build());
+                new CurrentUserService(), properties, JsonMapper.builder().build(), new OperationScopeLocks());
     }
 
     @AfterEach
@@ -204,6 +205,31 @@ class BudgetedOperationsDataJpaTest extends PostgreSQLTestContainer {
         release.countDown();
         jdbc.update("update background_operation set finished_at = now() - interval '30 days' where id = ?", id);
         assertTrue(operations.purgeFinished() >= 1, "What finished long ago is purged");
+    }
+
+    @Test
+    void anOperationWaitsForTheOneOfAnotherReplicaInItsPackageAndStartsWhenItEnds() throws Exception {
+        authenticateAs("planner");
+        String scope = "EP-" + System.nanoTime();
+        UUID elsewhere = UUID.randomUUID();
+        // La de otra replica: en marcha en el mismo ambito y con el latido al dia. El cerrojo local no la ve.
+        jdbc.update("""
+                insert into background_operation (id, kind, scope, status, requested_by, created_at, started_at, heartbeat_at)
+                values (?, 'GENERATE_TASKS', ?, 'RUNNING', 'other.replica', now(), now(), now())
+                """, elsewhere, scope);
+        AtomicBoolean ran = new AtomicBoolean();
+
+        UUID id = operations.run("GENERATE_TASKS", scope, 200, Duration.ZERO, () -> {
+            ran.set(true);
+            return "ok";
+        }).operation().id();
+
+        Thread.sleep(300);
+        assertEquals(OperationStatus.QUEUED, operations.find(id).status(), "Not while the other replica's one runs");
+        assertFalse(ran.get());
+        jdbc.update("update background_operation set status = 'SUCCEEDED', finished_at = now() where id = ?", elsewhere);
+        assertEquals(OperationStatus.SUCCEEDED, waitFor(id).status(), "It looks again and starts once that one ends");
+        assertTrue(ran.get());
     }
 
     private static void authenticateAs(String username, String... authorities) {
