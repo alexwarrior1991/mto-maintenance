@@ -144,8 +144,8 @@ or more tracks) with its crew and vehicles of `mto-resources` (`V20`, copied fro
 when not given). `ShiftCrew` keeps them in rule, 409 `SHF-001`: at most 6 linemen, the leader not
 among them and not a `WORKER`, everyone active, every vehicle active and available, one that neither
 moves by itself nor is portable with a towing one, the crew within the seats (only when every
-self-propelled vehicle declares them), no vehicle, leader or lineman in two open shifts of one
-date (advisory locks), and nothing expired at the `shiftDate` (`ShiftQualifications`, `V23`: a
+self-propelled vehicle declares them), no vehicle, leader, lineman or instrument in two open shifts
+of one date (advisory locks), and nothing expired at the `shiftDate` (`ShiftQualifications`, `V23`: a
 qualification of the leader, the supervisor or a lineman, a document of a vehicle, the calibration of
 an instrument, or an instrument retired; `expiresOn < shiftDate`); to start and while `IN_PROGRESS`, a
 leader and 2 to 6 linemen (`CrewComposition`), only on a shift with a crew (`hasCrew()`), and a
