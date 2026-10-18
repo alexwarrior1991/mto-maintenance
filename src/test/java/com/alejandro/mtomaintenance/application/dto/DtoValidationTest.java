@@ -182,7 +182,7 @@ class DtoValidationTest {
         Set<UUID> disconnectors = new HashSet<>(Arrays.asList(UUID.randomUUID(), null));
         assertEquals(Set.of("trackIds", "blockingDisconnectorIds"), lists(validator.validate(new MaintenanceShiftRequest(LocalDate.of(2026, 1, 27), null, null,
                 null, PossessionType.PARTIAL, null, null, disconnectors, null, null, null, tracks, null, null, null, null, null))));
-        // Los instrumentos del turno (V22), en el alta y en el cambio.
+        // Los instrumentos del turno (V23), en el alta y en el cambio.
         assertEquals(Set.of("instrumentIds"), lists(validator.validate(new MaintenanceShiftRequest(LocalDate.of(2026, 1, 27), null, null,
                 null, PossessionType.PARTIAL, null, null, null, null, null, null, Set.of(2L), null, null, null, null, null, null, null, null, null,
                 disconnectors))));

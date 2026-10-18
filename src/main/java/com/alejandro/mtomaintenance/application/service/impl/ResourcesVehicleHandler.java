@@ -21,7 +21,7 @@ import java.util.Objects;
  * lo dice su modelo ({@code type.capabilities} contiene {@code TOWING}).
  *
  * <p>Sus documentos ({@code documents}: {@code kind}, {@code reference}, {@code expiresOn}) y la
- * habilitacion que su modelo exige al conductor ({@code type.requiredDriverQualification}, {@code V22})
+ * habilitacion que su modelo exige al conductor ({@code type.requiredDriverQualification}, {@code V23})
  * van en la misma sentencia; un evento sin la clave (un mto-resources anterior) deja lo que habia.</p>
  */
 @Service

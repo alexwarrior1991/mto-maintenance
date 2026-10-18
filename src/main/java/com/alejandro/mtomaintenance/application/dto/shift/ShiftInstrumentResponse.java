@@ -4,7 +4,7 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Un instrumento de un turno, tal como se sabe de el en mto-resources ({@code V22}).
+ * Un instrumento de un turno, tal como se sabe de el en mto-resources ({@code V23}).
  *
  * <p>Ejemplo, dentro de {@code MaintenanceShiftResponse.instruments} (por codigo):</p>
  * <pre>{@code

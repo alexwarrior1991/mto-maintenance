@@ -24,7 +24,7 @@ the fleet belong to `mto-resources` and arrive here as events. **Nothing of them
 here**: `catenary_asset` keeps only the snapshot a maintenance job needs (code, kp, track, station,
 sectioning), `crew_person`/`fleet_vehicle`/`maintenance_instrument`/a synchronized `maintenance_team`
 only what a shift needs (with the qualifications, documents and calibration dates its expiry rules
-read, `V22`), and every material line stores the `mto-stock` ids.
+read, `V23`), and every material line stores the `mto-stock` ids.
 
 ⚠️ The local infrastructure (PostgreSQL, RabbitMQ, Keycloak, the trace collector, and `mto-stock`
 itself) is brought up by `mto-platform`. `compose.yaml` here holds **only the application**.
@@ -143,7 +143,7 @@ when not given). `ShiftCrew` keeps them in rule, 409 `SHF-001`: at most 6 lineme
 among them and not a `WORKER`, everyone active, every vehicle active and available, one that neither
 moves by itself nor is portable with a towing one, the crew within the seats (only when every
 self-propelled vehicle declares them), no vehicle, leader or lineman in two open shifts of one
-date (advisory locks), and nothing expired at the `shiftDate` (`ShiftQualifications`, `V22`: a
+date (advisory locks), and nothing expired at the `shiftDate` (`ShiftQualifications`, `V23`: a
 qualification of the leader, the supervisor or a lineman, a document of a vehicle, the calibration of
 an instrument, or an instrument retired; `expiresOn < shiftDate`); to start and while `IN_PROGRESS`, a
 leader and 2 to 6 linemen (`CrewComposition`), only on a shift with a crew (`hasCrew()`), and a
@@ -184,7 +184,7 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
   `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle`,
   `maintenance_instrument` and the synchronized team (`upsertFromResources`, watermark = the
   `sequenceNumber` of the `mto-resources` outbox, not its `version`; the `jsonb` qualifications and
-  documents of `V22` go in the same statement, and an event without the key keeps the stored ones),
+  documents of `V23` go in the same statement, and an event without the key keeps the stored ones),
   and for `background_operation` (`V21`), whose cap and turn per scope are decided by row count inside
   the writing statement.
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
@@ -214,7 +214,7 @@ Consumer of `mto-resources` too (`mto.resources.exchange`, own queue
 `eventName`, and `DispatchingIncomingEventHandler` routes by source and entity to the
 `IncomingEventHandler`s `person` (with its `qualifications`), `vehicle` (with its `documents` and
 `type.requiredDriverQualification`), `team` (only `MAINTENANCE` teams; the people a team carries are
-inserted with `ON CONFLICT DO NOTHING` until their own event arrives) and `instrument` (`V22`). Its
+inserted with `ON CONFLICT DO NOTHING` until their own event arrives) and `instrument` (`V23`). Its
 expiry warnings (`qualification.*`, `vehicle-document.*`, `calibration.*`) are not bound here: the
 shift reads the dates from the snapshot. This queue must
 exist before `mto-resources` publishes (`mandatory=true` there): deploy this service first.

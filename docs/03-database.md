@@ -14,7 +14,7 @@ with millimetre precision), quantities `numeric(19,6)`.
 `section_insulator_installation` (`V7`), `stock_request_type` (`V12`), `disconnector_drive_type` (`V16`),
 `background_operation_status` (`V21`). Values match the Java enums one to one; adding a value is a
 migration (`ALTER TYPE … ADD VALUE`). The statuses, categories and mobilities of `mto-resources`
-(`V19`), and the kinds of its instruments, qualifications and documents (`V22`), are `varchar` on
+(`V19`), and the kinds of its instruments, qualifications and documents (`V23`), are `varchar` on
 purpose: they are another service's, and a value added there breaks nothing here.
 
 ## Sequences
@@ -319,7 +319,7 @@ the turn are decided inside the statement that writes, by row count), each its o
 transaction; JPA only reads it. No audit columns beyond `requested_by` and no `_aud` twin: it is its
 own history, and the purge deletes what finished more than `app.operations.retention` ago.
 
-## Qualifications, documents and instruments (`V22`)
+## Qualifications, documents and instruments (`V23`)
 
 What the expiry rules of a shift read (`02-domain-model.md`, "Qualifications and expiries"), carried by
 the events of `mto-resources` (`06-messaging.md`) into the snapshots of `V19`, **in the same native
@@ -357,4 +357,4 @@ The JPA entities map the two `jsonb` columns as typed lists (`@JdbcTypeCode(SqlT
 twins of the nine audited entities plus `maintenance_task_task_type_aud` (and, since `V5`,
 `maintenance_shift_track_aud`, since `V6` `maintenance_shift_disconnector_aud`, since `V20`
 `maintenance_shift_vehicle_aud`, the tenth audited entity, and `maintenance_shift_lineman_aud`, and
-since `V22` `maintenance_shift_instrument_aud`). See `07-auditing.md`.
+since `V23` `maintenance_shift_instrument_aud`). See `07-auditing.md`.

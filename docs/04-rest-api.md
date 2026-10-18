@@ -179,7 +179,7 @@ vehicles" and "Qualifications and expiries"):
   "teamLeaderPersonId": "…",                   // TEAM_LEADER or above (anything but WORKER)
   "supervisorPersonId": "…",
   "linemanPersonIds": ["…", "…", "…"],        // a set, replaced whole; 2 to 6 to start
-  "instrumentIds": ["…(EP-07)", "…(VD-02)"]    // a set, replaced whole (V22); none retired nor with its calibration expired
+  "instrumentIds": ["…(EP-07)", "…(VD-02)"]    // a set, replaced whole (V23); none retired nor with its calibration expired
 }
 ```
 
@@ -194,7 +194,7 @@ needs towing without a towing vehicle, not enough seats, a vehicle or a person a
 shift of the same date) is 409 `SHF-001`, and so is starting, or changing a shift `IN_PROGRESS`,
 without a leader and 2 to 6 linemen when the shift has a crew.
 
-Nothing expired gets into a shift (`V22`): on create, on any change and on start, an expired
+Nothing expired gets into a shift (`V23`): on create, on any change and on start, an expired
 qualification of the leader, the supervisor or a lineman, an expired document of one of its vehicles,
 an instrument retired in `mto-resources` or whose calibration expired, all of them at the shift's
 `shiftDate` (`expiresOn < shiftDate`; the last day still counts), is 409 `SHF-001` whose message lists
@@ -263,7 +263,7 @@ Two deliberate differences from the JSON:
   `Username`, `Category`: the leader, the supervisor, each lineman) and the vehicles (`Code`, `Name`,
   `Mobility`, `Category`, `Parking`, as `track 31, kp 4.250 — site … — description`) are two more
   appendices after it, and the header adds `Team leader`, `Supervisor`, `Linemen` (the count) and
-  `Vehicles` (the codes); the JSON carries them in `shift`. The instruments of `mto-resources` (`V22`:
+  `Vehicles` (the codes); the JSON carries them in `shift`. The instruments of `mto-resources` (`V23`:
   `Code`, `Name`, `Kind`, `Calibrated until`, a real date, empty without a calibration) are the last
   appendix; the header's `Measurement equipment`, the free text of before, stays for the shifts that
   carry no instruments.

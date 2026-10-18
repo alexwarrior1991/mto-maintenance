@@ -267,7 +267,7 @@ public final class MaintenanceEvents {
      * La dotacion, los vehiculos y los instrumentos de mto-resources: solo ids, codigos y el usuario del
      * jefe (a quien se avisa), porque mto-notification copia el {@code values} entero a su registro.
      * {@code vehicles} lleva donde se dejo cada uno, que es lo que lee mto-resources al cerrar. Los
-     * instrumentos ({@code V22}) van al final, por codigo, como los vehiculos.
+     * instrumentos ({@code V23}) van al final, por codigo, como los vehiculos.
      */
     private static void crew(Map<String, Object> values, MaintenanceShift shift) {
         List<Map<String, Object>> vehicles = new ArrayList<>();

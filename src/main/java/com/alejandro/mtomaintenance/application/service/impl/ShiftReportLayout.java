@@ -108,7 +108,7 @@ final class ShiftReportLayout {
     private static final String INSTRUMENTS = "Instruments";
 
     /**
-     * Con que instrumentos de mto-resources se trabajo ({@code V22}) y hasta cuando valia su calibracion:
+     * Con que instrumentos de mto-resources se trabajo ({@code V23}) y hasta cuando valia su calibracion:
      * ninguno caducado a la fecha del turno, o no habria entrado. "Measurement equipment", el texto de la
      * cabecera, se queda para los turnos de antes, que no los llevan.
      */

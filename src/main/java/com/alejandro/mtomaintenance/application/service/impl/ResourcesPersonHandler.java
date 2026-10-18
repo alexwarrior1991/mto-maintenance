@@ -19,7 +19,7 @@ import java.util.Objects;
  * Una persona de mto-resources ({@code person.created/updated/deactivated}): su instantanea en
  * {@code crew_person}, con la marca de agua dentro del upsert. Corre dentro de la transaccion del inbox.
  *
- * <p>Sus cualificaciones ({@code qualifications}, {@code V22}) van en la misma sentencia, reducidas a
+ * <p>Sus cualificaciones ({@code qualifications}, {@code V23}) van en la misma sentencia, reducidas a
  * {@code code}, {@code kind}, {@code drivingLicence} y {@code expiresOn}; un evento sin la clave (un
  * mto-resources anterior) deja las que habia.</p>
  */

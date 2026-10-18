@@ -24,7 +24,7 @@ import java.util.UUID;
  * {@code FleetVehicleRepository} con SQL nativo y la marca de agua dentro de la sentencia. No se
  * audita. El id es el de mto-resources; sus enumerados van como texto.
  *
- * <p>Desde {@code V22}, tambien sus documentos con su caducidad (inspecciones, seguro, certificados) y
+ * <p>Desde {@code V23}, tambien sus documentos con su caducidad (inspecciones, seguro, certificados) y
  * la habilitacion que su modelo exige a quien lo conduce: lo que mira {@code ShiftQualifications}.</p>
  */
 @Entity
@@ -104,7 +104,7 @@ public class FleetVehicle {
         return RAIL_ONLY.equals(mobility);
     }
 
-    /** Nunca nula: una fila escrita antes de {@code V22}, o un vehiculo construido a mano, no tiene ninguno. */
+    /** Nunca nula: una fila escrita antes de {@code V23}, o un vehiculo construido a mano, no tiene ninguno. */
     public List<Document> getDocuments() {
         return documents == null ? List.of() : documents;
     }

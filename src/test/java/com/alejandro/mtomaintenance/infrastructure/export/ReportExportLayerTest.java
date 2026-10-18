@@ -235,7 +235,7 @@ class ReportExportLayerTest {
 
     /**
      * El parte de un turno de punta a punta, de su JSON al fichero: los instrumentos de mto-resources
-     * ({@code V22}) en su anexo, con la calibracion como fecha de verdad en el .xlsx y despues de los
+     * ({@code V23}) en su anexo, con la calibracion como fecha de verdad en el .xlsx y despues de los
      * totales en el PDF.
      */
     @Test

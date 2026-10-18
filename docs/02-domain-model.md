@@ -233,7 +233,7 @@ description only is 409 `SHF-001`: it stays on a track or at a site with rail ac
 `parkings` the shift's `parkingPlace` stands, as before. `mto-resources` reads it from `shift.closed`,
 and from `shift.cancelled` of a shift that had started, to move each vehicle's position.
 
-The instruments taken that night (`V22`: earthing poles, voltage detectors, measuring equipment of
+The instruments taken that night (`V23`: earthing poles, voltage detectors, measuring equipment of
 `mto-resources`, `maintenance_instrument`) are a set chosen in the shift (`instrumentIds`), replaced
 whole like the linemen, never copied from the team; an unknown one is 404 `MSI-404`. The free
 `measurementEquipment` text stays for the shifts of before.
@@ -248,7 +248,7 @@ report carry the same (the events, only the instruments' ids and codes).
 What expires belongs to `mto-resources`: the qualifications of a person (a driving licence `LIC-B`, the
 rail auxiliary vehicle driver `RAIL-DRIVER`, the road-rail machine operator `RR-OPERATOR`...), the
 documents of a vehicle (road or rail inspection, insurance, crane or platform certificate) and the
-calibration of an instrument. Its events bring them into the snapshots (`V22`, `03-database.md`):
+calibration of an instrument. Its events bring them into the snapshots (`V23`, `03-database.md`):
 `crew_person.qualifications` (`code`, `kind`, `drivingLicence`, `expiresOn`; all of them, also the
 expired ones), `fleet_vehicle.documents` (`kind`, `reference`, `expiresOn`), the qualification a
 vehicle's model requires of its driver (`fleet_vehicle.required_driver_qualification`) and

@@ -24,7 +24,7 @@ import java.util.UUID;
  * agua dentro de la sentencia, como un activo de datos maestros. No se audita (Envers no veria esas
  * escrituras). El id es el de mto-resources.
  *
- * <p>Sus cualificaciones ({@code V22}) son la lista de {@code person.*.qualifications} tal cual llega,
+ * <p>Sus cualificaciones ({@code V23}) son la lista de {@code person.*.qualifications} tal cual llega,
  * tambien las caducadas: quien decide por la fecha es el turno ({@code ShiftQualifications}).</p>
  */
 @Entity
@@ -85,7 +85,7 @@ public class CrewPerson {
         };
     }
 
-    /** Nunca nula: una fila escrita antes de {@code V22}, o una persona construida a mano, no tiene ninguna. */
+    /** Nunca nula: una fila escrita antes de {@code V23}, o una persona construida a mano, no tiene ninguna. */
     public List<Qualification> getQualifications() {
         return qualifications == null ? List.of() : qualifications;
     }

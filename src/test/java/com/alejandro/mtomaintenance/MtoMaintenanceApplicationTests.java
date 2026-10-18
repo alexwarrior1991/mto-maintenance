@@ -246,7 +246,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
                 .containsAll(BusinessServices.HANDLED_ENTITIES);
     }
 
-    /** Las entidades de mto-resources que llegan por su cola tienen cada una su manejador (V19, y V22 los instrumentos). */
+    /** Las entidades de mto-resources que llegan por su cola tienen cada una su manejador (V19, y V23 los instrumentos). */
     @Test
     void theResourcesHandlersAreRegistered() {
         assertThat(incomingEventHandlers)

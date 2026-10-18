@@ -206,7 +206,7 @@ public class MaintenanceShift extends VersionedEntity {
     private List<MaintenanceShiftVehicle> vehicles = new ArrayList<>();
 
     /**
-     * Los instrumentos que se llevan esa noche, de mto-resources ({@code V22}): un conjunto que se
+     * Los instrumentos que se llevan esa noche, de mto-resources ({@code V23}): un conjunto que se
      * sustituye entero, como los linemen; el instrumento se lee como esta ahora. Ninguno retirado ni con
      * la calibracion caducada a la fecha del turno ({@code ShiftQualifications}). Lo que se ensena sale
      * de {@link #instrumentsByCode()}.

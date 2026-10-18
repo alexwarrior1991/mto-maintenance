@@ -27,7 +27,7 @@ class JpaEntityModelTest {
         List<Class<?>> audited = List.of(CatenaryAsset.class, MaintenanceShift.class, MaintenanceOrder.class, MaintenanceTask.class,
                 MaintenanceTaskCheckItem.class, MaintenanceInspection.class, MaintenanceInspectionItem.class,
                 CatenaryDefect.class, MaintenanceMaterialUsage.class, MaintenanceShiftVehicle.class);
-        // CrewPerson, FleetVehicle y MaintenanceInstrument (V22) son instantaneas de mto-resources escritas
+        // CrewPerson, FleetVehicle y MaintenanceInstrument (V23) son instantaneas de mto-resources escritas
         // solo con SQL nativo: como CatenaryAssetSwitch, una gemela _aud se quedaria vacia. Su historial vive
         // en mto-resources.
         // CatenaryAssetSwitch se queda fuera por lo mismo que InboxMessage: sus filas las escribe
@@ -46,7 +46,7 @@ class JpaEntityModelTest {
     }
 
     /**
-     * Lo que un turno toma de mto-resources (la dotacion, los vehiculos y, desde V22, los instrumentos) no
+     * Lo que un turno toma de mto-resources (la dotacion, los vehiculos y, desde V23, los instrumentos) no
      * tiene gemela _aud: la revision del turno lo lee como esta ahora. Sin NOT_AUDITED, Envers buscaria
      * maintenance_instrument_aud, que no existe.
      */

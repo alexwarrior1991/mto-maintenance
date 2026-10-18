@@ -14,7 +14,7 @@ public final class ResourcesRabbitMqNames {
     public static final String RESOURCES_EXCHANGE = "mto.resources.exchange";
 
     /**
-     * Solo lo que un turno necesita: personas, equipos, vehiculos e instrumentos ({@code V22}). Las
+     * Solo lo que un turno necesita: personas, equipos, vehiculos e instrumentos ({@code V23}). Las
      * ubicaciones y los avisos de caducidad ({@code qualification.*}, {@code vehicle-document.*},
      * {@code calibration.*}) no llegan aqui: la fecha la mira el turno sobre la instantanea.
      */
