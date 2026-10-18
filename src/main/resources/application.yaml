@@ -205,8 +205,8 @@ app:
     heartbeat: ${APP_OPERATIONS_HEARTBEAT:5s}
     stale-after: ${APP_OPERATIONS_STALE_AFTER:1m}
     abandon-check: ${APP_OPERATIONS_ABANDON_CHECK:30s}
-    # La espera de una operacion en cola por su turno: se mira, se suelta la conexion y se duerme, del
-    # primero al segundo valor doblando cada vez.
+    # La espera de una operacion en cola cuando otra replica tiene su ambito: se mira, se suelta la conexion
+    # y se duerme, del primero al segundo valor doblando cada vez. En una instancia espera en un cerrojo.
     poll-initial: 200ms
     poll-max: 2s
     retention: ${APP_OPERATIONS_RETENTION:7d}

@@ -437,9 +437,11 @@ and `GET /operations/{id}` gives the same body when it ends.
   registers the operation, under an advisory lock: with three replicas an in-memory semaphore would
   be three times the cap. Beyond it, 429 `OPS-429` with `Retry-After`.
 - **One at a time per scope.** Operations of one scope (`EP-<package>`, or `order-<id>` without a
-  package) start in order of arrival. One waiting is `QUEUED` and holds no connection: it looks with
-  a short transaction and, if it is not its turn, sleeps with growing backoff (`poll-initial` to
-  `poll-max`, the same as a generation waiting for its lock).
+  package) start in order of arrival. One waiting is `QUEUED` and holds no connection: in one instance
+  it waits on a fair lock per scope (`OperationScopeLocks`, apart from the generation's
+  `GenerationLocks`), without asking the database, and with that turn a short transaction starts it.
+  Only when another replica has the scope (the turn in `background_operation` is what holds between
+  replicas) does it let the lock go and look again with growing backoff (`poll-initial` to `poll-max`).
 - **Abandoned ones.** A live operation beats (`heartbeat_at`, every `app.operations.heartbeat`, 5 s);
   one silent for `app.operations.stale-after` (1 min), because its replica died, is failed by any
   replica (`app.operations.abandon-check`, 30 s) with the error `OPS-410`, and stops counting for the

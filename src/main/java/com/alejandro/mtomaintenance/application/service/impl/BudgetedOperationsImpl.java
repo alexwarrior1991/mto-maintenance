@@ -38,6 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -49,8 +50,10 @@ import java.util.function.Supplier;
  * {@link CompletableFuture} hasta su presupuesto, y un hilo virtual que espera no cuesta nada.</p>
  *
  * <p>Ninguna espera retiene una conexion: apuntar, arrancar, latir y terminar son sentencias cortas, cada
- * una en su transaccion, y una operacion en cola que no tiene turno suelta la suya y duerme con espera
- * creciente antes de volver a mirar.</p>
+ * una en su transaccion. Las de un mismo ambito hacen fila en esta instancia en {@link OperationScopeLocks},
+ * sin conexion y sin mirar la base de datos; con el turno local piden el de la base de datos, que entre
+ * replicas es el que manda. Solo si otra replica tiene el ambito sueltan el cerrojo y vuelven a mirar con
+ * espera creciente.</p>
  */
 @Service
 class BudgetedOperationsImpl implements BudgetedOperations {
@@ -68,6 +71,7 @@ class BudgetedOperationsImpl implements BudgetedOperations {
     private final CurrentUserService currentUserService;
     private final OperationsProperties properties;
     private final JsonMapper jsonMapper;
+    private final OperationScopeLocks scopeLocks;
 
     /** Las operaciones vivas de este proceso, las que late {@link #heartbeat()}. */
     private final Set<UUID> alive = ConcurrentHashMap.newKeySet();
@@ -78,7 +82,8 @@ class BudgetedOperationsImpl implements BudgetedOperations {
                            OperationErrorTranslator errorTranslator,
                            CurrentUserService currentUserService,
                            OperationsProperties properties,
-                           JsonMapper jsonMapper) {
+                           JsonMapper jsonMapper,
+                           OperationScopeLocks scopeLocks) {
         this.repository = repository;
         this.executor = executor;
         this.transactions = new TransactionTemplate(transactionManager);
@@ -87,6 +92,7 @@ class BudgetedOperationsImpl implements BudgetedOperations {
         this.currentUserService = currentUserService;
         this.properties = properties;
         this.jsonMapper = jsonMapper;
+        this.scopeLocks = scopeLocks;
     }
 
     @Override
@@ -133,15 +139,15 @@ class BudgetedOperationsImpl implements BudgetedOperations {
                              Supplier<T> work, CompletableFuture<T> future) {
         BackgroundOperationContext.set(context);
         try {
-            awaitTurn(id, scope);
-            T result = work.get();
-            repository.markSucceeded(id, successStatus, jsonMapper.writeValueAsString(result), Instant.now());
-            future.complete(result);
+            retryUntil(() -> runIfItsTurn(id, scope, successStatus, work, future));
         } catch (Throwable failure) {
-            OperationError error = errorTranslator.translate(failure);
-            LOGGER.warn("Background operation {} failed with {} {}: {}", id, error.status(), error.errorCode(), error.message());
-            repository.markFailed(id, error.status(), error.errorCode(), truncate(error.message(), MAX_MESSAGE_LENGTH), Instant.now());
-            future.completeExceptionally(failure);
+            // No llego a trabajar: la base de datos, una interrupcion esperando o ya no estaba en cola. Con la
+            // interrupcion puesta el pool no daria la conexion de markFailed: se quita para apuntarlo y se repone.
+            boolean interrupted = Thread.interrupted();
+            fail(id, failure, future);
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         } finally {
             alive.remove(id);
             BackgroundOperationContext.clear();
@@ -149,30 +155,77 @@ class BudgetedOperationsImpl implements BudgetedOperations {
     }
 
     /**
-     * Espera su turno sin retener conexion: cada mirada es una transaccion corta con el cerrojo del ambito,
-     * y entre una y otra el hilo virtual duerme, que no cuesta nada.
+     * Un intento, con el turno local de su ambito (sin ambito no hay fila): arranca si la base de datos dice
+     * que le toca, hace el trabajo y lo deja apuntado antes de soltar el cerrojo, para que la siguiente de
+     * la instancia arranque a la primera. {@code false} si no le toca, que con el turno local solo pasa si
+     * otra replica tiene el ambito: entonces suelta el cerrojo.
      */
-    private void awaitTurn(UUID id, String scope) throws InterruptedException {
-        Duration pause = properties.pollInitial();
-        while (true) {
-            Instant now = Instant.now();
-            Integer started = transactions.execute(status -> {
-                if (scope != null) {
-                    repository.lockScope(scopeKey(scope));
-                }
-                return repository.startIfTurn(id, now, now.minus(properties.staleAfter()));
-            });
-            if (started != null && started == 1) {
-                return;
+    private <T> boolean runIfItsTurn(UUID id, String scope, int successStatus, Supplier<T> work, CompletableFuture<T> future) {
+        Supplier<Boolean> attempt = () -> {
+            if (!start(id, scope)) {
+                requireQueued(id);
+                return false;
             }
-            OperationStatus current = repository.findById(id).map(BackgroundOperation::getStatus).orElse(OperationStatus.FAILED);
-            if (current != OperationStatus.QUEUED) {
-                throw new IllegalStateException("Background operation " + id + " can no longer start: it is " + current);
+            run(id, successStatus, work, future);
+            return true;
+        };
+        return scope == null ? attempt.get() : scopeLocks.withLock(scope, attempt);
+    }
+
+    /** Una transaccion corta con el cerrojo del ambito: arranca la operacion si es su turno. */
+    private boolean start(UUID id, String scope) {
+        Instant now = Instant.now();
+        Integer started = transactions.execute(status -> {
+            if (scope != null) {
+                repository.lockScope(scopeKey(scope));
             }
-            Thread.sleep(pause);
-            Duration doubled = pause.multipliedBy(2);
-            pause = doubled.compareTo(properties.pollMax()) > 0 ? properties.pollMax() : doubled;
+            return repository.startIfTurn(id, now, now.minus(properties.staleAfter()));
+        });
+        return started != null && started == 1;
+    }
+
+    private void requireQueued(UUID id) {
+        OperationStatus current = repository.findById(id).map(BackgroundOperation::getStatus).orElse(OperationStatus.FAILED);
+        if (current != OperationStatus.QUEUED) {
+            throw new IllegalStateException("Background operation " + id + " can no longer start: it is " + current);
         }
+    }
+
+    private <T> void run(UUID id, int successStatus, Supplier<T> work, CompletableFuture<T> future) {
+        try {
+            T result = work.get();
+            repository.markSucceeded(id, successStatus, jsonMapper.writeValueAsString(result), Instant.now());
+            future.complete(result);
+        } catch (Throwable failure) {
+            fail(id, failure, future);
+        }
+    }
+
+    private void fail(UUID id, Throwable failure, CompletableFuture<?> future) {
+        OperationError error = errorTranslator.translate(failure);
+        LOGGER.warn("Background operation {} failed with {} {}: {}", id, error.status(), error.errorCode(), error.message());
+        repository.markFailed(id, error.status(), error.errorCode(), truncate(error.message(), MAX_MESSAGE_LENGTH), Instant.now());
+        future.completeExceptionally(failure);
+    }
+
+    /**
+     * Repite {@code attempt} hasta que diga que si, sin conexion entre uno y otro: el hilo virtual duerme con
+     * espera creciente ({@code poll-initial} doblando hasta {@code poll-max}), que no cuesta nada.
+     */
+    private void retryUntil(BooleanSupplier attempt) {
+        for (Duration pause = properties.pollInitial(); !attempt.getAsBoolean(); pause = longer(pause)) {
+            try {
+                Thread.sleep(pause);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting for the turn of a background operation", interrupted);
+            }
+        }
+    }
+
+    private Duration longer(Duration pause) {
+        Duration doubled = pause.multipliedBy(2);
+        return doubled.compareTo(properties.pollMax()) > 0 ? properties.pollMax() : doubled;
     }
 
     @Override
