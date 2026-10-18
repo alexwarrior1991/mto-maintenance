@@ -152,7 +152,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
 
     @Test
     void theMinutesOfEachTaskTypeAreThoseOfTheTaskSheetWithTheirUnit() {
-        // code -> minutes per unit, unit, fixed minutes (V18: the minutes of the task sheet of the plan).
+        // code -> minutes per unit, unit, fixed minutes (V18: the minutes of the task sheet of the plan; V22: RP-05 per span).
         Map<String, String> expected = Map.ofEntries(
                 Map.entry("RG-01", "5 UNIT 0"), Map.entry("RG-02", "4 UNIT 0"), Map.entry("RG-03", "20 UNIT 0"),
                 Map.entry("RG-04", "20 UNIT 0"), Map.entry("RG-05", "10 UNIT 0"), Map.entry("RG-06", "15 UNIT 0"),
@@ -161,7 +161,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 Map.entry("RG-13", "2 UNIT 0"), Map.entry("RG-14", "3 KM 30"), Map.entry("RG-15", "20 UNIT 0"),
                 Map.entry("RG-16", "5 UNIT 0"), Map.entry("RG-17", "3 KM 30"), Map.entry("RG-18", "45 KM 60"),
                 Map.entry("RP-01", "4 UNIT 0"), Map.entry("RP-02", "20 UNIT 0"), Map.entry("RP-03", "20 UNIT 0"),
-                Map.entry("RP-04", "15 UNIT 0"), Map.entry("RP-05", "3 DEFECT 0"), Map.entry("RP-06", "20 UNIT 0"),
+                Map.entry("RP-04", "15 UNIT 0"), Map.entry("RP-05", "3 SPAN 0"), Map.entry("RP-06", "20 UNIT 0"),
                 Map.entry("RP-07", "20 UNIT 0"), Map.entry("RP-08", "4 UNIT 0"), Map.entry("RP-09", "3 PROFILE 0"),
                 Map.entry("RP-10", "10 DEFECT 0"), Map.entry("RP-11", "0.3 KM 0"), Map.entry("RP-12", "60 UNIT 0"));
 
