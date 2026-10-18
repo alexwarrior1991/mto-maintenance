@@ -5,20 +5,25 @@ import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.domain.model.CrewComposition;
+import com.alejandro.mtomaintenance.domain.model.ShiftQualifications;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPersonRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.FleetVehicleRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInstrumentRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceShiftRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -29,8 +34,8 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * La dotacion y los vehiculos de un turno, de mto-resources: quien va esa noche y en que, y donde se
- * dejo cada vehiculo. Las reglas dan 409 {@code SHF-001}.
+ * La dotacion, los vehiculos y los instrumentos de un turno, de mto-resources: quien va esa noche, en
+ * que y con que, y donde se dejo cada vehiculo. Las reglas dan 409 {@code SHF-001}.
  *
  * <ul>
  *   <li><b>Siempre</b>: como mucho un jefe y 6 linemen, sin que el jefe este entre ellos; personas
@@ -41,6 +46,11 @@ import java.util.stream.Collectors;
  *       locales de antes, sin ella, siguen como hoy.</li>
  *   <li><b>Plazas</b>: si los vehiculos autopropulsados del turno dicen sus plazas, alcanzan para el
  *       jefe y sus linemen.</li>
+ *   <li><b>Caducidades</b> ({@link ShiftQualifications}): siempre, nada caducado a la fecha del turno (una
+ *       cualificacion del jefe, del supervisor o de un lineman, un documento de un vehiculo, la
+ *       calibracion de un instrumento) ni un instrumento retirado; para iniciarlo y en curso, un conductor
+ *       habilitado distinto por cada vehiculo autopropulsado que lo exige. Un turno sin dotacion, vehiculos
+ *       ni instrumentos de mto-resources no tiene nada que mirar y sigue como antes.</li>
  *   <li><b>Doble asignacion</b>: ni un vehiculo ni el jefe ni un lineman van en dos turnos abiertos de la
  *       misma fecha, con un bloqueo asesor por cada uno.</li>
  * </ul>
@@ -52,9 +62,13 @@ class ShiftCrew {
     private static final Set<ShiftStatus> OPEN = EnumSet.of(ShiftStatus.PLANNED, ShiftStatus.IN_PROGRESS);
     private static final UUID NO_SHIFT = new UUID(0, 0);
 
+    /** El agregado de su 404: {@code MSI-404}, un instrumento que aun no ha llegado de mto-resources. */
+    static final String MSI = "Maintenance instrument";
+
     private final CrewPersonRepository personRepository;
     private final FleetVehicleRepository vehicleRepository;
     private final MaintenanceShiftRepository shiftRepository;
+    private final MaintenanceInstrumentRepository instrumentRepository;
 
     /**
      * Al dar de alta: lo que la peticion dice, y lo que no dice de un equipo sincronizado (su jefe, su
@@ -109,8 +123,24 @@ class ShiftCrew {
     }
 
     /**
-     * Las reglas de siempre y, con {@code working} (al iniciarlo o en curso), la dotacion entera. La doble
-     * asignacion se comprueba con los bloqueos tomados, en orden, para que dos turnos a la vez no la burlen.
+     * Los instrumentos de esa noche, el conjunto entero. Un id que no ha llegado de mto-resources es 404
+     * {@code MSI-404}, antes de tocar nada.
+     */
+    void replaceInstruments(MaintenanceShift shift, Set<UUID> instrumentIds) {
+        List<MaintenanceInstrument> wanted = new ArrayList<>();
+        if (instrumentIds != null) {
+            for (UUID id : new LinkedHashSet<>(instrumentIds)) {
+                wanted.add(instrumentRepository.findById(id).orElseThrow(() -> new NotFoundException(MSI, id)));
+            }
+        }
+        shift.getInstruments().clear();
+        shift.getInstruments().addAll(wanted);
+    }
+
+    /**
+     * Las reglas de siempre y, con {@code working} (al iniciarlo o en curso), la dotacion entera y sus
+     * conductores habilitados. La doble asignacion se comprueba con los bloqueos tomados, en orden, para
+     * que dos turnos a la vez no la burlen.
      */
     void check(MaintenanceShift shift, boolean working) {
         String label = "Shift " + shift.getCode();
@@ -137,7 +167,62 @@ class ShiftCrew {
         }
         checkVehicles(shift, label);
         checkSeats(shift, label, leader != null, linemen);
+        checkExpiries(shift, label, working);
         requireNoDoubleBooking(shift, label);
+    }
+
+    /**
+     * Lo caducado a la fecha del turno, siempre, y al trabajar un conductor habilitado distinto por cada
+     * vehiculo que lo exige: el jefe primero y luego los linemen por codigo, para que el emparejamiento
+     * salga igual cada vez. El supervisor no conduce, pero lo suyo tampoco puede estar caducado.
+     */
+    private static void checkExpiries(MaintenanceShift shift, String label, boolean working) {
+        LocalDate date = shift.getShiftDate();
+        if (date == null) {
+            return;
+        }
+        List<ShiftQualifications.Person> crew = new ArrayList<>();
+        if (shift.getTeamLeader() != null) {
+            crew.add(holder(shift.getTeamLeader()));
+        }
+        shift.getLinemen().stream().sorted(Comparator.comparing(CrewPerson::getCode)).map(ShiftCrew::holder).forEach(crew::add);
+        List<ShiftQualifications.Person> everyone = new ArrayList<>(crew);
+        if (shift.getSupervisor() != null && everyone.stream().noneMatch(person -> person.id().equals(shift.getSupervisor().getId()))) {
+            everyone.add(holder(shift.getSupervisor()));
+        }
+        List<ShiftQualifications.Vehicle> vehicles = shift.vehiclesByCode().stream()
+                .map(shiftVehicle -> withDocuments(shiftVehicle.getVehicle())).toList();
+        List<ShiftQualifications.Instrument> instruments = shift.instrumentsByCode().stream()
+                .map(instrument -> new ShiftQualifications.Instrument(instrument.getCode(), Boolean.TRUE.equals(instrument.getActive()),
+                        instrument.getCalibrationExpiresOn()))
+                .toList();
+
+        ShiftQualifications.expiredViolation(label, date, everyone, vehicles, instruments).ifPresent(reason -> {
+            throw new ShiftException(reason);
+        });
+        if (working) {
+            ShiftQualifications.driverViolation(label, date, crew, vehicles).ifPresent(reason -> {
+                throw new ShiftException(reason + " (teamLeaderPersonId, linemanPersonIds)");
+            });
+        }
+    }
+
+    /** La persona con sus cualificaciones, como la mira {@link ShiftQualifications}. */
+    private static ShiftQualifications.Person holder(CrewPerson person) {
+        return new ShiftQualifications.Person(person.getId(), person.getFullName() + " (" + person.getCode() + ")",
+                person.getQualifications().stream()
+                        .filter(qualification -> qualification.code() != null)
+                        .map(qualification -> new ShiftQualifications.Qualification(qualification.code(), qualification.expiresOn()))
+                        .toList());
+    }
+
+    /** El vehiculo con sus documentos y lo que exige a su conductor, como lo mira {@link ShiftQualifications}. */
+    private static ShiftQualifications.Vehicle withDocuments(FleetVehicle vehicle) {
+        return new ShiftQualifications.Vehicle(vehicle.getCode(), Boolean.TRUE.equals(vehicle.getSelfPropelled()),
+                vehicle.getRequiredDriverQualification(),
+                vehicle.getDocuments().stream()
+                        .map(document -> new ShiftQualifications.Document(document.kind(), document.reference(), document.expiresOn()))
+                        .toList());
     }
 
     private static void checkVehicles(MaintenanceShift shift, String label) {

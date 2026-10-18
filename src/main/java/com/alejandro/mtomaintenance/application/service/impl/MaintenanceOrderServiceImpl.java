@@ -40,6 +40,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryDefectRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
@@ -109,6 +110,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
                 .stockProjectId(request.stockProjectId())
                 .build();
         order.locateAt(asset);
+        fillLeader(order, null);
 
         MaintenanceOrder saved = repository.save(order);
         history.recordOrderChange(saved, null, saved.getStatus().name(), "Order created");
@@ -149,12 +151,16 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
                 order.setTitle(requireText(request.title(), "title"));
             }
             set(patch, "plannedDate", request.plannedDate(), order::setPlannedDate);
+            String previousLeader = leaderUsername(order.getTeam());
             if (patch.clears("teamId")) {
                 order.setTeam(null);
             } else if (request.teamId() != null) {
                 order.setTeam(lookups.team(request.teamId()));
             }
             set(patch, "assignedUser", request.assignedUser(), order::setAssignedUser);
+            if (request.teamId() != null && request.assignedUser() == null && !patch.clears("assignedUser")) {
+                fillLeader(order, previousLeader);
+            }
             set(patch, "executionPackageId", request.executionPackageId(), order::setExecutionPackageId);
             set(patch, "trackId", request.trackId(), order::setTrackId);
             set(patch, "stationId", request.stationId(), order::setStationId);
@@ -232,11 +238,17 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     public MaintenanceOrderResponse assign(UUID id, AssignOrderRequest request) {
         MaintenanceOrder order = lookups.order(id);
         requireTransition(OrderStateMachine.canAssign(order.getStatus()), order, "assigned");
+        String previousLeader = leaderUsername(order.getTeam());
         if (request.teamId() != null) {
             order.setTeam(lookups.team(request.teamId()));
         }
-        if (request.assignedUser() != null && !request.assignedUser().isBlank()) {
-            order.setAssignedUser(request.assignedUser().trim());
+        // Los dialogos mandan el usuario que la orden ya tenia: ese no es una eleccion, y con el jefe
+        // del equipo anterior la orden pasa al jefe del nuevo como si no hubiera venido.
+        String requested = request.assignedUser() == null || request.assignedUser().isBlank() ? null : request.assignedUser().trim();
+        if (requested != null && !requested.equals(order.getAssignedUser())) {
+            order.setAssignedUser(requested);
+        } else {
+            fillLeader(order, previousLeader);
         }
         if (order.getStatus() == MaintenanceOrderStatus.IN_PROGRESS) {
             // Reasignar a media ejecucion no cambia de estado; queda en el historial con comentario.
@@ -388,5 +400,27 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
         int completed = (int) tasks.stream().filter(task -> task.getStatus() == MaintenanceTaskStatus.COMPLETED).count();
         WorkloadEstimate estimate = workloadEstimator.estimate(order);
         return mapper.toResponse(order, tasks.size(), completed, estimate.estimatedMinutes(), estimate.estimatedShifts());
+    }
+
+    /**
+     * Una orden de un equipo de mto-resources que queda sin usuario se asigna al usuario de su jefe: es
+     * quien la lleva, y la regla de mto-notification de la orden asignada le avisa. Tambien la que seguia
+     * con el jefe del equipo anterior, que se lo habia dado esta misma regla. Un usuario que se da
+     * expresamente gana, y un equipo local (sin jefe) o un jefe sin usuario de Keycloak no cambian nada.
+     */
+    private static void fillLeader(MaintenanceOrder order, String previousLeader) {
+        String leader = leaderUsername(order.getTeam());
+        String current = order.getAssignedUser();
+        if (leader != null && (current == null || current.isBlank() || current.equals(previousLeader))) {
+            order.setAssignedUser(leader);
+        }
+    }
+
+    private static String leaderUsername(MaintenanceTeam team) {
+        if (team == null || !team.isSynchronized() || team.getLeader() == null) {
+            return null;
+        }
+        String username = team.getLeader().getUsername();
+        return username == null || username.isBlank() ? null : username;
     }
 }

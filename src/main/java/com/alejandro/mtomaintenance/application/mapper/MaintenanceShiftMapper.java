@@ -3,10 +3,12 @@ package com.alejandro.mtomaintenance.application.mapper;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.crew.CrewPersonSummary;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftResponse;
+import com.alejandro.mtomaintenance.application.dto.shift.ShiftInstrumentResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.ShiftVehicleResponse;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAsset;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
 import org.mapstruct.Mapper;
@@ -23,6 +25,7 @@ public interface MaintenanceShiftMapper {
     @Mapping(target = "blockingDisconnectors", expression = "java(toSummaries(sortedDisconnectors(shift)))")
     @Mapping(target = "linemen", expression = "java(linemen(shift))")
     @Mapping(target = "vehicles", expression = "java(vehicles(shift))")
+    @Mapping(target = "instruments", expression = "java(instruments(shift))")
     MaintenanceShiftResponse toResponse(MaintenanceShift shift);
 
     /** Por codigo, como los seccionadores: el parte los lista siempre igual. */
@@ -48,6 +51,19 @@ public interface MaintenanceShiftMapper {
                 : null;
         return new ShiftVehicleResponse(vehicle.getId(), vehicle.getCode(), vehicle.getName(), vehicle.getMobility(), vehicle.getCategory(),
                 vehicle.getAvailable(), parking);
+    }
+
+    /** Por codigo, como los vehiculos: la respuesta, el evento y el parte los listan igual. */
+    default List<ShiftInstrumentResponse> instruments(MaintenanceShift shift) {
+        if (shift.getInstruments() == null) {
+            return List.of();
+        }
+        return shift.instrumentsByCode().stream().map(MaintenanceShiftMapper::instrument).toList();
+    }
+
+    static ShiftInstrumentResponse instrument(MaintenanceInstrument instrument) {
+        return new ShiftInstrumentResponse(instrument.getId(), instrument.getCode(), instrument.getName(), instrument.getKind(),
+                instrument.getCalibrationExpiresOn());
     }
 
     /** La implementa MapStruct con {@link CatenaryAssetMapper#toSummary}. */

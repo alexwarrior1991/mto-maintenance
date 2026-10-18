@@ -572,7 +572,7 @@ class MessagingLayerTest {
     }
 
     @Test
-    void theResourcesQueueIsBoundToPeopleTeamsAndVehiclesAndDeadLettersToItsOwnQueue() {
+    void theResourcesQueueIsBoundToPeopleTeamsVehiclesAndInstrumentsAndDeadLettersToItsOwnQueue() {
         contextRunner.run(context -> {
             Queue queue = context.getBean("resourcesQueue", Queue.class);
             assertEquals(ResourcesRabbitMqNames.MAINTENANCE_RESOURCES_QUEUE, queue.getName());
@@ -581,7 +581,10 @@ class MessagingLayerTest {
             assertEquals(ResourcesRabbitMqNames.RESOURCES_EXCHANGE, context.getBean("resourcesExchange", TopicExchange.class).getName());
             List<String> keys = context.getBean("resourcesBindings", Declarables.class).getDeclarablesByType(Binding.class).stream()
                     .map(Binding::getRoutingKey).toList();
-            assertEquals(List.of("mto.resources.person.*", "mto.resources.team.*", "mto.resources.vehicle.*"), keys);
+            // Los instrumentos (V23) entran por su propia clave; los avisos de caducidad de mto-resources
+            // (qualification.*, vehicle-document.*, calibration.*) son de mto-notification y no llegan aqui.
+            assertEquals(List.of("mto.resources.person.*", "mto.resources.team.*", "mto.resources.vehicle.*", "mto.resources.instrument.*"), keys);
+            assertTrue(keys.stream().noneMatch(key -> key.contains("qualification") || key.contains("calibration") || key.contains("document")));
             assertEquals(ResourcesRabbitMqNames.MAINTENANCE_RESOURCES_DEAD_LETTER_QUEUE,
                     context.getBean("resourcesDeadLetterQueue", Queue.class).getName());
             assertTrue(context.containsBean("resourcesEventConsumer"));

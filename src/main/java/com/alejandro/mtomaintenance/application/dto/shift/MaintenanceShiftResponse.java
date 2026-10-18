@@ -21,7 +21,8 @@ import java.util.UUID;
  * {"id": "0195a…", "code": "SH-000001", "shiftDate": "2026-01-27", "team": {"code": "A", "name": "Team A - Rishpon", …},
  *  "possessionType": "PARTIAL", "actualStart": "2026-01-27T19:10:00Z", "voltageCutoffAt": "2026-01-27T21:40:00Z",
  *  "actualEnd": "2026-01-28T02:30:00Z", "netWorkMinutes": 290, "blockingDisconnectors": [{"code": "DSC-77", …}, …],
- *  "trackIds": [2], "status": "CLOSED", "observations": "Corte de tension retrasado por trafico", "version": 3, …}
+ *  "trackIds": [2], "instruments": [{"code": "EP-07", "kind": "EARTHING_POLE", "calibrationExpiresOn": "2027-01-10", …}],
+ *  "status": "CLOSED", "observations": "Corte de tension retrasado por trafico", "version": 3, …}
  * }</pre>
  */
 public record MaintenanceShiftResponse(
@@ -50,6 +51,7 @@ public record MaintenanceShiftResponse(
         CrewPersonSummary supervisor,
         List<CrewPersonSummary> linemen,
         List<ShiftVehicleResponse> vehicles,
+        List<ShiftInstrumentResponse> instruments,
         String measurementEquipment,
         ShiftStatus status,
         String observations,

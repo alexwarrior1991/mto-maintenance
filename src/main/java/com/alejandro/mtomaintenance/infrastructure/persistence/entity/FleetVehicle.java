@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.infrastructure.persistence.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -9,8 +10,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 import org.hibernate.annotations.Immutable;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -18,6 +23,9 @@ import java.util.UUID;
  * mueve solo, si remolca, cuantas plazas tiene y si esta disponible. Solo se lee: la escribe
  * {@code FleetVehicleRepository} con SQL nativo y la marca de agua dentro de la sentencia. No se
  * audita. El id es el de mto-resources; sus enumerados van como texto.
+ *
+ * <p>Desde {@code V23}, tambien sus documentos con su caducidad (inspecciones, seguro, certificados) y
+ * la habilitacion que su modelo exige a quien lo conduce: lo que mira {@code ShiftQualifications}.</p>
  */
 @Entity
 @Immutable
@@ -74,6 +82,15 @@ public class FleetVehicle {
     @Column(name = "active", nullable = false)
     private Boolean active;
 
+    /** Los de {@code vehicle.*.documents}, tambien los caducados; vacia si no tiene ninguno. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "documents", nullable = false, columnDefinition = "jsonb")
+    private List<Document> documents;
+
+    /** El codigo del tipo de cualificacion que exige su modelo al conductor ({@code RR-OPERATOR}); {@code null}, ninguna. */
+    @Column(name = "required_driver_qualification", length = 32)
+    private String requiredDriverQualification;
+
     @Column(name = "source_sequence_number")
     private Long sourceSequenceNumber;
 
@@ -85,5 +102,18 @@ public class FleetVehicle {
 
     public boolean isRailOnly() {
         return RAIL_ONLY.equals(mobility);
+    }
+
+    /** Nunca nula: una fila escrita antes de {@code V23}, o un vehiculo construido a mano, no tiene ninguno. */
+    public List<Document> getDocuments() {
+        return documents == null ? List.of() : documents;
+    }
+
+    /**
+     * Un documento del vehiculo, como lo publica mto-resources: su clase ({@code ROAD_INSPECTION}), su
+     * referencia y hasta cuando vale (siempre caduca).
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Document(String kind, String reference, LocalDate expiresOn) {
     }
 }

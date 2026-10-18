@@ -6,6 +6,7 @@ import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageReques
 import com.alejandro.mtomaintenance.application.dto.order.AssignOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.order.MaintenanceOrderRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftRequest;
+import com.alejandro.mtomaintenance.application.dto.shift.MaintenanceShiftUpdateRequest;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAssetType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.application.dto.task.CompleteTaskRequest;
@@ -181,6 +182,12 @@ class DtoValidationTest {
         Set<UUID> disconnectors = new HashSet<>(Arrays.asList(UUID.randomUUID(), null));
         assertEquals(Set.of("trackIds", "blockingDisconnectorIds"), lists(validator.validate(new MaintenanceShiftRequest(LocalDate.of(2026, 1, 27), null, null,
                 null, PossessionType.PARTIAL, null, null, disconnectors, null, null, null, tracks, null, null, null, null, null))));
+        // Los instrumentos del turno (V23), en el alta y en el cambio.
+        assertEquals(Set.of("instrumentIds"), lists(validator.validate(new MaintenanceShiftRequest(LocalDate.of(2026, 1, 27), null, null,
+                null, PossessionType.PARTIAL, null, null, null, null, null, null, Set.of(2L), null, null, null, null, null, null, null, null, null,
+                disconnectors))));
+        assertEquals(Set.of("instrumentIds"), lists(validator.validate(new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, disconnectors, 0L))));
         assertEquals(Set.of("executionPackageIds"), lists(validator.validate(new MaintenanceTeamRequest("A", "Team A", null, null, null, tracks))));
         assertEquals(Set.of("photoRefs"), lists(validator.validate(new CatenaryDefectRequest(UUID.randomUUID(), DefectSeverity.HIGH, "kink", null, null,
                 null, null, null, null, null, null, null, codes))));

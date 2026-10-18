@@ -15,6 +15,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CheckItemResult;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectStatus;
@@ -372,7 +373,21 @@ class MessagingContractExamplesTest {
         MaintenanceShiftVehicle towerCar = MaintenanceShiftVehicle.of(shift, fleetVehicle("f0000000-0000-4000-8000-000000000002", "DR-02"));
         id(towerCar, "f1000000-0000-4000-8000-000000000002");
         shift.getVehicles().add(towerCar);
+        // Los instrumentos (V23) van al final de values, por codigo: el detector se anade antes y sale despues.
+        shift.getInstruments().add(instrument("e0000000-0000-4000-8000-000000000002", "VD-02", "VOLTAGE_DETECTOR"));
+        shift.getInstruments().add(instrument("e0000000-0000-4000-8000-000000000001", "EP-07", "EARTHING_POLE"));
         return shift;
+    }
+
+    private static MaintenanceInstrument instrument(String id, String code, String kind) {
+        MaintenanceInstrument instrument = BeanUtils.instantiateClass(MaintenanceInstrument.class);
+        id(instrument, id);
+        ReflectionTestUtils.setField(instrument, "code", code);
+        ReflectionTestUtils.setField(instrument, "name", code);
+        ReflectionTestUtils.setField(instrument, "kind", kind);
+        ReflectionTestUtils.setField(instrument, "active", true);
+        ReflectionTestUtils.setField(instrument, "calibrationExpiresOn", LocalDate.of(2027, 1, 10));
+        return instrument;
     }
 
     private static CrewPerson crewPerson(String id, String code, String fullName, String username, String category) {

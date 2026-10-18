@@ -1,5 +1,6 @@
 package com.alejandro.mtomaintenance.infrastructure.persistence.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -9,8 +10,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 import org.hibernate.annotations.Immutable;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -18,6 +23,9 @@ import java.util.UUID;
  * categoria. Solo se lee: la escribe {@code CrewPersonRepository} con SQL nativo y la marca de
  * agua dentro de la sentencia, como un activo de datos maestros. No se audita (Envers no veria esas
  * escrituras). El id es el de mto-resources.
+ *
+ * <p>Sus cualificaciones ({@code V23}) son la lista de {@code person.*.qualifications} tal cual llega,
+ * tambien las caducadas: quien decide por la fecha es el turno ({@code ShiftQualifications}).</p>
  */
 @Entity
 @Immutable
@@ -52,6 +60,11 @@ public class CrewPerson {
     @Column(name = "active", nullable = false)
     private Boolean active;
 
+    /** Todas las de la persona, con su caducidad; vacia si no tiene ninguna o aun no llego su evento. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "qualifications", nullable = false, columnDefinition = "jsonb")
+    private List<Qualification> qualifications;
+
     @Column(name = "source_sequence_number")
     private Long sourceSequenceNumber;
 
@@ -70,5 +83,19 @@ public class CrewPerson {
             case "WORKER" -> false;
             default -> true;
         };
+    }
+
+    /** Nunca nula: una fila escrita antes de {@code V23}, o una persona construida a mano, no tiene ninguna. */
+    public List<Qualification> getQualifications() {
+        return qualifications == null ? List.of() : qualifications;
+    }
+
+    /**
+     * Una cualificacion de la persona, como la publica mto-resources: el codigo de su tipo
+     * ({@code RAIL-DRIVER}), su clase, el permiso de conducir si lo es, y hasta cuando vale
+     * ({@code null}: no caduca). Lo que no se usa aqui se ignora al leer.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Qualification(String code, String kind, String drivingLicence, LocalDate expiresOn) {
     }
 }

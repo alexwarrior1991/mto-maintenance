@@ -10,12 +10,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
  * Un vehiculo de mto-resources ({@code vehicle.*}): su instantanea en {@code fleet_vehicle}. Que remolca
  * lo dice su modelo ({@code type.capabilities} contiene {@code TOWING}).
+ *
+ * <p>Sus documentos ({@code documents}: {@code kind}, {@code reference}, {@code expiresOn}) y la
+ * habilitacion que su modelo exige al conductor ({@code type.requiredDriverQualification}, {@code V23})
+ * van en la misma sentencia; un evento sin la clave (un mto-resources anterior) deja lo que habia.</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -41,8 +48,8 @@ class ResourcesVehicleHandler implements IncomingEventHandler {
     public void handle(IncomingEvent event, IncomingEventContext context) {
         MasterDataPayload values = MasterDataPayload.of(event.values());
         MasterDataPayload type = values.nested("type");
-        List<?> capabilities = event.values().get("type") instanceof java.util.Map<?, ?> map && map.get("capabilities") instanceof List<?> list
-                ? list : List.of();
+        Map<?, ?> typeValues = event.values().get("type") instanceof Map<?, ?> map ? map : Map.of();
+        List<?> capabilities = typeValues.get("capabilities") instanceof List<?> list ? list : List.of();
         int applied = repository.upsertFromResources(ResourcesPayloads.uuid(event.entityId(), "vehicle"),
                 Objects.requireNonNull(values.string("code"), "vehicle.code"),
                 values.string("name"),
@@ -57,8 +64,25 @@ class ResourcesVehicleHandler implements IncomingEventHandler {
                 Objects.requireNonNullElse(values.string("operationalStatus"), "OPERATIONAL"),
                 values.bool("available", true),
                 values.bool("active", true),
+                ResourcesPayloads.jsonList(event.values(), "documents", ResourcesVehicleHandler::document),
+                type.string("requiredDriverQualification"),
+                typeValues.containsKey("requiredDriverQualification"),
                 context.sequenceNumber());
         LOGGER.info("Vehicle {} {} from mto-resources: {}", values.string("code"), event.eventName(),
                 applied == 0 ? "older than what is stored, ignored" : "applied");
+    }
+
+    /** Un documento tal como se guarda; sin su clase no se sabe que es. */
+    private static Map<String, Object> document(MasterDataPayload document) {
+        String kind = document.string("kind");
+        if (kind == null || kind.isBlank()) {
+            return null;
+        }
+        Map<String, Object> kept = new LinkedHashMap<>();
+        kept.put("kind", kind);
+        kept.put("reference", document.string("reference"));
+        LocalDate expiresOn = ResourcesPayloads.dateOrNull(document, "expiresOn", "vehicle");
+        kept.put("expiresOn", expiresOn == null ? null : expiresOn.toString());
+        return kept;
     }
 }

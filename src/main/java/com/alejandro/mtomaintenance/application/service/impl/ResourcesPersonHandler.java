@@ -10,11 +10,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
  * Una persona de mto-resources ({@code person.created/updated/deactivated}): su instantanea en
  * {@code crew_person}, con la marca de agua dentro del upsert. Corre dentro de la transaccion del inbox.
+ *
+ * <p>Sus cualificaciones ({@code qualifications}, {@code V23}) van en la misma sentencia, reducidas a
+ * {@code code}, {@code kind}, {@code drivingLicence} y {@code expiresOn}; un evento sin la clave (un
+ * mto-resources anterior) deja las que habia.</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -45,8 +52,24 @@ class ResourcesPersonHandler implements IncomingEventHandler {
                 values.string("username"),
                 Objects.requireNonNull(values.string("category"), "person.category"),
                 values.bool("active", true),
+                ResourcesPayloads.jsonList(event.values(), "qualifications", ResourcesPersonHandler::qualification),
                 context.sequenceNumber());
         LOGGER.info("Person {} {} from mto-resources: {}", values.string("code"), event.eventName(),
                 applied == 0 ? "older than what is stored, ignored" : "applied");
+    }
+
+    /** Una cualificacion tal como se guarda; sin codigo no hay nada que comprobar. */
+    private static Map<String, Object> qualification(MasterDataPayload qualification) {
+        String code = qualification.string("code");
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+        Map<String, Object> kept = new LinkedHashMap<>();
+        kept.put("code", code);
+        kept.put("kind", qualification.string("kind"));
+        kept.put("drivingLicence", qualification.string("drivingLicence"));
+        LocalDate expiresOn = ResourcesPayloads.dateOrNull(qualification, "expiresOn", "person");
+        kept.put("expiresOn", expiresOn == null ? null : expiresOn.toString());
+        return kept;
     }
 }

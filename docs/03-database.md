@@ -14,8 +14,8 @@ with millimetre precision), quantities `numeric(19,6)`.
 `section_insulator_installation` (`V7`), `stock_request_type` (`V12`), `disconnector_drive_type` (`V16`),
 `background_operation_status` (`V21`). Values match the Java enums one to one; adding a value is a
 migration (`ALTER TYPE … ADD VALUE`). The statuses, categories and mobilities of `mto-resources`
-(`V19`) are `varchar` on purpose: they are another service's, and a value added there breaks nothing
-here.
+(`V19`), and the kinds of its instruments, qualifications and documents (`V23`), are `varchar` on
+purpose: they are another service's, and a value added there breaks nothing here.
 
 ## Sequences
 
@@ -319,10 +319,42 @@ the turn are decided inside the statement that writes, by row count), each its o
 transaction; JPA only reads it. No audit columns beyond `requested_by` and no `_aud` twin: it is its
 own history, and the purge deletes what finished more than `app.operations.retention` ago.
 
+## Qualifications, documents and instruments (`V23`)
+
+What the expiry rules of a shift read (`02-domain-model.md`, "Qualifications and expiries"), carried by
+the events of `mto-resources` (`06-messaging.md`) into the snapshots of `V19`, **in the same native
+statement as the rest of the row and behind the same watermark**. An event without the key (from a
+`mto-resources` older than its `V8`) leaves what was stored: the upsert writes
+`coalesce(cast(:value as jsonb), <stored>)`.
+
+- `crew_person.qualifications jsonb NOT NULL DEFAULT '[]'`: the list of `person.*.qualifications` as it
+  arrives, reduced to `[{code, kind, drivingLicence, expiresOn}]` (`expiresOn` an ISO date, or `null`
+  when it never expires). All of them, also the expired ones: the shift decides by the date. A person
+  that arrived inside a team event has `[]` until its own event.
+- `fleet_vehicle.documents jsonb NOT NULL DEFAULT '[]'` (`[{kind, reference, expiresOn}]`) and
+  `fleet_vehicle.required_driver_qualification varchar(32)`: the code of the qualification type its
+  model requires of the driver (`vehicle.*.type.requiredDriverQualification`; `NULL`, none). Since a
+  `null` there means "requires none", the upsert takes a flag that says whether the key travelled at
+  all.
+- `maintenance_instrument (id uuid, code varchar(32), name varchar(120), kind varchar(30),
+  serial_number varchar(60), calibration_expires_on date, active, source_sequence_number, created_at,
+  updated_at)`: the instruments of `mto-resources` (`instrument.*`), a snapshot like `crew_person`,
+  written only by `MaintenanceInstrumentRepository.upsertFromResources` with the watermark inside the
+  `WHERE`, so **no `_aud` twin**. `calibration_expires_on` `NULL` is "no calibration that expires"; its
+  `kind` (`EARTHING_POLE`, `VOLTAGE_DETECTOR`, `MEASURING`, `OTHER`) is an enum of another service and
+  goes as text.
+- `maintenance_shift_instrument (shift_id, instrument_id)`: the instruments taken that night, a set
+  replaced whole. PK on the pair, FK to the shift `on delete cascade`, to the instrument `on delete
+  restrict`, index on `instrument_id`. Envers twin `maintenance_shift_instrument_aud (rev, shift_id,
+  instrument_id, revtype)`, created by the same migration.
+
+The JPA entities map the two `jsonb` columns as typed lists (`@JdbcTypeCode(SqlTypes.JSON)`:
+`CrewPerson.Qualification`, `FleetVehicle.Document`), read-only like the rest of the snapshot.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`
 twins of the nine audited entities plus `maintenance_task_task_type_aud` (and, since `V5`,
-`maintenance_shift_track_aud`, since `V6` `maintenance_shift_disconnector_aud`, and since `V20`
-`maintenance_shift_vehicle_aud`, the tenth audited entity, and `maintenance_shift_lineman_aud`). See
-`07-auditing.md`.
+`maintenance_shift_track_aud`, since `V6` `maintenance_shift_disconnector_aud`, since `V20`
+`maintenance_shift_vehicle_aud`, the tenth audited entity, and `maintenance_shift_lineman_aud`, and
+since `V23` `maintenance_shift_instrument_aud`). See `07-auditing.md`.

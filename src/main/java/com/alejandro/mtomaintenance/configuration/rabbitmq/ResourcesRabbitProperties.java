@@ -9,7 +9,7 @@ import org.springframework.validation.annotation.Validated;
 import java.util.List;
 
 /**
- * Nombres del canal de {@code mto-resources} (personas, equipos y vehiculos), configurables por
+ * Nombres del canal de {@code mto-resources} (personas, equipos, vehiculos e instrumentos), configurables por
  * entorno como los de datos maestros ({@link MasterDataRabbitProperties}): por defecto, el contrato real;
  * una cadena en blanco vale el valor por defecto. El interruptor del consumidor,
  * {@code app.rabbitmq.resources.listener-enabled}, lo lee el {@code @ConditionalOnProperty} de

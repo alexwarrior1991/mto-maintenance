@@ -253,12 +253,12 @@ app:
       # Permite declarar la topologia sin consumir: util para dejar la cola creada acumulando
       # eventos mientras el servicio todavia no sabe que hacer con ellos.
       listener-enabled: ${APP_RABBITMQ_MASTER_DATA_LISTENER_ENABLED:true}
-    # Personas, equipos y vehiculos de mto-resources: de ellos salen los equipos sincronizados, la
-    # dotacion y los vehiculos de un turno. Cola propia con su DLX y su DLQ, como la de datos maestros.
+    # Personas, equipos, vehiculos e instrumentos de mto-resources: de ellos salen los equipos sincronizados, la
+    # dotacion, los vehiculos y los instrumentos de un turno. Cola propia con su DLX y su DLQ, como la de datos maestros.
     resources:
       exchange: ${APP_RABBITMQ_RESOURCES_EXCHANGE:mto.resources.exchange}
       queue: ${APP_RABBITMQ_RESOURCES_QUEUE:mto.maintenance.resources.queue}
-      routing-keys: ${APP_RABBITMQ_RESOURCES_ROUTING_KEYS:mto.resources.person.*,mto.resources.team.*,mto.resources.vehicle.*}
+      routing-keys: ${APP_RABBITMQ_RESOURCES_ROUTING_KEYS:mto.resources.person.*,mto.resources.team.*,mto.resources.vehicle.*,mto.resources.instrument.*}
       dead-letter-exchange: ${APP_RABBITMQ_RESOURCES_DEAD_LETTER_EXCHANGE:mto.maintenance.resources.queue.dlx}
       dead-letter-queue: ${APP_RABBITMQ_RESOURCES_DEAD_LETTER_QUEUE:mto.maintenance.resources.queue.dlq}
       dead-letter-routing-key: ${APP_RABBITMQ_RESOURCES_DEAD_LETTER_ROUTING_KEY:mto.maintenance.resources.queue.dlq}

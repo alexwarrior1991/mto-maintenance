@@ -15,7 +15,7 @@ import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 
 /**
- * Lee de su cola las personas, los equipos y los vehiculos de {@code mto-resources} y los entrega al
+ * Lee de su cola las personas, los equipos, los vehiculos y los instrumentos de {@code mto-resources} y los entrega al
  * procesador idempotente. Es delgado a proposito, como {@link MasterDataEventConsumer}: comprueba la
  * firma, que el sobre trae lo minimo y que viene de quien dice, traduce los metadatos de AMQP a un
  * comando y delega.
