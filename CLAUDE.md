@@ -123,8 +123,10 @@ tracks or the whole execution package: **an order is of one package** (its stock
 monthly report are) and may cover several of its tracks; what is of another package goes in another
 order. `PreventiveTaskSelector` decides what fits and what is skipped (already in the order, of
 another package, open in another open preventive order, without a task type), `dryRun` previews it,
-and generations of one package queue behind an advisory lock they only try (`pg_try_advisory_xact_lock`:
-a busy package means rollback, sleep and retry, never a connection held while waiting); with
+and generations of one package queue twice: in one instance on a `ReentrantLock` per scope
+(`GenerationLocks`), waited for before the transaction opens, so without a connection; inside the
+transaction on the PostgreSQL advisory lock (`pg_advisory_xact_lock`, the one a task added by hand
+takes too), which is what holds between instances; with
 `Prefer: respond-async` one that does not finish in time answers 202 with a background operation
 (`BudgetedOperations`, `GET /operations/{id}`, a deployment-wide cap, 429 `OPS-429`). Each task carries the
 `MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan, with standard

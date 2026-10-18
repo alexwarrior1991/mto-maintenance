@@ -8,7 +8,6 @@ import com.alejandro.mtomaintenance.application.dto.messaging.DomainEvent;
 import com.alejandro.mtomaintenance.application.dto.shift.VehicleParkingRequest;
 import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamException;
 import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
-import com.alejandro.mtomaintenance.configuration.async.OperationsProperties;
 import com.alejandro.mtomaintenance.configuration.events.PreventiveDueSoonProperties;
 import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
@@ -17,7 +16,12 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.BeanUtils;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -193,6 +197,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -215,6 +220,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -547,27 +553,125 @@ class BusinessLayerTest {
     }
 
     @Test
-    void aGenerationThatFindsItsPackageBusyLetsGoOfItsTransactionAndTriesAgainRatherThanWaitingOnTheConnection() {
-        TaskFixture fixture = new TaskFixture();
+    void aGenerationTakesItsTurnInThisInstanceBeforeItsTransactionAndThePackageLockInsideIt() {
+        AtomicBoolean inTurn = new AtomicBoolean();
+        AtomicBoolean inTransaction = new AtomicBoolean();
+        TransactionOperations transactions = new TransactionOperations() {
+            @Override
+            public <T> T execute(TransactionCallback<T> action) {
+                assertTrue(inTurn.get(), "The transaction, and its connection, wait for the turn");
+                inTransaction.set(true);
+                try {
+                    return TransactionOperations.withoutTransaction().execute(action);
+                } finally {
+                    inTransaction.set(false);
+                }
+            }
+        };
+        TaskFixture fixture = new TaskFixture(transactions);
+        doAnswer(call -> {
+            inTurn.set(true);
+            try {
+                return call.callRealMethod();
+            } finally {
+                inTurn.set(false);
+            }
+        }).when(fixture.generationLocks).withLock(anyString(), any());
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
         CatenaryAsset first = profile("12-2.27", "12847.990");
-        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        List<Boolean> orderReadsInTransaction = new ArrayList<>();
+        when(fixture.lookups.order(order.getId())).thenAnswer(call -> {
+            orderReadsInTransaction.add(inTransaction.get());
+            return order;
+        });
         when(fixture.assetRepository.findEnabledByTypeOnTrackBetween(CatenaryAssetType.PROFILE, 2L, order.getAsset().getStartKp(), order.getAsset().getEndKp()))
                 .thenReturn(List.of(first));
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
         long key = "mto-maintenance:generate-tasks:EP-6".hashCode();
-        when(fixture.repository.tryAdvisoryTransactionLock(key)).thenReturn(false, false, true);
 
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
 
         assertEquals(1, response.createdTasks());
-        verify(fixture.repository, times(3)).tryAdvisoryTransactionLock(key);
-        // Cada intento relee la orden: la otra generacion puede haberla cambiado mientras.
-        verify(fixture.lookups, times(3)).order(order.getId());
+        verify(fixture.generationLocks).withLock(eq("EP-6"), any());
+        // Entre instancias, el cerrojo de aviso del EP, antes de mirar que esta libre.
+        InOrder inOrder = inOrder(fixture.repository);
+        inOrder.verify(fixture.repository).advisoryTransactionLock(key);
+        inOrder.verify(fixture.repository).findAssetIdsByOrderId(order.getId());
+        // La orden se lee para saber su EP antes del turno, y otra vez dentro de la transaccion: como la dejo la anterior.
+        assertEquals(List.of(false, true), orderReadsInTransaction);
         verify(fixture.repository, times(1)).save(any());
-        verify(fixture.repository, never()).advisoryTransactionLock(anyLong());
         assertEquals("EP-6", fixture.service.generationScope(order.getId()));
+    }
+
+    @Test
+    void generationLocksQueueTheWorkOfOneScopeAndLetAnotherScopeThrough() throws Exception {
+        GenerationLocks locks = new GenerationLocks();
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean secondRan = new AtomicBoolean();
+        try (ExecutorService threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<String> first = threads.submit(() -> locks.withLock("EP-6", () -> {
+                holding.countDown();
+                awaitLatch(release);
+                return "first";
+            }));
+            assertTrue(holding.await(5, TimeUnit.SECONDS));
+            Future<String> second = threads.submit(() -> locks.withLock("EP-6", () -> {
+                secondRan.set(true);
+                return "second";
+            }));
+
+            assertEquals("other", locks.withLock("EP-7", () -> "other"), "Another package does not wait");
+            assertFalse(secondRan.get(), "The same package waits for the one that has the turn");
+            assertFalse(second.isDone());
+
+            release.countDown();
+            assertEquals("first", first.get(5, TimeUnit.SECONDS));
+            assertEquals("second", second.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void aGenerationInterruptedWhileWaitingForItsTurnFailsAndKeepsItsInterrupt() throws Exception {
+        GenerationLocks locks = new GenerationLocks();
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread owner = Thread.ofVirtual().start(() -> locks.withLock("EP-6", () -> {
+            holding.countDown();
+            awaitLatch(release);
+            return null;
+        }));
+        assertTrue(holding.await(5, TimeUnit.SECONDS));
+        AtomicReference<RuntimeException> failure = new AtomicReference<>();
+        AtomicBoolean interruptKept = new AtomicBoolean();
+        Thread waiting = Thread.ofVirtual().start(() -> {
+            try {
+                locks.withLock("EP-6", () -> fail("It never gets the turn"));
+            } catch (RuntimeException expected) {
+                failure.set(expected);
+                interruptKept.set(Thread.currentThread().isInterrupted());
+            }
+        });
+
+        waiting.interrupt();
+        assertTrue(waiting.join(Duration.ofSeconds(5)));
+
+        assertTrue(failure.get() instanceof IllegalStateException, () -> "Failed with " + failure.get());
+        assertTrue(failure.get().getCause() instanceof InterruptedException);
+        assertTrue(interruptKept.get(), "Whoever called it still sees the interrupt");
+        release.countDown();
+        assertTrue(owner.join(Duration.ofSeconds(5)), "The one with the turn is not disturbed");
+        assertEquals("free", locks.withLock("EP-6", () -> "free"));
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS));
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(interrupted);
+        }
     }
 
     @Test
@@ -910,7 +1014,7 @@ class BusinessLayerTest {
         assertEquals(List.of(fresh, manual), planned.getValue().stream().map(MaintenanceTask::getAsset).toList());
         verify(fixture.repository, never()).save(any());
         verify(fixture.repository, never()).advisoryTransactionLock(anyLong());
-        verify(fixture.repository, never()).tryAdvisoryTransactionLock(anyLong());
+        verify(fixture.generationLocks, never()).withLock(anyString(), any());
         assertEquals(1, order.getTasks().size(), "The order is not touched");
     }
 
@@ -924,19 +1028,20 @@ class BusinessLayerTest {
 
         fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
         InOrder inOrder = inOrder(fixture.repository);
-        inOrder.verify(fixture.repository).tryAdvisoryTransactionLock(packageLock);
+        inOrder.verify(fixture.repository).advisoryTransactionLock(packageLock);
         inOrder.verify(fixture.repository).findAssetIdsByOrderId(order.getId());
 
-        // A mano es corto: espera al cerrojo del EP dentro de su transaccion, como antes.
+        // A mano es corto: espera al cerrojo del EP dentro de su transaccion, el mismo que la generacion.
         fixture.service.create(order.getId(), new MaintenanceTaskRequest("By hand", null, null, null, null));
-        verify(fixture.repository, times(1)).advisoryTransactionLock(packageLock);
+        verify(fixture.repository, times(2)).advisoryTransactionLock(packageLock);
 
         MaintenanceOrder withoutPackage = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
         withoutPackage.setExecutionPackageId(null);
         when(fixture.lookups.order(withoutPackage.getId())).thenReturn(withoutPackage);
         when(fixture.workloadEstimator.estimate(withoutPackage)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
         fixture.service.generatePreventiveTasks(withoutPackage.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
-        verify(fixture.repository).tryAdvisoryTransactionLock(("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()).hashCode());
+        verify(fixture.generationLocks).withLock(eq("order-" + withoutPackage.getId()), any());
+        verify(fixture.repository).advisoryTransactionLock(("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()).hashCode());
     }
 
     @Test
@@ -4620,15 +4725,18 @@ class BusinessLayerTest {
         final WorkloadEstimator workloadEstimator = mock(WorkloadEstimator.class);
         final MaterialLineFactory lineFactory = mock(MaterialLineFactory.class);
         final MaterialStockSynchronizer stock = mock(MaterialStockSynchronizer.class);
+        final GenerationLocks generationLocks = spy(new GenerationLocks());
         final MaintenanceTaskServiceImpl service;
 
         TaskFixture() {
+            this(TransactionOperations.withoutTransaction());
+        }
+
+        TaskFixture(TransactionOperations transactions) {
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-            when(repository.tryAdvisoryTransactionLock(anyLong())).thenReturn(true);
             service = new MaintenanceTaskServiceImpl(repository, assetRepository, defectRepository, mapper, lookups,
                     codeGenerator, history, workloadEstimator, lineFactory, stock,
-                    new PreventiveTaskSelector(assetRepository, repository, lookups), TransactionOperations.withoutTransaction(),
-                    new OperationsProperties(null, null, 0, null, null, Duration.ofMillis(1), Duration.ofMillis(4), null, 0, false));
+                    new PreventiveTaskSelector(assetRepository, repository, lookups), transactions, generationLocks);
         }
 
         MaintenanceTask savedTask() {

@@ -108,12 +108,13 @@ insulators, one on a disconnector only disconnectors.
   `IN_PROGRESS`) in another preventive order that is not finished (`skippedInOtherOrders`,
   `otherOrderCodes`). Generations in one package queue behind a PostgreSQL advisory lock (per
   package, or per order without one), taken also by a task added by hand, so two at once never take
-  the same asset as free. A generation does not wait for it with a connection taken: each attempt is
-  its own transaction that tries the lock (`pg_try_advisory_xact_lock`) and, if another generation
-  holds it, rolls back, lets the connection go, sleeps with growing backoff
-  (`app.operations.poll-initial`, 200 ms, doubling up to `poll-max`, 2 s) and starts again reading
-  the order afresh. A task added by hand still waits on the lock inside its transaction
-  (`pg_advisory_xact_lock`): it is one row, not a package.
+  the same asset as free. In one instance a generation waits for its turn before opening its
+  transaction, on a `ReentrantLock` per scope (`GenerationLocks`), so without a connection taken, and
+  opens it once the previous one has committed, reading the order as it was left. Inside the
+  transaction it takes the advisory lock (`pg_advisory_xact_lock`), already free in that instance:
+  that is what keeps two instances apart, and a generation waiting for another instance waits there,
+  with its connection. A task added by hand waits on the same lock inside its transaction: it is one
+  row, not a package. A preview takes neither.
 - **`Prefer: respond-async`** turns a generation that does not finish in time into a background
   operation (202, see [Background operations](#background-operations)); without the header, or with
   `dryRun`, it stays synchronous.
