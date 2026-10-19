@@ -91,6 +91,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     private final WorkloadEstimator workloadEstimator;
     private final MaterialStockSynchronizer stock;
     private final EntityAuditService auditService;
+    private final MaintenanceScope scope;
 
     @Override
     @Transactional
@@ -110,6 +111,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
                 .stockProjectId(request.stockProjectId())
                 .build();
         order.locateAt(asset);
+        scope.requireOrder(order);
         fillLeader(order, null);
 
         MaintenanceOrder saved = repository.save(order);
@@ -128,6 +130,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     @Transactional
     public MaintenanceOrderResponse patch(UUID id, MergePatch<MaintenanceOrderUpdateRequest> patch) {
         MaintenanceOrder order = lookups.order(id);
+        scope.requireOrder(order);
         MaintenanceOrderUpdateRequest request = patch.values();
         StaleVersionException.check("Order " + order.getCode(), order.getVersion(), request.version());
         requireClearable(patch, CLEARABLE);
@@ -176,6 +179,10 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
             if (order.getStartKp() != null && order.getEndKp() != null) {
                 domain(() -> new KilometricRange(order.getStartKp(), order.getEndKp()));
             }
+            if (request.executionPackageId() != null || patch.clears("executionPackageId")) {
+                // Tambien el EP al que se lleva: no se saca una orden del ambito propio hacia otro.
+                scope.requireOrder(order);
+            }
         }
         return toResponse(repository.save(order));
     }
@@ -220,6 +227,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     @Transactional
     public MaintenanceOrderResponse plan(UUID id, PlanOrderRequest request) {
         MaintenanceOrder order = lookups.order(id);
+        scope.requireOrder(order);
         requireTransition(OrderStateMachine.canPlan(order.getStatus()), order, "planned");
         if (request.plannedDate().isBefore(LocalDate.now(ZoneOffset.UTC))) {
             throw new ValidationException("plannedDate cannot be in the past");
@@ -237,6 +245,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     @Transactional
     public MaintenanceOrderResponse assign(UUID id, AssignOrderRequest request) {
         MaintenanceOrder order = lookups.order(id);
+        scope.requireOrder(order);
         requireTransition(OrderStateMachine.canAssign(order.getStatus()), order, "assigned");
         String previousLeader = leaderUsername(order.getTeam());
         if (request.teamId() != null) {
@@ -264,6 +273,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     @Transactional
     public MaintenanceOrderResponse start(UUID id, String comment) {
         MaintenanceOrder order = lookups.order(id);
+        scope.requireOrder(order);
         requireTransition(OrderStateMachine.canStart(order.getStatus(), order.getType()), order, "started");
         if (order.getActualStartDate() == null) {
             order.setActualStartDate(Instant.now());
@@ -283,6 +293,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     @Transactional(noRollbackFor = UnsyncedMaterialsException.class)
     public MaintenanceOrderResponse complete(UUID id, CompleteOrderRequest request) {
         MaintenanceOrder order = lookups.order(id);
+        scope.requireOrder(order);
         requireTransition(OrderStateMachine.canComplete(order.getStatus()), order, "completed");
 
         if (order.getActualStartDate() == null) {
@@ -343,6 +354,7 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
     @Transactional
     public MaintenanceOrderResponse cancel(UUID id, CancelOrderRequest request) {
         MaintenanceOrder order = lookups.order(id);
+        scope.requireOrder(order);
         requireTransition(OrderStateMachine.canCancel(order.getStatus()), order, "cancelled");
 
         order.setCancellationReason(request.reason().trim());

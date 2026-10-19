@@ -1,5 +1,10 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import com.alejandro.mtomaintenance.application.dto.tasktype.MaintenanceTaskTypeUpdateRequest;
+import com.alejandro.mtomaintenance.application.exception.ScopeException;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.UnavailablePeriod;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TaskEquipment;
+import java.util.EnumSet;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetUpdateRequest;
@@ -10,6 +15,9 @@ import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamExcept
 import com.alejandro.mtomaintenance.application.service.DomainEventPublisher;
 import com.alejandro.mtomaintenance.configuration.events.PreventiveDueSoonProperties;
 import com.alejandro.mtomaintenance.configuration.reports.ReportProperties;
+import com.alejandro.mtomaintenance.configuration.security.CurrentUserService;
+import com.alejandro.mtomaintenance.configuration.shifts.ScopeProperties;
+import com.alejandro.mtomaintenance.configuration.shifts.ShiftProperties;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
@@ -2374,6 +2382,206 @@ class BusinessLayerTest {
     }
 
     @Test
+    void whoOrWhatIsNotAvailableOnTheShiftDateDoesNotGetIntoTheShift() {
+        ShiftFixture fixture = new ShiftFixture();
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        MaintenanceShift shift = crewedShift(leader, 2);
+        LocalDate night = shift.getShiftDate();
+        FleetVehicle towerCar = fleetVehicle("RAIL_ONLY", true, false, 8);
+        shift.getVehicles().add(MaintenanceShiftVehicle.of(shift, towerCar));
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        ReflectionTestUtils.setField(leader, "unavailable", List.of(new UnavailablePeriod(night.minusDays(2), night)));
+
+        ShiftException absent = assertThrows(ShiftException.class, () -> fixture.service.start(shift.getId(), new StartShiftRequest(null, null)));
+        assertTrue(absent.getMessage().contains(leader.getFullName() + " (" + leader.getCode() + ") (unavailable " + night.minusDays(2) + " to "
+                + night + ")"), absent.getMessage());
+
+        ReflectionTestUtils.setField(leader, "unavailable", List.of(new UnavailablePeriod(night.minusDays(5), night.minusDays(1))));
+        ReflectionTestUtils.setField(towerCar, "unavailable", List.of(new UnavailablePeriod(night.minusDays(1), null)));
+        ShiftException inRepair = assertThrows(ShiftException.class, () -> fixture.service.start(shift.getId(), new StartShiftRequest(null, null)));
+        assertTrue(inRepair.getMessage().contains("vehicle " + towerCar.getCode() + " (unavailable from " + night.minusDays(1) + ")"),
+                inRepair.getMessage());
+
+        ReflectionTestUtils.setField(towerCar, "unavailable", List.of(new UnavailablePeriod(night.plusDays(1), night.plusDays(3))));
+        fixture.service.start(shift.getId(), new StartShiftRequest(null, null));
+        assertEquals(ShiftStatus.IN_PROGRESS, shift.getStatus(), "A period that ended the night before, or starts the night after, does not count");
+    }
+
+    @Test
+    void twoNightsInARowOfTheSamePersonNeedTheMinimumRestBetweenThem() {
+        ShiftFixture fixture = new ShiftFixture();
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        MaintenanceShift tonight = crewedShift(leader, 2);
+        LocalDate date = tonight.getShiftDate();
+        Instant start = date.atTime(21, 0).toInstant(ZoneOffset.UTC);
+        tonight.setPlannedStart(start);
+        tonight.setPlannedEnd(start.plus(Duration.ofHours(8)));
+        MaintenanceShift lastNight = shift(2L, PossessionType.FULL, ShiftStatus.CLOSED);
+        ReflectionTestUtils.setField(lastNight, "code", "SH-LAST");
+        lastNight.setShiftDate(date.minusDays(1));
+        lastNight.setTeamLeader(crewPerson("TEAM_LEADER"));
+        lastNight.getLinemen().add(leader);
+        lastNight.setActualStart(date.minusDays(1).atTime(21, 0).toInstant(ZoneOffset.UTC));
+        lastNight.setActualEnd(date.atTime(13, 0).toInstant(ZoneOffset.UTC));
+        when(fixture.lookups.shift(tonight.getId())).thenReturn(tonight);
+        when(fixture.repository.findShiftsOfCrewOn(any(), eq(List.of(date.minusDays(1), date.plusDays(1))), any(), eq(tonight.getId())))
+                .thenReturn(List.of(lastNight));
+
+        ShiftException tired = assertThrows(ShiftException.class, () -> fixture.service.start(tonight.getId(), new StartShiftRequest(start, null)));
+        assertTrue(tired.getMessage().contains(leader.getFullName() + " (" + leader.getCode() + ") would rest 8h between shift SH-LAST")
+                && tired.getMessage().contains("at least 12h between two nights"), tired.getMessage());
+
+        lastNight.setActualEnd(date.atTime(8, 0).toInstant(ZoneOffset.UTC));
+        fixture.service.start(tonight.getId(), new StartShiftRequest(start, null));
+        assertEquals(ShiftStatus.IN_PROGRESS, tonight.getStatus(), "Thirteen hours are enough");
+    }
+
+    @Test
+    void theScopeOfWhoWritesComesFromTheTeamsOfHisRecordAndChiefsAndServiceAccountsHaveNone() {
+        ScopeMocks mocks = new ScopeMocks();
+        MaintenanceScope scope = mocks.scope();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        order.setExecutionPackageId(14L);
+
+        scope.requireOrder(order);
+
+        CrewPerson supervisor = crewPerson("SUPERVISOR");
+        mocks.actAs(supervisor, List.of(14L, 15L), List.of());
+        scope.requireOrder(order);
+        order.setExecutionPackageId(9L);
+        ScopeException outside = assertThrows(ScopeException.class, () -> scope.requireOrder(order));
+        assertEquals("MO-DRAFT is in execution package 9, outside the scope of " + supervisor.getFullName() + " (" + supervisor.getCode()
+                + ") (14, 15)", outside.getMessage());
+        order.setExecutionPackageId(null);
+        assertThrows(ScopeException.class, () -> scope.requireOrder(order), "Without an execution package only who has no limit writes");
+
+        MaintenanceTeam team = team("A");
+        MaintenanceShift shift = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        shift.setTeam(team);
+        assertThrows(ScopeException.class, () -> scope.requireShift(shift));
+        mocks.actAs(supervisor, List.of(14L), List.of(team.getId()));
+        scope.requireShift(shift);
+        shift.setExecutionPackageId(9L);
+        assertThrows(ScopeException.class, () -> scope.requireShift(shift), "With its package, the package decides");
+
+        mocks.actAs(crewPerson("CHIEF_MAINTENANCE"), List.of(), List.of());
+        scope.requireOrder(order);
+        CrewPerson loner = crewPerson("TEAM_LEADER");
+        mocks.actAs(loner, List.of(), List.of());
+        order.setExecutionPackageId(14L);
+        assertTrue(assertThrows(ScopeException.class, () -> scope.requireOrder(order)).getMessage()
+                .endsWith("(none: you are in no team of mto-resources)"));
+        new MaintenanceScope(mocks.currentUser, mocks.people, mocks.teams, new ScopeProperties(false)).requireOrder(order);
+    }
+
+    @Test
+    void outsideItsScopeATeamLeaderChangesNothing() {
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        List<Long> mine = List.of(4L);
+
+        OrderFixture orders = new OrderFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        order.setExecutionPackageId(14L);
+        when(orders.lookups.order(order.getId())).thenReturn(order);
+        orders.scopeMocks.actAs(leader, mine, List.of());
+        assertThrows(ScopeException.class, () -> orders.service.cancel(order.getId(), new CancelOrderRequest("out of scope")));
+        assertEquals(MaintenanceOrderStatus.DRAFT, order.getStatus());
+
+        TaskFixture tasks = new TaskFixture();
+        MaintenanceTask task = task(order, MaintenanceTaskStatus.PENDING);
+        when(tasks.lookups.order(order.getId())).thenReturn(order);
+        when(tasks.repository.findByIdAndOrderId(task.getId(), order.getId())).thenReturn(Optional.of(task));
+        tasks.scopeMocks.actAs(leader, mine, List.of());
+        assertThrows(ScopeException.class, () -> tasks.service.cancel(order.getId(), task.getId(), new CancelTaskRequest("out of scope")));
+        assertEquals(MaintenanceTaskStatus.PENDING, task.getStatus());
+
+        ShiftFixture shifts = new ShiftFixture();
+        MaintenanceShift shift = crewedShift(crewPerson("TEAM_LEADER"), 2);
+        shift.setExecutionPackageId(14L);
+        when(shifts.lookups.shift(shift.getId())).thenReturn(shift);
+        shifts.scopeMocks.actAs(leader, mine, List.of());
+        assertThrows(ScopeException.class, () -> shifts.service.start(shift.getId(), new StartShiftRequest(null, null)));
+        assertEquals(ShiftStatus.PLANNED, shift.getStatus());
+
+        AssetFixture assets = new AssetFixture();
+        CatenaryAsset section = trackSection();
+        when(assets.lookups.asset(section.getId())).thenReturn(section);
+        assets.scopeMocks.actAs(leader, mine, List.of());
+        assertThrows(ScopeException.class, () -> assets.service.disable(section.getId()), "The section is of package 6");
+
+        DefectFixture defects = new DefectFixture();
+        CatenaryDefect defect = CatenaryDefect.builder().code("DEF-9").asset(section).severity(DefectSeverity.LOW).build();
+        defect.locateAt(section);
+        ReflectionTestUtils.setField(defect, "id", UUID.randomUUID());
+        when(defects.repository.findById(defect.getId())).thenReturn(Optional.of(defect));
+        defects.scopeMocks.actAs(leader, mine, List.of());
+        assertThrows(ScopeException.class, () -> defects.service.close(defect.getId(), new DefectCommentRequest("out of scope")));
+
+        MaterialFixture materials = new MaterialFixture();
+        when(materials.lookups.order(order.getId())).thenReturn(order);
+        materials.scopeMocks.actAs(leader, mine, List.of());
+        assertThrows(ScopeException.class, () -> materials.service.sync(order.getId(), UUID.randomUUID()));
+    }
+
+    @Test
+    void aTaskTypeThatRequiresEquipmentIsOnlyWorkedInAShiftThatCarriesIt() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceTask task = task(order, MaintenanceTaskStatus.PENDING);
+        task.setAsset(profile("12-2.27", "12847.990"));
+        Set<MaintenanceTaskType> types = taskTypes("RP-09");
+        types.iterator().next().getRequiredEquipment().addAll(EnumSet.of(TaskEquipment.EARTHING, TaskEquipment.INSULATED_PLATFORM));
+        task.getTaskTypes().addAll(types);
+        MaintenanceShift shift = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        when(fixture.repository.findById(task.getId())).thenReturn(Optional.of(task));
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+
+        ShiftException bare = assertThrows(ShiftException.class, () -> fixture.service.assignToShift(shift.getId(), task.getId()));
+        assertTrue(bare.getMessage().contains("needs an insulated platform") && bare.getMessage().contains("and earthing"), bare.getMessage());
+
+        FleetVehicle platform = fleetVehicle("ROAD_RAIL", true, false, 3);
+        ReflectionTestUtils.setField(platform, "capabilities", List.of("INSULATED_PLATFORM"));
+        shift.getVehicles().add(MaintenanceShiftVehicle.of(shift, platform));
+        ShiftException noEarthing = assertThrows(ShiftException.class, () -> fixture.service.assignToShift(shift.getId(), task.getId()));
+        assertFalse(noEarthing.getMessage().contains("insulated platform"), noEarthing.getMessage());
+
+        MaintenanceInstrument retired = instrument("EP-01", false, null);
+        ReflectionTestUtils.setField(retired, "kind", ShiftRules.EARTHING_POLE);
+        shift.getInstruments().add(retired);
+        assertThrows(ShiftException.class, () -> fixture.service.assignToShift(shift.getId(), task.getId()), "A retired pole does not earth");
+        MaintenanceInstrument pole = instrument("EP-02", true, LocalDate.now().plusMonths(3));
+        ReflectionTestUtils.setField(pole, "kind", ShiftRules.EARTHING_POLE);
+        shift.getInstruments().add(pole);
+
+        fixture.service.assignToShift(shift.getId(), task.getId());
+        assertEquals(shift, task.getShift());
+        ReflectionTestUtils.setField(platform, "capabilities", List.of("EARTHING", "INSULATED_PLATFORM"));
+        shift.getInstruments().clear();
+        assertTrue(ShiftRules.carries(shift, TaskEquipment.EARTHING), "A vehicle that earths is enough too");
+    }
+
+    @Test
+    void theEquipmentATaskTypeRequiresIsReplacedWholeWithTheVersionReadAndNullEmptiesIt() {
+        MaintenanceTaskTypeRepository repository = mock(MaintenanceTaskTypeRepository.class);
+        MaintenanceTaskTypeMapper mapper = mock(MaintenanceTaskTypeMapper.class);
+        MaintenanceTaskTypeServiceImpl service = new MaintenanceTaskTypeServiceImpl(repository, mapper);
+        MaintenanceTaskType type = taskTypes("RP-09").iterator().next();
+        ReflectionTestUtils.setField(type, "version", 3L);
+        when(repository.findByCode("RP-09")).thenReturn(Optional.of(type));
+        when(repository.saveAndFlush(type)).thenReturn(type);
+
+        service.patch(" rp-09 ", MergePatch.of(new MaintenanceTaskTypeUpdateRequest(Set.of(TaskEquipment.EARTHING), 3L)));
+        assertEquals(EnumSet.of(TaskEquipment.EARTHING), type.getRequiredEquipment());
+        service.patch("RP-09", MergePatch.of(new MaintenanceTaskTypeUpdateRequest(Set.of(TaskEquipment.INSULATED_PLATFORM), null)));
+        assertEquals(EnumSet.of(TaskEquipment.INSULATED_PLATFORM), type.getRequiredEquipment(), "The set replaces the previous one");
+        service.patch("RP-09", new MergePatch<>(new MaintenanceTaskTypeUpdateRequest(null, null), Set.of("requiredEquipment")));
+        assertTrue(type.getRequiredEquipment().isEmpty());
+
+        assertThrows(StaleVersionException.class, () -> service.patch("RP-09",
+                MergePatch.of(new MaintenanceTaskTypeUpdateRequest(Set.of(TaskEquipment.EARTHING), 2L))));
+    }
+
+    @Test
     void theCrewFitsInTheSeatsAndAWagonGoesWithSomethingThatTowsIt() {
         ShiftFixture fixture = new ShiftFixture();
         MaintenanceShift crowded = crewedShift(crewPerson("TEAM_LEADER"), 4);
@@ -3075,7 +3283,8 @@ class BusinessLayerTest {
         when(mapper.toResponse(any())).thenAnswer(invocation -> {
             MaintenanceTaskType type = invocation.getArgument(0);
             return new MaintenanceTaskTypeResponse(null, type.getCode(), type.getDescription(), type.getFunctionalGroup(), type.getStandardMinutesPerUnit(),
-                    type.getUnit(), type.getFixedMinutes(), type.getRequiresFullPossession(), type.getDiagnostic(), type.getActive(), type.getOrderIndex());
+                    type.getUnit(), type.getFixedMinutes(), type.getRequiresFullPossession(), type.getDiagnostic(), type.getActive(), type.getOrderIndex(),
+                    type.getRequiredEquipment(), type.getVersion());
         });
         MaintenanceTaskTypeServiceImpl service = new MaintenanceTaskTypeServiceImpl(repository, mapper);
         MaintenanceTaskType insulators = MaintenanceTaskType.builder().code("RG-01").description("Insulators").functionalGroup(FunctionalGroup.STRUCTURAL_SUPPORTS).orderIndex(1).build();
@@ -4664,7 +4873,32 @@ class BusinessLayerTest {
 
     // -------------------------------------------------------------- fixtures
 
+    /**
+     * El ambito de quien escribe en un fixture ({@link MaintenanceScope}): sin limite mientras nadie diga
+     * otra cosa (el token no trae usuario, como un consumidor o una cuenta de servicio); {@link #actAs}
+     * hace que escriba una persona con sus EP y sus equipos.
+     */
+    private static final class ScopeMocks {
+        final CurrentUserService currentUser = mock(CurrentUserService.class);
+        final CrewPersonRepository people = mock(CrewPersonRepository.class);
+        final MaintenanceTeamRepository teams = mock(MaintenanceTeamRepository.class);
+
+        MaintenanceScope scope() {
+            return new MaintenanceScope(currentUser, people, teams, new ScopeProperties(true));
+        }
+
+        void actAs(CrewPerson person, List<Long> executionPackageIds, List<UUID> teamIds) {
+            String username = "user-" + person.getCode().toLowerCase();
+            ReflectionTestUtils.setField(person, "username", username);
+            when(currentUser.getUsername()).thenReturn(Optional.of(username));
+            when(people.findByUsername(username)).thenReturn(Optional.of(person));
+            when(teams.findExecutionPackageIdsOfPerson(person.getId())).thenReturn(executionPackageIds);
+            when(teams.findTeamIdsOfPerson(person.getId())).thenReturn(teamIds);
+        }
+    }
+
     private static final class ShiftFixture {
+        final ScopeMocks scopeMocks = new ScopeMocks();
         final MaintenanceShiftRepository repository = mock(MaintenanceShiftRepository.class);
         final MaintenanceTaskRepository taskRepository = mock(MaintenanceTaskRepository.class);
         final CatenaryDefectRepository defectRepository = mock(CatenaryDefectRepository.class);
@@ -4689,7 +4923,7 @@ class BusinessLayerTest {
             });
             service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository, inspectionRepository,
                     mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events,
-                    new ShiftCrew(people, vehicles, repository, instruments));
+                    new ShiftCrew(people, vehicles, repository, instruments, new ShiftProperties(Duration.ofHours(12))), scopeMocks.scope());
         }
 
         MaintenanceShift savedShift() {
@@ -4700,6 +4934,7 @@ class BusinessLayerTest {
     }
 
     private static final class OrderFixture {
+        final ScopeMocks scopeMocks = new ScopeMocks();
         final MaintenanceOrderRepository repository = mock(MaintenanceOrderRepository.class);
         final CatenaryAssetRepository assetRepository = mock(CatenaryAssetRepository.class);
         final CatenaryDefectRepository defectRepository = mock(CatenaryDefectRepository.class);
@@ -4716,7 +4951,8 @@ class BusinessLayerTest {
             when(assetRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
             when(workloadEstimator.estimate(any(MaintenanceOrder.class))).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
             service = new MaintenanceOrderServiceImpl(repository, assetRepository, defectRepository, inspectionRepository,
-                    mock(MaintenanceOrderMapper.class), lookups, codeGenerator, history, workloadEstimator, stock, mock(EntityAuditService.class));
+                    mock(MaintenanceOrderMapper.class), lookups, codeGenerator, history, workloadEstimator, stock, mock(EntityAuditService.class),
+                    scopeMocks.scope());
         }
 
         MaintenanceOrder savedOrder() {
@@ -4727,6 +4963,7 @@ class BusinessLayerTest {
     }
 
     private static final class AssetFixture {
+        final ScopeMocks scopeMocks = new ScopeMocks();
         final CatenaryAssetRepository repository = mock(CatenaryAssetRepository.class);
         final MaintenanceLookups lookups = mock(MaintenanceLookups.class);
         final RecordingEventPublisher events = new RecordingEventPublisher();
@@ -4734,11 +4971,13 @@ class BusinessLayerTest {
 
         AssetFixture() {
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-            service = new CatenaryAssetServiceImpl(repository, mock(CatenaryAssetMapper.class), lookups, mock(EntityAuditService.class), events);
+            service = new CatenaryAssetServiceImpl(repository, mock(CatenaryAssetMapper.class), lookups, mock(EntityAuditService.class), events,
+                    scopeMocks.scope());
         }
     }
 
     private static final class DefectFixture {
+        final ScopeMocks scopeMocks = new ScopeMocks();
         final CatenaryDefectRepository repository = mock(CatenaryDefectRepository.class);
         final MaintenanceLookups lookups = mock(MaintenanceLookups.class);
         final MaintenanceCodeGenerator codeGenerator = mock(MaintenanceCodeGenerator.class);
@@ -4748,7 +4987,7 @@ class BusinessLayerTest {
         DefectFixture() {
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
             service = new CatenaryDefectServiceImpl(repository, mock(MaintenanceInspectionRepository.class), mock(CatenaryDefectMapper.class),
-                    lookups, codeGenerator, history, mock(EntityAuditService.class));
+                    lookups, codeGenerator, history, mock(EntityAuditService.class), scopeMocks.scope());
         }
 
         CatenaryDefect savedDefect() {
@@ -4770,6 +5009,7 @@ class BusinessLayerTest {
     }
 
     private static final class MaterialFixture {
+        final ScopeMocks scopeMocks = new ScopeMocks();
         final MaintenanceMaterialUsageRepository repository = mock(MaintenanceMaterialUsageRepository.class);
         final MaintenanceLookups lookups = mock(MaintenanceLookups.class);
         final MaterialStockSynchronizer stock = mock(MaterialStockSynchronizer.class);
@@ -4781,7 +5021,7 @@ class BusinessLayerTest {
             when(repository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
             when(stockClient.isEnabled()).thenReturn(false);
             service = new MaintenanceMaterialUsageServiceImpl(repository, mock(MaintenanceTaskRepository.class), mock(MaterialUsageMapper.class),
-                    lookups, new MaterialLineFactory(repository, stockClient), stock);
+                    lookups, new MaterialLineFactory(repository, stockClient), stock, scopeMocks.scope());
         }
 
         MaintenanceMaterialUsage savedLine() {
@@ -4792,6 +5032,7 @@ class BusinessLayerTest {
     }
 
     private static final class TaskFixture {
+        final ScopeMocks scopeMocks = new ScopeMocks();
         final MaintenanceTaskRepository repository = mock(MaintenanceTaskRepository.class);
         final CatenaryAssetRepository assetRepository = mock(CatenaryAssetRepository.class);
         final CatenaryDefectRepository defectRepository = mock(CatenaryDefectRepository.class);
@@ -4813,7 +5054,7 @@ class BusinessLayerTest {
             when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
             service = new MaintenanceTaskServiceImpl(repository, assetRepository, defectRepository, mapper, lookups,
                     codeGenerator, history, workloadEstimator, lineFactory, stock,
-                    new PreventiveTaskSelector(assetRepository, repository, lookups), transactions, generationLocks);
+                    new PreventiveTaskSelector(assetRepository, repository, lookups), transactions, generationLocks, scopeMocks.scope());
         }
 
         MaintenanceTask savedTask() {
@@ -4824,6 +5065,7 @@ class BusinessLayerTest {
     }
 
     private static final class InspectionFixture {
+        final ScopeMocks scopeMocks = new ScopeMocks();
         final MaintenanceInspectionRepository repository = mock(MaintenanceInspectionRepository.class);
         final CatenaryDefectRepository defectRepository = mock(CatenaryDefectRepository.class);
         final MaintenanceOrderRepository orderRepository = mock(MaintenanceOrderRepository.class);
@@ -4838,7 +5080,8 @@ class BusinessLayerTest {
             // Como JPA: lo guardado sale con id, que es lo que el evento de la inspeccion lleva como entityId.
             when(repository.save(any())).thenAnswer(invocation -> withId(invocation.getArgument(0)));
             service = new MaintenanceInspectionServiceImpl(repository, defectRepository, orderRepository, mock(MaintenanceInspectionMapper.class),
-                    mock(CatenaryDefectMapper.class), lookups, codeGenerator, history, orderService, mock(EntityAuditService.class), events);
+                    mock(CatenaryDefectMapper.class), lookups, codeGenerator, history, orderService, mock(EntityAuditService.class), events,
+                    scopeMocks.scope());
         }
     }
 

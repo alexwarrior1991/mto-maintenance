@@ -122,6 +122,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     private final TransactionOperations transactions;
     /** La fila de las generaciones de un EP en esta instancia, sin conexion; entre instancias, el cerrojo de aviso. */
     private final GenerationLocks generationLocks;
+    private final MaintenanceScope scope;
 
     @Override
     @Transactional(readOnly = true)
@@ -140,6 +141,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     @Transactional
     public MaintenanceTaskResponse create(UUID orderId, MaintenanceTaskRequest request) {
         MaintenanceOrder order = lookups.order(orderId);
+        scope.requireOrder(order);
         requireAcceptsTasks(order);
         lockGeneration(order);
         CatenaryAsset asset = request.assetId() == null ? null : lookups.enabledAsset(request.assetId());
@@ -169,7 +171,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     @Override
     @Transactional
     public MaintenanceTaskResponse patch(UUID orderId, UUID taskId, MergePatch<MaintenanceTaskUpdateRequest> patch) {
-        MaintenanceTask task = task(orderId, taskId);
+        MaintenanceTask task = writableTask(orderId, taskId);
         MaintenanceTaskUpdateRequest request = patch.values();
         StaleVersionException.check("Task " + task.getSequence() + " of order " + task.getOrder().getCode(), task.getVersion(), request.version());
         PatchRules.requireClearable(patch, CLEARABLE);
@@ -231,6 +233,9 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
             throw new InvalidTransitionException("Order " + order.getCode() + " is " + order.getStatus() + "; tasks are generated in DRAFT or PLANNED");
         }
         boolean dryRun = request.previewOnly();
+        if (!dryRun) {
+            scope.requireOrder(order);
+        }
         // Antes de mirar que esta libre: dos generaciones a la vez en el mismo EP darian el mismo activo
         // por libre. En esta instancia ya hicieron fila en GenerationLocks y el cerrojo esta libre; si lo
         // tiene otra instancia, se espera aqui. Previsualizar no escribe y no hace fila.
@@ -338,7 +343,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     @Override
     @Transactional
     public MaintenanceTaskResponse start(UUID orderId, UUID taskId, StartTaskRequest request) {
-        MaintenanceTask task = task(orderId, taskId);
+        MaintenanceTask task = writableTask(orderId, taskId);
         requireOrderInProgress(task.getOrder());
         if (task.getStatus() != MaintenanceTaskStatus.PENDING) {
             throw new InvalidTransitionException("Task " + task.getSequence() + " is " + task.getStatus() + " and cannot be started");
@@ -356,7 +361,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     @Override
     @Transactional
     public MaintenanceTaskResponse complete(UUID orderId, UUID taskId, CompleteTaskRequest request) {
-        MaintenanceTask task = task(orderId, taskId);
+        MaintenanceTask task = writableTask(orderId, taskId);
         MaintenanceOrder order = task.getOrder();
         requireOrderInProgress(order);
         if (!task.isOpen()) {
@@ -427,7 +432,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     @Override
     @Transactional
     public MaintenanceTaskResponse cancel(UUID orderId, UUID taskId, CancelTaskRequest request) {
-        MaintenanceTask task = task(orderId, taskId);
+        MaintenanceTask task = writableTask(orderId, taskId);
         if (!task.isOpen()) {
             throw new InvalidTransitionException("Task " + task.getSequence() + " is " + task.getStatus() + " and cannot be cancelled");
         }
@@ -445,7 +450,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     @Override
     @Transactional
     public MaintenanceTaskResponse patchCheckItem(UUID orderId, UUID taskId, UUID itemId, MergePatch<CheckItemUpdateRequest> patch) {
-        MaintenanceTask task = task(orderId, taskId);
+        MaintenanceTask task = writableTask(orderId, taskId);
         if (!task.isOpen()) {
             throw new InvalidTransitionException("Task " + task.getSequence() + " is " + task.getStatus() + "; its check items are frozen");
         }
@@ -462,6 +467,8 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     public MaintenanceTaskResponse assignToShift(UUID shiftId, UUID taskId) {
         MaintenanceTask task = repository.findById(taskId).orElseThrow(() -> new NotFoundException("Maintenance task", taskId));
         MaintenanceShift shift = lookups.shift(shiftId);
+        scope.requireShift(shift);
+        scope.requireOrder(task.getOrder());
         if (!ShiftStateMachine.allowsUpdate(shift.getStatus())) {
             throw new InvalidTransitionException("Shift " + shift.getCode() + " is " + shift.getStatus() + " and does not accept tasks");
         }
@@ -470,6 +477,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         }
         ShiftRules.requireSameTrack(shift, task);
         ShiftRules.requireCompatiblePossession(shift, task);
+        ShiftRules.requireEquipment(shift, task);
         task.setShift(shift);
         return mapper.toResponse(repository.save(task));
     }
@@ -479,6 +487,8 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     public MaintenanceTaskResponse unassignFromShift(UUID shiftId, UUID taskId) {
         MaintenanceShift shift = lookups.shift(shiftId);
         MaintenanceTask task = repository.findByIdAndShiftId(taskId, shiftId).orElseThrow(() -> new NotFoundException("Maintenance task", taskId));
+        scope.requireShift(shift);
+        scope.requireOrder(task.getOrder());
         if (!ShiftStateMachine.allowsUpdate(shift.getStatus())) {
             throw new InvalidTransitionException("Shift " + shift.getCode() + " is " + shift.getStatus() + " and its tasks no longer change");
         }
@@ -504,6 +514,13 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         return repository.findByIdAndOrderId(taskId, orderId).orElseThrow(() -> new NotFoundException("Maintenance task", taskId));
     }
 
+    /** La tarea para escribir en ella: su orden tiene que estar en el ambito de quien escribe. */
+    private MaintenanceTask writableTask(UUID orderId, UUID taskId) {
+        MaintenanceTask task = task(orderId, taskId);
+        scope.requireOrder(task.getOrder());
+        return task;
+    }
+
     private void attachChecklist(MaintenanceTask task, CatenaryAsset asset) {
         Optional<InspectionTemplate> template = lookups.activeTemplate(asset);
         template.ifPresent(value -> value.getItems().forEach(item -> task.getCheckItems().add(MaintenanceTaskCheckItem.fromTemplate(task, item))));
@@ -515,6 +532,7 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         ShiftRules.requireInProgress(shift);
         ShiftRules.requireSameTrack(shift, task);
         ShiftRules.requireCompatiblePossession(shift, task);
+        ShiftRules.requireEquipment(shift, task);
         return shift;
     }
 

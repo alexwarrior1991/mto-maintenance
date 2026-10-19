@@ -20,15 +20,18 @@ public interface FleetVehicleRepository extends JpaRepository<FleetVehicle, UUID
      * conductor, los dos en la misma sentencia y con la misma marca. Un evento sin la clave (un
      * mto-resources anterior) deja lo que habia: {@code documents} a {@code null}, y
      * {@code requiredDriverQualificationKnown} a {@code false}, porque alli {@code null} es «no exige».
+     * Lo mismo {@code unavailable} ({@code [{from, to}]}) y {@code capabilities} ({@code ["TOWING", ...]}),
+     * de {@code V24}: {@code null} deja lo que habia.
      */
     @Modifying
     @Query(value = """
             insert into fleet_vehicle (id, code, name, type_code, type_name, mobility, category, self_propelled, portable, towing, seats,
                                        operational_status, available, active, documents, required_driver_qualification,
-                                       source_sequence_number, created_at, updated_at)
+                                       unavailable, capabilities, source_sequence_number, created_at, updated_at)
             values (:id, :code, cast(:name as varchar), cast(:typeCode as varchar), cast(:typeName as varchar), :mobility, :category, :selfPropelled, :portable, :towing, cast(:seats as integer),
                     :operationalStatus, :available, :active, coalesce(cast(:documents as jsonb), '[]'::jsonb),
-                    cast(:requiredDriverQualification as varchar), cast(:sequenceNumber as bigint), now(), now())
+                    cast(:requiredDriverQualification as varchar), coalesce(cast(:unavailable as jsonb), '[]'::jsonb),
+                    coalesce(cast(:capabilities as jsonb), '[]'::jsonb), cast(:sequenceNumber as bigint), now(), now())
             on conflict (id) do update
                set code = excluded.code,
                    name = excluded.name,
@@ -46,6 +49,8 @@ public interface FleetVehicleRepository extends JpaRepository<FleetVehicle, UUID
                    documents = coalesce(cast(:documents as jsonb), fleet_vehicle.documents),
                    required_driver_qualification = case when :requiredDriverQualificationKnown then excluded.required_driver_qualification
                                                         else fleet_vehicle.required_driver_qualification end,
+                   unavailable = coalesce(cast(:unavailable as jsonb), fleet_vehicle.unavailable),
+                   capabilities = coalesce(cast(:capabilities as jsonb), fleet_vehicle.capabilities),
                    source_sequence_number = coalesce(excluded.source_sequence_number, fleet_vehicle.source_sequence_number),
                    updated_at = now()
              where fleet_vehicle.source_sequence_number is null
@@ -60,5 +65,6 @@ public interface FleetVehicleRepository extends JpaRepository<FleetVehicle, UUID
                             @Param("active") boolean active, @Param("documents") String documents,
                             @Param("requiredDriverQualification") String requiredDriverQualification,
                             @Param("requiredDriverQualificationKnown") boolean requiredDriverQualificationKnown,
+                            @Param("unavailable") String unavailable, @Param("capabilities") String capabilities,
                             @Param("sequenceNumber") Long sequenceNumber);
 }

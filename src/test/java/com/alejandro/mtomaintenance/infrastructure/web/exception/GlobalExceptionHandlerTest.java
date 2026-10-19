@@ -7,6 +7,7 @@ import com.alejandro.mtomaintenance.application.exception.InspectionException;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.ScopeException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
@@ -175,6 +176,16 @@ class GlobalExceptionHandlerTest {
         // el NPE dentro del manejador acababa en un 500.
         assertEquals("APP-404", codeOf(handler.handleNotFound(new NotFoundException("Maintenance task type 'RG-99' was not found"), request),
                 HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void outOfScopeAnswers403Scp403KeepingTheReasonUnlikeAMissingRole() {
+        MockHttpServletRequest request = request("POST", "/api/v1/maintenance/orders/x/plan");
+        ResponseEntity<ApiErrorResponse> response = handler.handleOutOfScope(
+                new ScopeException("MO-000012 is in execution package 14, outside the scope of Eli Katz (PER-1) (4, 5)"), request);
+
+        assertEquals("SCP-403", codeOf(response, HttpStatus.FORBIDDEN));
+        assertTrue(response.getBody().message().contains("execution package 14"), "The reason travels: it says which packages are yours");
     }
 
     @Test

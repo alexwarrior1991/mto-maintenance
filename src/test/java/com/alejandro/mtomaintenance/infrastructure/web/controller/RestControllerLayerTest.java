@@ -31,7 +31,11 @@ import com.alejandro.mtomaintenance.application.dto.inspection.CreateDefectFromI
 import com.alejandro.mtomaintenance.application.dto.report.MonthlyReportResponse;
 import com.alejandro.mtomaintenance.application.dto.shift.CloseShiftRequest;
 import com.alejandro.mtomaintenance.application.dto.shift.StartShiftRequest;
+import com.alejandro.mtomaintenance.application.dto.common.MergePatch;
 import com.alejandro.mtomaintenance.application.dto.tasktype.MaintenanceTaskTypeResponse;
+import com.alejandro.mtomaintenance.application.dto.tasktype.MaintenanceTaskTypeUpdateRequest;
+import com.alejandro.mtomaintenance.configuration.security.SecurityRoles;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TaskEquipment;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamRequest;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamResponse;
 import com.alejandro.mtomaintenance.application.dto.export.ExportedReport;
@@ -59,6 +63,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 
@@ -66,6 +71,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -159,6 +165,21 @@ class RestControllerLayerTest {
         // Un POST, como asignar: con maintenance-write. Un DELETE pediria maintenance-delete.
         PostMapping mapping = MaintenanceShiftController.class.getMethod("unassignTask", UUID.class, UUID.class).getAnnotation(PostMapping.class);
         assertArrayEquals(new String[] {"/{id}/tasks/{taskId}/unassign"}, mapping.value());
+    }
+
+    @Test
+    void theEquipmentOfATaskTypeIsPatchedOnlyByWhoeverSupervises() throws NoSuchMethodException {
+        MaintenanceTaskTypeService taskTypeService = mock(MaintenanceTaskTypeService.class);
+        MaintenanceTaskTypeController controller = new MaintenanceTaskTypeController(taskTypeService);
+        MergePatch<MaintenanceTaskTypeUpdateRequest> patch = MergePatch.of(
+                new MaintenanceTaskTypeUpdateRequest(Set.of(TaskEquipment.INSULATED_PLATFORM), 0L));
+        MaintenanceTaskTypeResponse patched = mock(MaintenanceTaskTypeResponse.class);
+        when(taskTypeService.patch("RG-05", patch)).thenReturn(patched);
+
+        assertSame(patched, controller.patch("RG-05", patch).getBody());
+        // La regla de la ruta pide maintenance-write para un PATCH; el equipo de un tipo, ademas, supervise.
+        PreAuthorize rule = MaintenanceTaskTypeController.class.getMethod("patch", String.class, MergePatch.class).getAnnotation(PreAuthorize.class);
+        assertEquals("hasRole('" + SecurityRoles.MAINTENANCE_SUPERVISE + "')", rule.value());
     }
 
     private static void assertController(Class<?> controller, String basePath, String tag) {

@@ -45,7 +45,9 @@ every `APP_STOCK_SYNC_RETRY_INTERVAL` (`PT5M`), `APP_STOCK_SYNC_IMMEDIATE_RETRY=
 an order transition could not settle within `APP_STOCK_SYNC_DEADLINE` (`15s`) to that round instead
 of retrying them right after commit, `APP_RABBITMQ_RESOURCES_LISTENER_ENABLED=false` stops consuming
 `mto-resources` (its queue is still declared), `APP_SECURITY_EXPOSE_API_DOCS=true` publishes Swagger
-without a token.
+without a token, `APP_SHIFTS_MINIMUM_REST` (`PT12H`; `PT0S` switches it off) is the rest between two
+nights of the same person, and `APP_SCOPE_ENABLED=false` stops limiting writes to the execution
+packages of whoever writes.
 
 Sizing: Tomcat, the schedulers and the listeners run on virtual threads
 (`SPRING_THREADS_VIRTUAL_ENABLED`, `true`), so the limit of concurrency is the database pool,

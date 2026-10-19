@@ -17,8 +17,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Un equipo de mto-resources ({@code team.*}): el equipo sincronizado, su jefe, su supervisor, sus
- * linemen y sus EP. Solo los de disciplina {@code MAINTENANCE}; los de construccion no son de aqui.
+ * Un equipo de mto-resources ({@code team.*}): el equipo sincronizado, su jefe, su supervisor, su jefe de
+ * supervisores ({@code V24}: cuenta para el ambito por EP), sus linemen y sus EP. Solo los de disciplina {@code MAINTENANCE}; los de construccion no son de aqui.
  *
  * <ol>
  *   <li>Las personas que trae se insertan si no estaban ({@code ON CONFLICT DO NOTHING}): el evento del
@@ -62,13 +62,14 @@ class ResourcesTeamHandler implements IncomingEventHandler {
 
         UUID leader = person(values.nested("leader"));
         UUID supervisor = person(values.nested("supervisor"));
+        UUID chiefSupervisor = person(values.nested("chiefSupervisor"));
         List<UUID> members = values.nestedList("members").stream().map(this::person).filter(Objects::nonNull).toList();
 
         teamRepository.adoptByCode(code, ResourcesRabbitMqNames.RESOURCES_SOURCE_SERVICE, sourceId);
         MasterDataPayload vehicle = values.nested("defaultVehicle");
         int applied = teamRepository.upsertFromResources(ResourcesRabbitMqNames.RESOURCES_SOURCE_SERVICE, sourceId, code,
                 Objects.requireNonNullElse(values.string("name"), code), vehicle.string("code"), values.bool("active", true),
-                leader, supervisor, ResourcesPayloads.uuidOrNull(vehicle.string("id")), context.sequenceNumber());
+                leader, supervisor, chiefSupervisor, ResourcesPayloads.uuidOrNull(vehicle.string("id")), context.sequenceNumber());
         if (applied == 0) {
             LOGGER.info("Team {} {} from mto-resources is older than what is stored: ignored", code, event.eventName());
             return;

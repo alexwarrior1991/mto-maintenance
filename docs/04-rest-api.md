@@ -21,7 +21,10 @@ GET             /assets/{id}/orders | /revisions
                                               type, trackId, startKp, endKp, sectioning, enabled, connectedTrackId (the other track
                                               of one that joins two, so a client offers the shifts of both)
 
-GET             /task-types | /task-types/{code}     functionalGroup, requiresFullPossession, diagnostic
+GET             /task-types | /task-types/{code}     functionalGroup, requiresFullPossession, diagnostic,
+                                              requiredEquipment (INSULATED_PLATFORM, EARTHING), version
+PATCH           /task-types/{code}            only requiredEquipment (merge-patch with the version read; null
+                                              empties it); maintenance-supervise on top of maintenance-write
 GET/POST        /teams        GET/PUT /teams/{id}
                                               synchronizedFromResources, sourceEntityId (its unit in mto-resources), leader,
                                               supervisor, members (linemen, by code), defaultVehicleId, executionPackageIds; a
@@ -211,6 +214,28 @@ driver qualification needs a different person of the crew (the leader or a linem
 supervisor) holding it, valid that day; otherwise 409 `SHF-001`: `Shift SH-000077 has no qualified
 driver for RR-07 (RR-OPERATOR) on 2026-10-17: …`. A shift still `PLANNED` may lack its drivers.
 
+Who or what is not available gets into no shift either (`V24`): on create, on any change and on
+start, a leader, supervisor, lineman or vehicle with a period of `unavailable` (an absence of the
+person, a repair that immobilises the vehicle, both kept by `mto-resources` and published without the
+reason) that covers the `shiftDate` is 409 `SHF-001`:
+
+```text
+Shift SH-000077 on 2026-10-17 cannot take who or what is not available that day: Yossi Cohen (PER-000003)
+(unavailable 2026-10-15 to 2026-10-20); vehicle RR-07 (unavailable from 2026-10-16). It is recorded in mto-resources
+```
+
+And the leader and the linemen rest at least `app.shifts.minimum-rest` (12 h) between the end of a
+shift and the start of the next where they go, the night before or after (`actualEnd`/`actualStart`
+when known, else the planned ones; a cancelled shift does not count; without hours it is not
+measured): 409 `SHF-001`, `Yossi Cohen (PER-000003) would rest 8h between shift SH-000076 (ends …) and
+shift SH-000077 (starts …): at least 12h between two nights`.
+
+A task whose types require equipment (`requiredEquipment`) is assigned to a shift, started and
+completed only in one that carries it: `INSULATED_PLATFORM` a vehicle with that capability,
+`EARTHING` a vehicle with `EARTHING` or an active `EARTHING_POLE` instrument; and a change of the
+shift's vehicles or instruments that leaves an assigned open task without it is refused. Both are 409
+`SHF-001`.
+
 `POST /shifts/{id}/close` takes `parkings`, where each vehicle was left:
 
 ```jsonc
@@ -306,6 +331,7 @@ their items, defects, material lines — takes the same body two ways:
 | Defect | `technicalNotes`, `correctionType`, `partsReplaced`, `repairPlannedDate`, `photoRefs` |
 | Asset | `description`, `preventiveIntervalDays`, and on an own section `executionPackageId` and `stationId` |
 | Material line | nothing: the `PATCH` is there for the `version` |
+| Task type | `requiredEquipment` |
 
 Each of those resources returns its `version` (a check item its own), and both bodies accept it,
 optional. With it, a request made on an older version answers 409 `CON-001` and writes nothing: read
@@ -354,12 +380,13 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 400 `REQ-VALIDATION` / `VAL-001` | Bean Validation / domain invariant (kp range, quantity, unknown task type, unknown export `format`, a blank required text, a `PATCH` that empties a required field or has an unknown key, a `null` inside a list, a defect detected in the future, a shift closed with its voltage cut-off after the end) |
 | 400 `REQ-400` | Malformed body, a parameter of the wrong type, a missing required parameter (`month` of the monthly report) or a `sort` on a property the entity does not have |
 | 401 `AUTH-401` / 403 `AUTH-403` | No token / missing role |
+| 403 `SCP-403` | The role is there, but what is written is in an execution package outside the scope of whoever writes (`MaintenanceScope`, `docs/02-domain-model.md`): its message names the package and the person's; reading is never limited |
 | 404 `<AGG>-404` | Unknown id (`ORD`, `AST`, `TSK`, `SHF`, `TEA`, `INS`, `TPL`, `DEF`, `MAT`, and `CRW` for a person, `FLT` for a vehicle or `MSI` for an instrument of `mto-resources` named in a shift); a task type, a check item, an inspection item and a background operation (unknown, purged or someone else's) answer `APP-404` |
 | 404 `HTTP-404` | Unknown route |
 | 405 `REQ-405` | The route exists but not for that method; the `Allow` header lists the ones it takes |
 | 409 `TRN-001` | Invalid transition |
 | 409 `AST-001` | Disabled asset; changing a field of a synchronized asset that only `mto-configuration` changes (sending it with the value it already has is accepted); `enabled=true` on an asset disabled at the source |
-| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them, and an inspection recorded in a shift that is not in progress or closed, or that does not work on its asset's track nor on the one it connects with; a crew or vehicle rule (more than 6 linemen, the leader among them or a `WORKER`, someone deactivated, a vehicle not available or needing a tow, not enough seats, a vehicle, a person or an instrument in another open shift of the same date, starting or changing a shift in progress without a leader and 2 to 6 linemen), something expired at the shift's date (a qualification of its crew, a document of its vehicles, the calibration of its instruments) or an instrument retired, starting or changing a shift in progress without a different qualified driver for each self-propelled vehicle that requires one, and a rail-only vehicle left by description only on close |
+| 409 `SHF-001` | Shift rule (no shift in progress on the track, partial possession, diverted track), also when changing the tracks or the possession of a shift would leave one of its open tasks outside them, and an inspection recorded in a shift that is not in progress or closed, or that does not work on its asset's track nor on the one it connects with; a crew or vehicle rule (more than 6 linemen, the leader among them or a `WORKER`, someone deactivated, a vehicle not available or needing a tow, not enough seats, a vehicle, a person or an instrument in another open shift of the same date, starting or changing a shift in progress without a leader and 2 to 6 linemen), something expired at the shift's date (a qualification of its crew, a document of its vehicles, the calibration of its instruments) or an instrument retired, someone or a vehicle not available at the shift's date, less than the minimum rest between two nights of the leader or a lineman, starting or changing a shift in progress without a different qualified driver for each self-propelled vehicle that requires one, a task worked in a shift that does not carry the equipment its types require (or a change of the shift that takes it away), and a rail-only vehicle left by description only on close |
 | 409 `TEA-001` | `PUT /teams/{id}` of a team synchronized from `mto-resources`: it is changed there |
 | 409 `MAT-001` | Over-consumption (also taking `allowOverConsumption` off a line consumed above plan), duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
@@ -377,6 +404,7 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | Verb / action | Role |
 |---|---|
 | `GET` | `MAINTENANCE_READ`; `GET /operations/{id}` also needs to be who asked for it, `MAINTENANCE_SUPERVISE` or `OPS_WRITE` (404 otherwise) |
-| `POST`, `PUT` | `MAINTENANCE_WRITE` |
+| `POST`, `PUT`, `PATCH` | `MAINTENANCE_WRITE`; a write may also be limited by execution package (`SCP-403`) |
+| `PATCH /task-types/{code}` | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security) |
 | `DELETE`, and `PUT /assets/{id}` with `enabled=false` (the same decision) | `MAINTENANCE_DELETE` (method security on the `PUT`, on top of `MAINTENANCE_WRITE`) |
 | `cancel` **of an order**, `complete` of an order with `force=true`, `resolve`, `close`, `discard` of a defect | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security); cancelling a shift or a task, and taking a task out of a shift (`POST .../unassign`), only need `MAINTENANCE_WRITE` |

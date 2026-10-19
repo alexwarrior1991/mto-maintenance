@@ -347,6 +347,18 @@ app:
       # Activos que viajan en el evento, ademas del recuento: los que vencen antes, primero.
       sample-size: 20
 
+  # Turnos: lo que descansa como poco una persona entre dos noches seguidas, del fin de una al inicio
+  # de la siguiente en la que va como jefe o como lineman (ShiftAvailability). 0 lo apaga; sin horas no
+  # se puede medir y no se rechaza.
+  shifts:
+    minimum-rest: ${APP_SHIFTS_MINIMUM_REST:PT12H}
+
+  # Ambito por EP (MaintenanceScope): un jefe de equipo, un supervisor o un jefe de supervisores con
+  # ficha en mto-resources solo escribe en lo de los EP de sus equipos. Leer no se limita. En false,
+  # nadie tiene limite.
+  scope:
+    enabled: ${APP_SCOPE_ENABLED:true}
+
   # Informes (parte del turno, avance, mensual). La zona en la que se leen sus instantes, para lo que
   # se imprime en el .xlsx y el PDF y para los cortes de mes y de dia que cuentan; es una sola para que
   # las dos mitades no se separen. El JSON sigue en UTC. Una zona mal escrita no deja arrancar.

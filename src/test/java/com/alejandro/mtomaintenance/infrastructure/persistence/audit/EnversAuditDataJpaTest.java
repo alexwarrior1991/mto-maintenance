@@ -157,11 +157,11 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         UUID linemanB = UUID.randomUUID();
         UUID vehicleId = UUID.randomUUID();
         inTransaction(em -> {
-            personRepository.upsertFromResources(leaderId, "PER-" + leaderId.toString().substring(0, 8), "Yossi Cohen", "equipo.jefe", "TEAM_LEADER", true, null, 1L);
-            personRepository.upsertFromResources(linemanA, "PER-" + linemanA.toString().substring(0, 8), "Eli Katz", null, "WORKER", true, null, 1L);
-            personRepository.upsertFromResources(linemanB, "PER-" + linemanB.toString().substring(0, 8), "Noam Biton", null, "WORKER", true, null, 1L);
+            personRepository.upsertFromResources(leaderId, "PER-" + leaderId.toString().substring(0, 8), "Yossi Cohen", "equipo.jefe", "TEAM_LEADER", true, null, null, 1L);
+            personRepository.upsertFromResources(linemanA, "PER-" + linemanA.toString().substring(0, 8), "Eli Katz", null, "WORKER", true, null, null, 1L);
+            personRepository.upsertFromResources(linemanB, "PER-" + linemanB.toString().substring(0, 8), "Noam Biton", null, "WORKER", true, null, null, 1L);
             vehicleRepository.upsertFromResources(vehicleId, "DR-" + vehicleId.toString().substring(0, 6), "Tower car", "MTW", "Plasser MTW",
-                    "RAIL_ONLY", "CATENARY_TOWER_CAR", true, false, true, 8, "OPERATIONAL", true, true, null, null, false, 1L);
+                    "RAIL_ONLY", "CATENARY_TOWER_CAR", true, false, true, 8, "OPERATIONAL", true, true, null, null, false, null, null, 1L);
             return null;
         });
         String suffix = UUID.randomUUID().toString().substring(0, 8);

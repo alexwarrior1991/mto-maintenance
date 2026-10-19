@@ -77,11 +77,13 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
     private final MaintenanceOrderService orderService;
     private final EntityAuditService auditService;
     private final DomainEventPublisher events;
+    private final MaintenanceScope scope;
 
     @Override
     @Transactional
     public MaintenanceInspectionResponse create(MaintenanceInspectionRequest request) {
         CatenaryAsset asset = lookups.enabledAsset(request.assetId());
+        scope.requireAsset(asset);
         MaintenanceOrder originOrder = request.originOrderId() == null ? null : lookups.order(request.originOrderId());
         if (originOrder != null && originOrder.isTerminal()) {
             throw new InvalidTransitionException("Order " + originOrder.getCode() + " is " + originOrder.getStatus() + " and cannot receive inspections");
@@ -132,6 +134,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
     @Transactional
     public MaintenanceInspectionResponse patch(UUID id, MergePatch<MaintenanceInspectionUpdateRequest> patch) {
         MaintenanceInspection inspection = inspection(id);
+        scope.requireInspection(inspection);
         MaintenanceInspectionUpdateRequest request = patch.values();
         StaleVersionException.check("Inspection " + inspection.getCode(), inspection.getVersion(), request.version());
         PatchRules.requireClearable(patch, CLEARABLE);
@@ -163,6 +166,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
     @Transactional
     public MaintenanceInspectionResponse patchItem(UUID id, UUID itemId, MergePatch<CheckItemUpdateRequest> patch) {
         MaintenanceInspection inspection = inspection(id);
+        scope.requireInspection(inspection);
         MaintenanceInspectionItem item = inspection.getItems().stream()
                 .filter(candidate -> candidate.getId().equals(itemId))
                 .findFirst()
@@ -204,6 +208,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
     @Transactional
     public CatenaryDefectResponse createDefect(UUID id, CreateDefectFromInspectionRequest request) {
         MaintenanceInspection inspection = inspection(id);
+        scope.requireInspection(inspection);
         if (inspection.getGeneratedDefect() != null) {
             // Idempotente: repetir la llamada devuelve lo ya creado, no un error.
             return defectMapper.toResponse(inspection.getGeneratedDefect());
@@ -244,6 +249,7 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
     @Transactional
     public MaintenanceOrderResponse createCorrectiveOrder(UUID id, CreateCorrectiveOrderRequest request) {
         MaintenanceInspection inspection = inspection(id);
+        scope.requireInspection(inspection);
         if (inspection.getGeneratedOrder() != null) {
             return orderService.findById(inspection.getGeneratedOrder().getId());
         }

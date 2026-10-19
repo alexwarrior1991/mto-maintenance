@@ -9,6 +9,7 @@ import com.alejandro.mtomaintenance.application.exception.InspectionException;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.ScopeException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
@@ -77,6 +78,15 @@ public class GlobalExceptionHandler {
             MaterialUsageException.class, SynchronizedTeamException.class})
     public ResponseEntity<ApiErrorResponse> handleStateConflict(BusinessException exception, HttpServletRequest request) {
         return businessResponse(exception, HttpStatus.CONFLICT, request);
+    }
+
+    /**
+     * 403 SCP-403: quien escribe tiene el rol, pero eso es de un EP que no es de sus equipos
+     * ({@code MaintenanceScope}). Distinto del AUTH-403 de un permiso que falta.
+     */
+    @ExceptionHandler(ScopeException.class)
+    public ResponseEntity<ApiErrorResponse> handleOutOfScope(ScopeException exception, HttpServletRequest request) {
+        return businessResponse(exception, HttpStatus.FORBIDDEN, request);
     }
 
     /**

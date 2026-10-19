@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -44,11 +45,11 @@ public interface MaintenanceTeamRepository extends JpaRepository<MaintenanceTeam
     @Modifying
     @Query(value = """
             insert into maintenance_team (id, code, name, base_name, vehicle, active, source_service, source_entity_id,
-                                          source_sequence_number, leader_person_id, supervisor_person_id, default_vehicle_id,
-                                          created_at, updated_at, created_by, updated_by)
+                                          source_sequence_number, leader_person_id, supervisor_person_id, chief_supervisor_person_id,
+                                          default_vehicle_id, created_at, updated_at, created_by, updated_by)
             values (gen_random_uuid(), :code, :name, null, cast(:vehicle as varchar), :active, :sourceService, :sourceEntityId,
-                    cast(:sequenceNumber as bigint), cast(:leaderId as uuid), cast(:supervisorId as uuid), cast(:defaultVehicleId as uuid),
-                    now(), now(), 'system', 'system')
+                    cast(:sequenceNumber as bigint), cast(:leaderId as uuid), cast(:supervisorId as uuid), cast(:chiefSupervisorId as uuid),
+                    cast(:defaultVehicleId as uuid), now(), now(), 'system', 'system')
             on conflict (source_entity_id) where source_entity_id is not null do update
                set code = excluded.code,
                    name = excluded.name,
@@ -57,6 +58,7 @@ public interface MaintenanceTeamRepository extends JpaRepository<MaintenanceTeam
                    active = excluded.active,
                    leader_person_id = excluded.leader_person_id,
                    supervisor_person_id = excluded.supervisor_person_id,
+                   chief_supervisor_person_id = excluded.chief_supervisor_person_id,
                    default_vehicle_id = excluded.default_vehicle_id,
                    source_sequence_number = coalesce(excluded.source_sequence_number, maintenance_team.source_sequence_number),
                    updated_at = now(),
@@ -68,7 +70,8 @@ public interface MaintenanceTeamRepository extends JpaRepository<MaintenanceTeam
     int upsertFromResources(@Param("sourceService") String sourceService, @Param("sourceEntityId") UUID sourceEntityId,
                             @Param("code") String code, @Param("name") String name, @Param("vehicle") String vehicle,
                             @Param("active") boolean active, @Param("leaderId") UUID leaderId, @Param("supervisorId") UUID supervisorId,
-                            @Param("defaultVehicleId") UUID defaultVehicleId, @Param("sequenceNumber") Long sequenceNumber);
+                            @Param("chiefSupervisorId") UUID chiefSupervisorId, @Param("defaultVehicleId") UUID defaultVehicleId,
+                            @Param("sequenceNumber") Long sequenceNumber);
 
     @Modifying
     @Query(value = "delete from maintenance_team_member where team_id = :teamId", nativeQuery = true)
@@ -89,4 +92,28 @@ public interface MaintenanceTeamRepository extends JpaRepository<MaintenanceTeam
             on conflict do nothing
             """, nativeQuery = true)
     int insertExecutionPackage(@Param("teamId") UUID teamId, @Param("executionPackageId") Long executionPackageId);
+
+    /**
+     * Los EP de los equipos sincronizados y activos de una persona ({@code MaintenanceScope}): los que dirige
+     * como jefe, supervisor o jefe de supervisores ({@code V24}), y en el que va de lineman.
+     */
+    @Query(value = """
+            select distinct tep.execution_package_id
+              from maintenance_team t
+              join maintenance_team_execution_package tep on tep.team_id = t.id
+             where t.active and t.source_entity_id is not null
+               and (t.leader_person_id = :personId or t.supervisor_person_id = :personId or t.chief_supervisor_person_id = :personId
+                    or exists (select 1 from maintenance_team_member m where m.team_id = t.id and m.person_id = :personId))
+            """, nativeQuery = true)
+    List<Long> findExecutionPackageIdsOfPerson(@Param("personId") UUID personId);
+
+    /** Los equipos sincronizados y activos de una persona, con el mismo criterio: para un turno sin EP. */
+    @Query(value = """
+            select t.id
+              from maintenance_team t
+             where t.active and t.source_entity_id is not null
+               and (t.leader_person_id = :personId or t.supervisor_person_id = :personId or t.chief_supervisor_person_id = :personId
+                    or exists (select 1 from maintenance_team_member m where m.team_id = t.id and m.person_id = :personId))
+            """, nativeQuery = true)
+    List<UUID> findTeamIdsOfPerson(@Param("personId") UUID personId);
 }

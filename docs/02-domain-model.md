@@ -140,11 +140,20 @@ order.
 ## Task types (`MaintenanceTaskType`)
 
 The `RG-01…RG-18` (general revision) and `RP-01…RP-12` (particular revision) catalogue of the OCS
-plan, read-only: `functionalGroup` (structural supports, overhead conductors, devices and switches,
+plan: `functionalGroup` (structural supports, overhead conductors, devices and switches,
 anchorage components, turnouts and section insulators, diagnostics, none),
 `standardMinutesPerUnit` + `unit` (`UNIT`, `SPAN`, `KM`, `DEFECT`, `PROFILE`), `fixedMinutes`
 ("60 min + 3/km"), `requiresFullPossession` (groups 3, 5 and `RP-12`), `diagnostic` (group 6). The
 minutes per unit are those of the plan's task sheet (`V18`, see `03-database.md`).
+
+The only thing that changes through the API is the **equipment a type requires** (`requiredEquipment`,
+`V24`): `INSULATED_PLATFORM` (a vehicle of the shift whose model has that capability in `mto-resources`)
+and `EARTHING` (a vehicle with the capability `EARTHING`, or an active `EARTHING_POLE` among the shift's
+instruments). Nothing is seeded: whoever supervises sets it with `PATCH /task-types/{code}` (merge-patch
+with the `version` read). A task whose types require something is assigned to a shift, started and
+completed only in a shift that carries it (`ShiftRules.requireEquipment`, 409 `SHF-001`), and a `PATCH`
+of a shift that takes away the vehicle or the instrument an assigned open task needs is refused the same
+way. What was already done is not re-checked.
 
 ## Shifts (`MaintenanceShift`) and teams (`MaintenanceTeam`)
 
@@ -273,10 +282,54 @@ shiftDate` (the last day still counts); a missing date never expires.
   other. A shift still `PLANNED` may lack its drivers; a vehicle that does not move by itself, or whose
   model requires nothing, needs none.
 
+### Availability and rest (`V24`)
+
+When a person or a vehicle is **not available** is `mto-resources`' too: the absences of a person
+(holidays, sick leave, training...) and the repairs that immobilise a vehicle, planned or open. Its events
+carry them as `unavailable: [{from, to}]` (both dates included, `to` null when the end is unknown),
+without the reason: a sick leave never leaves `mto-resources`. They land in `crew_person.unavailable` and
+`fleet_vehicle.unavailable`, and `ShiftAvailability` (`domain/model`) refuses, always (create, any change,
+start), a shift whose leader, supervisor, lineman or vehicle has a period that covers its `shiftDate`
+(409 `SHF-001`, one message for everything).
+
+A person also **rests between two nights**: from the end of one shift (its `actualEnd`, else its
+`plannedEnd`) to the start of the next where the same person goes as leader or lineman (`actualStart`,
+else `plannedStart`) there are at least `app.shifts.minimum-rest` (12 h by default; `0` switches it off).
+The night before and the night after are read (`findShiftsOfCrewOn`, planned, in progress or closed; a
+cancelled one does not count), under the same advisory locks `person:<id>` as the double booking. A
+shift without hours cannot be measured and is not refused; the supervisor, who oversees several, is not
+measured.
+
 A shift without crew, vehicles or instruments of `mto-resources` has nothing to check, so the shifts
 of before behave as they did. Renewing something in `mto-resources` reaches the snapshot by event and
 the next check sees it. Nothing re-checks a shift by itself; a change made after midnight is still
 weighed at the shift's date, and closing and cancelling never check.
+
+## Scope by execution package (`MaintenanceScope`)
+
+Who writes may be limited to the execution packages of their teams; **reading is never limited**. It is
+computed here, without calling anybody: the person of the token's `preferred_username` in `crew_person`
+(case-insensitive, as Keycloak) and the synchronized, active teams where that person is the leader, the
+supervisor, the chief supervisor (`team.*.chiefSupervisor`, `V24`) or a lineman.
+
+- **No limit**: whoever has no record with that username (the managers of always, the service accounts
+  such as `mto-field-svc`, the consumers of messages, which carry no token), the categories
+  `CHIEF_MAINTENANCE`, `CHIEF_CONSTRUCTION` and `PROJECT_MANAGER`, and everybody with
+  `app.scope.enabled=false`.
+- **Limited**: any other category, to the packages of their active teams; without teams, to none.
+
+What is checked, at the start of every write of the services (create, `PUT`/`PATCH`, every transition):
+
+| Resource | Its package |
+|---|---|
+| Order, and its tasks, check items and material lines | the order's `executionPackageId`; a change of package is checked on the old and on the new one |
+| Inspection, defect | the package of its asset (copied when created) |
+| Asset | its own; a change of package too |
+| Shift | its `executionPackageId`; without one, its team must be one of the person's teams. Assigning or unassigning a task checks the shift and the task's order |
+
+Something without a package is only written by who has no limit (save that shift of one's own team).
+Local teams are not limited. Out of scope is 403 `SCP-403`, whose message says which package it is and
+which ones are the person's; it is not the `AUTH-403` of a missing role.
 
 ## Inspections (`MaintenanceInspection`) and templates
 

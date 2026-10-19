@@ -22,7 +22,9 @@ import java.util.Objects;
  *
  * <p>Sus documentos ({@code documents}: {@code kind}, {@code reference}, {@code expiresOn}) y la
  * habilitacion que su modelo exige al conductor ({@code type.requiredDriverQualification}, {@code V23})
- * van en la misma sentencia; un evento sin la clave (un mto-resources anterior) deja lo que habia.</p>
+ * van en la misma sentencia, y tambien sus periodos no disponibles ({@code unavailable}) y las capacidades
+ * de su modelo ({@code type.capabilities}, {@code V24}); un evento sin la clave (un mto-resources
+ * anterior) deja lo que habia.</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -67,6 +69,8 @@ class ResourcesVehicleHandler implements IncomingEventHandler {
                 ResourcesPayloads.jsonList(event.values(), "documents", ResourcesVehicleHandler::document),
                 type.string("requiredDriverQualification"),
                 typeValues.containsKey("requiredDriverQualification"),
+                ResourcesPayloads.unavailable(event.values(), "vehicle"),
+                ResourcesPayloads.jsonStrings(typeValues, "capabilities"),
                 context.sequenceNumber());
         LOGGER.info("Vehicle {} {} from mto-resources: {}", values.string("code"), event.eventName(),
                 applied == 0 ? "older than what is stored, ignored" : "applied");

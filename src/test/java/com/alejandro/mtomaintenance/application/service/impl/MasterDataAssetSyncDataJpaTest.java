@@ -27,6 +27,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.UnavailablePeriod;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInstrument;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPersonRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.FleetVehicleRepository;
@@ -979,6 +980,66 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
     }
 
     @Test
+    void aPersonAndAVehicleKeepWhenTheyAreNotAvailableAndTheCapabilitiesOfTheModelAndAnEventWithoutThemKeepsThem() {
+        UUID personId = UUID.randomUUID();
+        String code = "PER-" + personId.toString().substring(0, 8);
+        IncomingEventHandler people = new ResourcesPersonHandler(personRepository);
+        Map<String, Object> absent = personValues(code, "Eli Katz", "WORKER", true);
+        absent.put("unavailable", List.of(Map.of("from", "2026-11-02", "to", "2026-11-06"), period("2026-12-24", null), Map.of("to", "2027-01-01")));
+
+        people.handle(new IncomingEvent("person", personId.toString(), "updated", absent), resourcesContext(5L));
+        people.handle(personEvent(personId, code, "Eli Katz (renamed)", "WORKER", true), resourcesContext(6L));
+        entityManager.flush();
+        entityManager.clear();
+        assertEquals(List.of(new UnavailablePeriod(LocalDate.of(2026, 11, 2), LocalDate.of(2026, 11, 6)),
+                        new UnavailablePeriod(LocalDate.of(2026, 12, 24), null)),
+                personRepository.findById(personId).orElseThrow().getUnavailable(),
+                "Without its from a period is skipped, and an event without the key keeps the stored ones");
+
+        UUID vehicleId = UUID.randomUUID();
+        IncomingEventHandler vehicles = new ResourcesVehicleHandler(vehicleRepository);
+        Map<String, Object> inRepair = vehicleValues("RR-" + vehicleId.toString().substring(0, 6), null);
+        ((Map<String, Object>) inRepair.get("type")).put("capabilities", List.of("EARTHING", "INSULATED_PLATFORM", "TOWING"));
+        inRepair.put("unavailable", List.of(period("2026-10-15", null)));
+        vehicles.handle(new IncomingEvent("vehicle", vehicleId.toString(), "updated", inRepair), resourcesContext(3L));
+        Map<String, Object> older = vehicleValues("RR-" + vehicleId.toString().substring(0, 6), null);
+        ((Map<?, ?>) older.get("type")).remove("capabilities");
+        vehicles.handle(new IncomingEvent("vehicle", vehicleId.toString(), "updated", older), resourcesContext(4L));
+        entityManager.flush();
+        entityManager.clear();
+        FleetVehicle stored = vehicleRepository.findById(vehicleId).orElseThrow();
+        assertEquals(List.of(new UnavailablePeriod(LocalDate.of(2026, 10, 15), null)), stored.getUnavailable());
+        assertEquals(List.of("EARTHING", "INSULATED_PLATFORM", "TOWING"), stored.getCapabilities());
+        assertTrue(stored.hasCapability("INSULATED_PLATFORM"));
+    }
+
+    @Test
+    void theScopeOfAPersonIsThePackagesOfTheTeamsHeLeadsSupervisesOrRidesIn() {
+        Map<String, Object> leader = crewMember("TEAM_LEADER");
+        leader.put("username", "Scope.Leader." + UUID.randomUUID().toString().substring(0, 6));
+        Map<String, Object> supervisor = crewMember("SUPERVISOR");
+        Map<String, Object> chief = crewMember("CHIEF_SUPERVISOR");
+        List<Map<String, Object>> linemen = List.of(crewMember("WORKER"), crewMember("WORKER"));
+        IncomingEvent event = teamEvent(UUID.randomUUID(), "S" + (System.nanoTime() % 1_000_000_000L), "Team", leader, supervisor, linemen,
+                List.of(14, 15));
+        event.values().put("chiefSupervisor", chief);
+
+        new ResourcesTeamHandler(teamRepository, personRepository).handle(event, resourcesContext(2L));
+        entityManager.flush();
+        entityManager.clear();
+
+        for (Map<String, Object> person : List.of(leader, supervisor, chief, linemen.get(0))) {
+            assertEquals(java.util.Set.of(14L, 15L),
+                    java.util.Set.copyOf(teamRepository.findExecutionPackageIdsOfPerson(UUID.fromString((String) person.get("personId")))),
+                    person.get("category") + " counts");
+        }
+        assertEquals(List.of(), teamRepository.findExecutionPackageIdsOfPerson(UUID.randomUUID()));
+        assertEquals(1, teamRepository.findTeamIdsOfPerson(UUID.fromString((String) chief.get("personId"))).size());
+        assertEquals(leader.get("personId"), personRepository.findByUsername(((String) leader.get("username")).toLowerCase()).orElseThrow()
+                .getId().toString(), "The username is compared as Keycloak does, without case");
+    }
+
+    @Test
     void anInstrumentArrivesAsItsSnapshotAndALateEventIsDiscarded() {
         UUID instrumentId = UUID.randomUUID();
         String code = "EP-" + instrumentId.toString().substring(0, 6).toUpperCase();
@@ -1083,6 +1144,14 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         values.put("supervisor", supervisor);
         values.put("members", members);
         return new IncomingEvent("team", teamId.toString(), "updated", values);
+    }
+
+    /** Un periodo no disponible como lo publica mto-resources en {@code unavailable}; {@code to} puede ser nulo. */
+    private static Map<String, Object> period(String from, String to) {
+        Map<String, Object> period = new HashMap<>();
+        period.put("from", from);
+        period.put("to", to);
+        return period;
     }
 
     /** Una cualificacion como la publica mto-resources en {@code person.*.qualifications}. */
