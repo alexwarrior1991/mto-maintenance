@@ -1,9 +1,13 @@
 package com.alejandro.mtomaintenance.infrastructure.persistence.entity;
 
+import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.NotBlank;
@@ -21,10 +25,15 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
+import java.util.EnumSet;
+import java.util.Set;
 
 /**
  * Tipo de tarea del plan OCS (RG-xx revision general, RP-xx revision particular) con su tiempo
  * estandar: {@code fixedMinutes + standardMinutesPerUnit * unidades}. Sembrado por V3.
+ *
+ * <p>Es un catalogo y no se audita. Lo unico que cambia por la API es el equipo que exige
+ * ({@link #requiredEquipment}, {@code V24}, {@code PATCH /task-types/{code}}), y por eso lleva version.</p>
  */
 @Entity
 @Table(name = "maintenance_task_type", uniqueConstraints = @UniqueConstraint(name = "uq_maintenance_task_type_code", columnNames = "code"))
@@ -34,7 +43,7 @@ import java.math.BigDecimal;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
-public class MaintenanceTaskType extends AuditableEntity {
+public class MaintenanceTaskType extends VersionedEntity {
 
     @NotBlank
     @Size(max = 16)
@@ -94,4 +103,23 @@ public class MaintenanceTaskType extends AuditableEntity {
     @Builder.Default
     @Column(name = "order_index", nullable = false)
     private Integer orderIndex = 0;
+
+    /**
+     * Lo que tiene que llevar el turno para asignar, iniciar o completar una tarea de este tipo
+     * ({@code ShiftRules.requireEquipment}): vacio, nada. Lo decide quien supervisa.
+     */
+    @Builder.Default
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "maintenance_task_type_equipment", joinColumns = @JoinColumn(name = "task_type_id"))
+    @Enumerated(EnumType.STRING)
+    @Column(name = "equipment", nullable = false, length = 40)
+    private Set<TaskEquipment> requiredEquipment = EnumSet.noneOf(TaskEquipment.class);
+
+    /** Nunca nulo: un tipo construido a mano sin el conjunto no exige nada. */
+    public Set<TaskEquipment> getRequiredEquipment() {
+        if (requiredEquipment == null) {
+            requiredEquipment = EnumSet.noneOf(TaskEquipment.class);
+        }
+        return requiredEquipment;
+    }
 }

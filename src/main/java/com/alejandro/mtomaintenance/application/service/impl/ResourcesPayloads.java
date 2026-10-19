@@ -7,7 +7,9 @@ import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -68,6 +70,37 @@ final class ResourcesPayloads {
         } catch (DateTimeParseException invalid) {
             throw new ValidationException("The " + what + " event of mto-resources has a " + key + " that is not a date: " + text);
         }
+    }
+
+    /**
+     * Los periodos no disponibles de {@code unavailable} ({@code [{from, to}]}, {@code V24}) como JSON para
+     * la columna; uno sin {@code from} no sirve y se salta. {@code null} si la clave no viene: un evento de
+     * un mto-resources anterior deja lo que habia.
+     */
+    static String unavailable(Map<String, Object> values, String what) {
+        return jsonList(values, "unavailable", period -> {
+            LocalDate from = dateOrNull(period, "from", what);
+            if (from == null) {
+                return null;
+            }
+            LocalDate to = dateOrNull(period, "to", what);
+            Map<String, Object> kept = new LinkedHashMap<>();
+            kept.put("from", from.toString());
+            kept.put("to", to == null ? null : to.toString());
+            return kept;
+        });
+    }
+
+    /**
+     * Una lista de textos ({@code ["TOWING", "EARTHING"]}) como JSON para la columna; {@code null} si la
+     * clave no viene o no es una lista, para que la sentencia deje lo que habia.
+     */
+    static String jsonStrings(Map<?, ?> values, String key) {
+        if (!(values.get(key) instanceof List<?> list)) {
+            return null;
+        }
+        List<String> kept = list.stream().filter(Objects::nonNull).map(Object::toString).filter(text -> !text.isBlank()).toList();
+        return JsonMapper.shared().writeValueAsString(kept);
     }
 
     /**

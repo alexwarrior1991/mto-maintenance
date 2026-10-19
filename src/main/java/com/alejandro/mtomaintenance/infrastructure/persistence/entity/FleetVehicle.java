@@ -91,6 +91,22 @@ public class FleetVehicle {
     @Column(name = "required_driver_qualification", length = 32)
     private String requiredDriverQualification;
 
+    /**
+     * Cuando no esta disponible ({@code V24}, {@code vehicle.*.unavailable}): las reparaciones que lo
+     * inmovilizan, planificadas o abiertas; vacia si no tiene ninguna.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "unavailable", nullable = false, columnDefinition = "jsonb")
+    private List<UnavailablePeriod> unavailable;
+
+    /**
+     * Las capacidades de su modelo ({@code V24}, {@code vehicle.*.type.capabilities}): {@code TOWING},
+     * {@code INSULATED_PLATFORM}, {@code EARTHING}... tal como las nombra mto-resources.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "capabilities", nullable = false, columnDefinition = "jsonb")
+    private List<String> capabilities;
+
     @Column(name = "source_sequence_number")
     private Long sourceSequenceNumber;
 
@@ -107,6 +123,21 @@ public class FleetVehicle {
     /** Nunca nula: una fila escrita antes de {@code V23}, o un vehiculo construido a mano, no tiene ninguno. */
     public List<Document> getDocuments() {
         return documents == null ? List.of() : documents;
+    }
+
+    /** Nunca nula: una fila escrita antes de {@code V24} no tiene ninguno. */
+    public List<UnavailablePeriod> getUnavailable() {
+        return unavailable == null ? List.of() : unavailable;
+    }
+
+    /** Nunca nula: una fila escrita antes de {@code V24} no tiene ninguna hasta que se republica. */
+    public List<String> getCapabilities() {
+        return capabilities == null ? List.of() : capabilities;
+    }
+
+    /** Si su modelo tiene esa capacidad de mto-resources. */
+    public boolean hasCapability(String capability) {
+        return getCapabilities().contains(capability);
     }
 
     /**

@@ -4,7 +4,9 @@ import com.alejandro.mtomaintenance.application.dto.shift.VehicleParkingRequest;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.ValidationException;
+import com.alejandro.mtomaintenance.configuration.shifts.ShiftProperties;
 import com.alejandro.mtomaintenance.domain.model.CrewComposition;
+import com.alejandro.mtomaintenance.domain.model.ShiftAvailability;
 import com.alejandro.mtomaintenance.domain.model.ShiftQualifications;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FleetVehicle;
@@ -13,6 +15,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShiftVehicle;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.UnavailablePeriod;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPersonRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.FleetVehicleRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInstrumentRepository;
@@ -20,6 +23,8 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.repository.Mainte
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -51,8 +56,13 @@ import java.util.stream.Collectors;
  *       calibracion de un instrumento) ni un instrumento retirado; para iniciarlo y en curso, un conductor
  *       habilitado distinto por cada vehiculo autopropulsado que lo exige. Un turno sin dotacion, vehiculos
  *       ni instrumentos de mto-resources no tiene nada que mirar y sigue como antes.</li>
+ *   <li><b>Disponibilidad</b> ({@link ShiftAvailability}): siempre, nadie (el jefe, el supervisor, un
+ *       lineman) ni ningun vehiculo con un periodo no disponible de mto-resources que cubra la fecha del
+ *       turno.</li>
  *   <li><b>Doble asignacion</b>: ni un vehiculo ni el jefe ni un lineman ni un instrumento van en dos
  *       turnos abiertos de la misma fecha, con un bloqueo asesor por cada uno.</li>
+ *   <li><b>Descanso</b>: el jefe y los linemen descansan al menos {@code app.shifts.minimum-rest} entre
+ *       esta noche y la anterior o la siguiente en la que van, bajo los mismos bloqueos.</li>
  * </ul>
  */
 @Component
@@ -60,6 +70,8 @@ import java.util.stream.Collectors;
 class ShiftCrew {
 
     private static final Set<ShiftStatus> OPEN = EnumSet.of(ShiftStatus.PLANNED, ShiftStatus.IN_PROGRESS);
+    /** Las noches que cuentan para el descanso: las abiertas y las ya trabajadas. */
+    private static final Set<ShiftStatus> WORKED = EnumSet.of(ShiftStatus.PLANNED, ShiftStatus.IN_PROGRESS, ShiftStatus.CLOSED);
     private static final UUID NO_SHIFT = new UUID(0, 0);
 
     /** El agregado de su 404: {@code MSI-404}, un instrumento que aun no ha llegado de mto-resources. */
@@ -69,6 +81,7 @@ class ShiftCrew {
     private final FleetVehicleRepository vehicleRepository;
     private final MaintenanceShiftRepository shiftRepository;
     private final MaintenanceInstrumentRepository instrumentRepository;
+    private final ShiftProperties shiftProperties;
 
     /**
      * Al dar de alta: lo que la peticion dice, y lo que no dice de un equipo sincronizado (su jefe, su
@@ -168,7 +181,31 @@ class ShiftCrew {
         checkVehicles(shift, label);
         checkSeats(shift, label, leader != null, linemen);
         checkExpiries(shift, label, working);
+        checkAvailability(shift, label);
         requireNoDoubleBooking(shift, label);
+    }
+
+    /** Quien o que no esta disponible a la fecha del turno, segun mto-resources. */
+    private static void checkAvailability(MaintenanceShift shift, String label) {
+        List<CrewPerson> everyone = crew(shift);
+        if (shift.getSupervisor() != null && everyone.stream().noneMatch(person -> person.getId().equals(shift.getSupervisor().getId()))) {
+            everyone.add(shift.getSupervisor());
+        }
+        List<ShiftAvailability.Subject> people = everyone.stream()
+                .sorted(Comparator.comparing(CrewPerson::getCode))
+                .map(person -> subject(person.getFullName() + " (" + person.getCode() + ")", person.getUnavailable()))
+                .toList();
+        List<ShiftAvailability.Subject> vehicles = shift.vehiclesByCode().stream()
+                .map(shiftVehicle -> subject(shiftVehicle.getVehicle().getCode(), shiftVehicle.getVehicle().getUnavailable()))
+                .toList();
+        ShiftAvailability.unavailableViolation(label, shift.getShiftDate(), people, vehicles).ifPresent(reason -> {
+            throw new ShiftException(reason);
+        });
+    }
+
+    private static ShiftAvailability.Subject subject(String name, List<UnavailablePeriod> periods) {
+        return new ShiftAvailability.Subject(name, periods.stream()
+                .map(period -> new ShiftAvailability.Period(period.from(), period.to())).toList());
     }
 
     /**
@@ -292,6 +329,7 @@ class ShiftCrew {
                 throw new ShiftException("Someone of the crew of " + label + " is already in shift " + String.join(", ", taken)
                         + " on " + shift.getShiftDate() + ": a person works in one shift a night");
             }
+            requireRest(shift, personIds, self);
         }
         if (!instrumentIds.isEmpty()) {
             List<String> taken = shiftRepository.findOpenShiftCodesWithInstruments(instrumentIds, shift.getShiftDate(), OPEN, self);
@@ -300,6 +338,39 @@ class ShiftCrew {
                         + " on " + shift.getShiftDate() + ": an instrument works in one shift a night");
             }
         }
+    }
+
+    /**
+     * El descanso entre esta noche y la anterior o la siguiente de cada persona (el jefe o un lineman) que
+     * tambien va en ellas; los bloqueos de esas personas ya estan tomados. Sin horas no se mide.
+     */
+    private void requireRest(MaintenanceShift shift, Set<UUID> personIds, UUID self) {
+        Duration minimumRest = shiftProperties.minimumRest();
+        if (minimumRest.isZero()) {
+            return;
+        }
+        LocalDate date = shift.getShiftDate();
+        ShiftAvailability.Night tonight = night(shift);
+        for (MaintenanceShift other : shiftRepository.findShiftsOfCrewOn(personIds, List.of(date.minusDays(1), date.plusDays(1)), WORKED, self)) {
+            boolean before = other.getShiftDate().isBefore(date);
+            ShiftAvailability.Night earlier = before ? night(other) : tonight;
+            ShiftAvailability.Night later = before ? tonight : night(other);
+            for (CrewPerson person : crew(other)) {
+                if (personIds.contains(person.getId())) {
+                    ShiftAvailability.restViolation(person.getFullName() + " (" + person.getCode() + ")", minimumRest, earlier, later)
+                            .ifPresent(reason -> {
+                                throw new ShiftException(reason);
+                            });
+                }
+            }
+        }
+    }
+
+    /** Las horas de una noche: las reales si las hay, si no las previstas. */
+    private static ShiftAvailability.Night night(MaintenanceShift shift) {
+        Instant start = shift.getActualStart() != null ? shift.getActualStart() : shift.getPlannedStart();
+        Instant end = shift.getActualEnd() != null ? shift.getActualEnd() : shift.getPlannedEnd();
+        return new ShiftAvailability.Night(shift.getCode(), start, end);
     }
 
     /**

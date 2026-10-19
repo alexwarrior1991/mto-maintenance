@@ -9,6 +9,8 @@ import java.util.EnumSet;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -210,5 +212,36 @@ class DomainModelTest {
         assertTrue(ShiftQualifications.driverViolation("Shift SH-000077", NIGHT, List.of(lapsed), List.of(towerCar)).isPresent());
         assertEquals(Optional.empty(), ShiftQualifications.driverViolation("Shift SH-000077", NIGHT, List.of(), List.of(wagon, van)),
                 "Nothing to drive, nothing to check");
+    }
+
+    @Test
+    void anUnavailablePeriodCoversBothEndsAndAnOpenOneHasNoEndAndTheRestIsMeasuredWhenBothHoursAreKnown() {
+        ShiftAvailability.Period leave = new ShiftAvailability.Period(NIGHT.minusDays(2), NIGHT);
+        ShiftAvailability.Period repair = new ShiftAvailability.Period(NIGHT, null);
+
+        assertTrue(leave.covers(NIGHT), "The last day of an absence is still absent");
+        assertFalse(leave.covers(NIGHT.plusDays(1)));
+        assertFalse(repair.covers(NIGHT.minusDays(1)));
+        assertTrue(repair.covers(NIGHT.plusYears(1)), "A repair without end lasts until it is closed");
+
+        String reason = ShiftAvailability.unavailableViolation("Shift SH-000077", NIGHT,
+                List.of(new ShiftAvailability.Subject("Avi Levi (PER-000012)", List.of(leave)),
+                        new ShiftAvailability.Subject("Eli Katz (PER-000010)", List.of(new ShiftAvailability.Period(NIGHT.plusDays(1), null)))),
+                List.of(new ShiftAvailability.Subject("RR-07", List.of(repair)))).orElseThrow();
+        assertTrue(reason.contains("Avi Levi (PER-000012) (unavailable " + NIGHT.minusDays(2) + " to " + NIGHT + ")"), reason);
+        assertTrue(reason.contains("vehicle RR-07 (unavailable from " + NIGHT + ")"), reason);
+        assertFalse(reason.contains("Eli Katz"), "Who is away from the next day works tonight");
+        assertEquals(Optional.empty(), ShiftAvailability.unavailableViolation("Shift SH-000077", NIGHT, List.of(), List.of()));
+
+        Instant end = Instant.parse("2026-10-17T04:00:00Z");
+        ShiftAvailability.Night earlier = new ShiftAvailability.Night("SH-000076", null, end);
+        ShiftAvailability.Night tooSoon = new ShiftAvailability.Night("SH-000077", end.plus(Duration.ofMinutes(8 * 60 + 30)), null);
+        String rest = ShiftAvailability.restViolation("Avi Levi (PER-000012)", Duration.ofHours(12), earlier, tooSoon).orElseThrow();
+        assertTrue(rest.contains("would rest 8h30 between shift SH-000076") && rest.contains("at least 12h"), rest);
+        assertEquals(Optional.empty(), ShiftAvailability.restViolation("Avi", Duration.ofHours(12), earlier,
+                new ShiftAvailability.Night("SH-000077", end.plus(Duration.ofHours(12)), null)), "Exactly the minimum is enough");
+        assertEquals(Optional.empty(), ShiftAvailability.restViolation("Avi", Duration.ZERO, earlier, tooSoon), "PT0S switches it off");
+        assertEquals(Optional.empty(), ShiftAvailability.restViolation("Avi", Duration.ofHours(12),
+                new ShiftAvailability.Night("SH-000076", null, null), tooSoon), "Without the end of the night before it is not measured");
     }
 }

@@ -94,6 +94,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     private final EntityAuditService auditService;
     private final DomainEventPublisher events;
     private final ShiftCrew crew;
+    private final MaintenanceScope scope;
 
     @Override
     @Transactional
@@ -132,6 +133,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         // Los instrumentos solo los que diga: un equipo no tiene instrumentos que copiar.
         crew.replaceInstruments(shift, request.instrumentIds());
         validate(shift);
+        scope.requireShift(shift);
         crew.check(shift, false);
         MaintenanceShift saved = repository.save(shift);
         LOGGER.info("Shift created: code={}, date={}, tracks={}, possession={}", saved.getCode(), saved.getShiftDate(), saved.getTrackIds(), saved.getPossessionType());
@@ -148,6 +150,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     @Transactional
     public MaintenanceShiftResponse patch(UUID id, MergePatch<MaintenanceShiftUpdateRequest> patch) {
         MaintenanceShift shift = lookups.shift(id);
+        scope.requireShift(shift);
         MaintenanceShiftUpdateRequest request = patch.values();
         StaleVersionException.check("Shift " + shift.getCode(), shift.getVersion(), request.version());
         PatchRules.requireClearable(patch, CLEARABLE);
@@ -156,6 +159,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         }
         Set<Long> tracksBefore = Set.copyOf(shift.getTrackIds());
         PossessionType possessionBefore = shift.getPossessionType();
+        Set<UUID> equipmentBefore = equipmentOf(shift);
         if (request.shiftDate() != null) {
             shift.setShiftDate(request.shiftDate());
         }
@@ -216,8 +220,11 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
             crew.replaceInstruments(shift, request.instrumentIds());
         }
         validate(shift);
+        // Tambien adonde se lleva: un turno no sale del ambito propio cambiandole el EP o el equipo.
+        scope.requireShift(shift);
         crew.check(shift, shift.isInProgress());
-        if (!tracksBefore.equals(shift.getTrackIds()) || possessionBefore != shift.getPossessionType()) {
+        if (!tracksBefore.equals(shift.getTrackIds()) || possessionBefore != shift.getPossessionType()
+                || !equipmentBefore.equals(equipmentOf(shift))) {
             requireAssignedTasksStillFit(shift);
         }
         return mapper.toResponse(repository.save(shift));
@@ -249,6 +256,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     @Transactional
     public MaintenanceShiftResponse start(UUID id, StartShiftRequest request) {
         MaintenanceShift shift = lookups.shift(id);
+        scope.requireShift(shift);
         if (!ShiftStateMachine.canStart(shift.getStatus())) {
             throw new InvalidTransitionException("Shift " + shift.getCode() + " is " + shift.getStatus() + " and cannot be started");
         }
@@ -270,6 +278,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     @Transactional
     public MaintenanceShiftResponse close(UUID id, CloseShiftRequest request) {
         MaintenanceShift shift = lookups.shift(id);
+        scope.requireShift(shift);
         if (!ShiftStateMachine.canClose(shift.getStatus())) {
             throw new InvalidTransitionException("Shift " + shift.getCode() + " is " + shift.getStatus() + " and cannot be closed");
         }
@@ -308,6 +317,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     @Transactional
     public MaintenanceShiftResponse cancel(UUID id, CancelShiftRequest request) {
         MaintenanceShift shift = lookups.shift(id);
+        scope.requireShift(shift);
         if (!ShiftStateMachine.canCancel(shift.getStatus())) {
             throw new InvalidTransitionException("Shift " + shift.getCode() + " is " + shift.getStatus() + " and cannot be cancelled");
         }
@@ -487,12 +497,21 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
      * cambiar el turno con tareas ya asignadas. Sin esto, quitarle una via o pasarlo a posesion
      * parcial dejaba tareas que no se podian completar en el, y el equipo se enteraba de noche.
      */
+    /** Los vehiculos y los instrumentos del turno: si cambian, el equipo que exige una tarea asignada puede faltar. */
+    private static Set<UUID> equipmentOf(MaintenanceShift shift) {
+        Set<UUID> ids = new java.util.HashSet<>();
+        shift.getVehicles().forEach(vehicle -> ids.add(vehicle.getVehicle().getId()));
+        shift.getInstruments().forEach(instrument -> ids.add(instrument.getId()));
+        return ids;
+    }
+
     private void requireAssignedTasksStillFit(MaintenanceShift shift) {
         for (MaintenanceTask task : taskRepository.findByShiftIdAndStatusIn(shift.getId(),
                 EnumSet.of(MaintenanceTaskStatus.PENDING, MaintenanceTaskStatus.IN_PROGRESS))) {
             try {
                 ShiftRules.requireSameTrack(shift, task);
                 ShiftRules.requireCompatiblePossession(shift, task);
+                ShiftRules.requireEquipment(shift, task);
             } catch (ShiftException doesNotFit) {
                 throw new ShiftException("Task " + task.getSequence() + " of order " + task.getOrder().getCode()
                         + " is assigned to shift " + shift.getCode() + " and would no longer fit: " + doesNotFit.getMessage()

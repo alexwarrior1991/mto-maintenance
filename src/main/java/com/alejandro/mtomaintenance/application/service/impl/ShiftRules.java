@@ -6,6 +6,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.PossessionType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TaskEquipment;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 
 import java.util.List;
@@ -17,6 +18,9 @@ import java.util.List;
  * varias vias en la misma noche: lo que se exige es que la via del perfil sea una de ellas.
  */
 final class ShiftRules {
+
+    /** La clase de instrumento de mto-resources que pone a tierra: una pertiga de tierra. */
+    static final String EARTHING_POLE = "EARTHING_POLE";
 
     private ShiftRules() {
     }
@@ -79,6 +83,39 @@ final class ShiftRules {
             throw new ShiftException("Shift " + shift.getCode() + " has partial possession; diverted tracks are only "
                     + "worked with full possession");
         }
+    }
+
+    /**
+     * El equipo que exigen los tipos de la tarea ({@link TaskEquipment}, {@code V24}) lo lleva el turno: la
+     * plataforma aislada, un vehiculo con esa capacidad; la puesta a tierra, un vehiculo con ella o una
+     * pertiga de tierra activa entre los instrumentos. Las capacidades llegan de mto-resources con el modelo
+     * del vehiculo.
+     */
+    static void requireEquipment(MaintenanceShift shift, MaintenanceTask task) {
+        List<String> missing = task.getTaskTypes().stream()
+                .flatMap(type -> type.getRequiredEquipment().stream())
+                .distinct()
+                .sorted()
+                .filter(equipment -> !carries(shift, equipment))
+                .map(equipment -> switch (equipment) {
+                    case INSULATED_PLATFORM -> "an insulated platform (a vehicle whose model has INSULATED_PLATFORM)";
+                    case EARTHING -> "earthing (a vehicle whose model has EARTHING, or an EARTHING_POLE among its instruments)";
+                })
+                .toList();
+        if (!missing.isEmpty()) {
+            throw new ShiftException("Task " + task.getSequence() + " of order " + task.getOrder().getCode() + " needs "
+                    + String.join(" and ", missing) + ", and shift " + shift.getCode() + " does not carry it");
+        }
+    }
+
+    /** Si el turno lleva ese equipo. */
+    static boolean carries(MaintenanceShift shift, TaskEquipment equipment) {
+        boolean vehicle = shift.getVehicles().stream().anyMatch(shiftVehicle -> shiftVehicle.getVehicle().hasCapability(equipment.name()));
+        if (vehicle || equipment != TaskEquipment.EARTHING) {
+            return vehicle;
+        }
+        return shift.getInstruments().stream()
+                .anyMatch(instrument -> EARTHING_POLE.equals(instrument.getKind()) && Boolean.TRUE.equals(instrument.getActive()));
     }
 
     static void requireInProgress(MaintenanceShift shift) {

@@ -39,6 +39,19 @@ public interface MaintenanceShiftRepository extends JpaRepository<MaintenanceShi
     List<String> findOpenShiftCodesWithCrew(@Param("personIds") Collection<UUID> personIds, @Param("shiftDate") LocalDate shiftDate,
                                             @Param("statuses") Collection<ShiftStatus> statuses, @Param("shiftId") UUID shiftId);
 
+    /**
+     * Los turnos de esas fechas (la noche anterior y la siguiente) en los que va alguna de esas personas como
+     * jefe o como lineman, para medir el descanso entre noches ({@code ShiftAvailability.restViolation}).
+     * Un turno cancelado no cuenta; uno cerrado si: esa noche ya se trabajo.
+     */
+    @Query("""
+            select distinct s from MaintenanceShift s left join s.teamLeader leader left join s.linemen lineman
+             where (leader.id in :personIds or lineman.id in :personIds)
+               and s.shiftDate in :dates and s.status in :statuses and s.id <> :shiftId
+            """)
+    List<MaintenanceShift> findShiftsOfCrewOn(@Param("personIds") Collection<UUID> personIds, @Param("dates") Collection<LocalDate> dates,
+                                              @Param("statuses") Collection<ShiftStatus> statuses, @Param("shiftId") UUID shiftId);
+
     /** Lo mismo con los instrumentos: una pertiga o un detector van en un solo turno por noche. */
     @Query("""
             select distinct s.code from MaintenanceShift s join s.instruments instrument

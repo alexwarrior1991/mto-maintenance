@@ -20,8 +20,9 @@ import java.util.Objects;
  * {@code crew_person}, con la marca de agua dentro del upsert. Corre dentro de la transaccion del inbox.
  *
  * <p>Sus cualificaciones ({@code qualifications}, {@code V23}) van en la misma sentencia, reducidas a
- * {@code code}, {@code kind}, {@code drivingLicence} y {@code expiresOn}; un evento sin la clave (un
- * mto-resources anterior) deja las que habia.</p>
+ * {@code code}, {@code kind}, {@code drivingLicence} y {@code expiresOn}, y sus periodos no disponibles
+ * ({@code unavailable}, {@code V24}) reducidos a {@code from} y {@code to}; un evento sin la clave (un
+ * mto-resources anterior) deja lo que habia.</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -53,6 +54,7 @@ class ResourcesPersonHandler implements IncomingEventHandler {
                 Objects.requireNonNull(values.string("category"), "person.category"),
                 values.bool("active", true),
                 ResourcesPayloads.jsonList(event.values(), "qualifications", ResourcesPersonHandler::qualification),
+                ResourcesPayloads.unavailable(event.values(), "person"),
                 context.sequenceNumber());
         LOGGER.info("Person {} {} from mto-resources: {}", values.string("code"), event.eventName(),
                 applied == 0 ? "older than what is stored, ignored" : "applied");

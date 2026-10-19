@@ -59,11 +59,13 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
     private final MaintenanceCodeGenerator codeGenerator;
     private final StatusHistoryService history;
     private final EntityAuditService auditService;
+    private final MaintenanceScope scope;
 
     @Override
     @Transactional
     public CatenaryDefectResponse create(CatenaryDefectRequest request) {
         CatenaryAsset asset = lookups.enabledAsset(request.assetId());
+        scope.requireAsset(asset);
         MaintenanceOrder order = request.orderId() == null ? null : lookups.order(request.orderId());
         if (order != null && order.isTerminal()) {
             throw new InvalidTransitionException("Order " + order.getCode() + " is " + order.getStatus() + " and cannot take new defects");
@@ -109,6 +111,7 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
     @Transactional
     public CatenaryDefectResponse patch(UUID id, MergePatch<CatenaryDefectUpdateRequest> patch) {
         CatenaryDefect defect = defect(id);
+        scope.requireDefect(defect);
         CatenaryDefectUpdateRequest request = patch.values();
         StaleVersionException.check("Defect " + defect.getCode(), defect.getVersion(), request.version());
         PatchRules.requireClearable(patch, CLEARABLE);
@@ -157,6 +160,7 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
     @Transactional
     public CatenaryDefectResponse resolve(UUID id, ResolveDefectRequest request) {
         CatenaryDefect defect = defect(id);
+        scope.requireDefect(defect);
         if (!DefectStateMachine.canResolve(defect.getStatus())) {
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is " + defect.getStatus() + " and cannot be resolved");
         }
@@ -193,6 +197,7 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
     @Transactional
     public CatenaryDefectResponse close(UUID id, DefectCommentRequest request) {
         CatenaryDefect defect = defect(id);
+        scope.requireDefect(defect);
         if (!DefectStateMachine.canClose(defect.getStatus())) {
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is " + defect.getStatus() + "; only resolved defects are closed");
         }
@@ -204,6 +209,7 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
     @Transactional
     public CatenaryDefectResponse discard(UUID id, DefectCommentRequest request) {
         CatenaryDefect defect = defect(id);
+        scope.requireDefect(defect);
         if (!DefectStateMachine.canDiscard(defect.getStatus())) {
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is " + defect.getStatus() + "; only open defects are discarded");
         }
@@ -216,6 +222,7 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
     @Transactional
     public CatenaryDefectResponse linkOrder(UUID id, UUID orderId) {
         CatenaryDefect defect = defect(id);
+        scope.requireDefect(defect);
         MaintenanceOrder order = lookups.order(orderId);
         if (!DefectStateMachine.canLinkOrder(defect.getStatus())) {
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is " + defect.getStatus() + " and cannot be linked to an order");

@@ -40,6 +40,7 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
     private final MaintenanceLookups lookups;
     private final MaterialLineFactory lineFactory;
     private final MaterialStockSynchronizer stock;
+    private final MaintenanceScope scope;
 
     @Override
     @Transactional(readOnly = true)
@@ -52,6 +53,7 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
     @Transactional
     public MaterialUsageResponse register(UUID orderId, MaterialUsageRequest request) {
         MaintenanceOrder order = lookups.order(orderId);
+        scope.requireOrder(order);
         if (order.isTerminal()) {
             throw new MaterialUsageException("Order " + order.getCode() + " is " + order.getStatus() + " and does not accept materials");
         }
@@ -168,8 +170,9 @@ class MaintenanceMaterialUsageServiceImpl implements MaintenanceMaterialUsageSer
         return requested != null && requested.compareTo(current) != 0;
     }
 
+    /** La linea para escribir en ella: la orden tiene que estar en el ambito de quien escribe. */
     private MaintenanceMaterialUsage line(UUID orderId, UUID usageId) {
-        lookups.order(orderId);
+        scope.requireOrder(lookups.order(orderId));
         return repository.findByIdAndOrderId(usageId, orderId)
                 .orElseThrow(() -> new NotFoundException("Material usage", usageId));
     }

@@ -7,6 +7,7 @@ import com.alejandro.mtomaintenance.application.exception.InspectionException;
 import com.alejandro.mtomaintenance.application.exception.InvalidTransitionException;
 import com.alejandro.mtomaintenance.application.exception.MaterialUsageException;
 import com.alejandro.mtomaintenance.application.exception.NotFoundException;
+import com.alejandro.mtomaintenance.application.exception.ScopeException;
 import com.alejandro.mtomaintenance.application.exception.ShiftException;
 import com.alejandro.mtomaintenance.application.exception.StaleVersionException;
 import com.alejandro.mtomaintenance.application.exception.StockRejectedException;
@@ -61,6 +62,7 @@ final class BusinessErrorCodeResolver {
             case MaterialUsageException ignored -> "MAT-001";
             case InspectionException ignored -> "INS-001";
             case ShiftException ignored -> "SHF-001";
+            case ScopeException ignored -> "SCP-403";
             case SynchronizedTeamException ignored -> "TEA-001";
             case StaleVersionException ignored -> "CON-001";
             case StockUnavailableException ignored -> "STK-503";

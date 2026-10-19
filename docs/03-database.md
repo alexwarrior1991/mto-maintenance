@@ -351,6 +351,23 @@ statement as the rest of the row and behind the same watermark**. An event witho
 The JPA entities map the two `jsonb` columns as typed lists (`@JdbcTypeCode(SqlTypes.JSON)`:
 `CrewPerson.Qualification`, `FleetVehicle.Document`), read-only like the rest of the snapshot.
 
+
+## Availability, scope and task equipment (`V24`)
+
+- `crew_person.unavailable jsonb NOT NULL DEFAULT '[]'` and `fleet_vehicle.unavailable jsonb NOT NULL
+  DEFAULT '[]'`: the periods of `person.*.unavailable` and `vehicle.*.unavailable` (`[{from, to}]`, ISO
+  dates, `to` null when the end is unknown), written in the same statement and behind the same watermark
+  as the rest of the row; without the key, the stored ones stay.
+- `fleet_vehicle.capabilities jsonb NOT NULL DEFAULT '[]'`: the capabilities of the vehicle's model
+  (`vehicle.*.type.capabilities`, names of `mto-resources` such as `INSULATED_PLATFORM` or `EARTHING`),
+  read for the equipment a task type requires. A row written before `V24` has none until the next event
+  (republish `mto-resources`).
+- `maintenance_team.chief_supervisor_person_id uuid` (no FK, like the leader and the supervisor): the
+  chief supervisor of a synchronized team, for the scope by execution package.
+- `maintenance_task_type.version bigint NOT NULL DEFAULT 0` (the optimistic lock of its `PATCH`) and
+  `maintenance_task_type_equipment (task_type_id, equipment)`, PK both, `CHECK equipment IN
+  ('INSULATED_PLATFORM', 'EARTHING')`, cascade from the type. Nothing is seeded. None of them is audited:
+  the snapshots are written with native SQL and the task types are a catalogue.
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`

@@ -3,7 +3,10 @@ package com.alejandro.mtomaintenance.application.dto.tasktype;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.FunctionalGroup;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TaskUnit;
 
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TaskEquipment;
+
 import java.math.BigDecimal;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -13,8 +16,12 @@ import java.util.UUID;
  * <pre>{@code
  * {"id": "…", "code": "RG-01", "description": "Insulators (cantilever and anchorage zones)",
  *  "functionalGroup": "STRUCTURAL_SUPPORTS", "standardMinutesPerUnit": 5.00, "unit": "UNIT", "fixedMinutes": 0.00,
- *  "requiresFullPossession": false, "diagnostic": false, "active": true, "orderIndex": 1}
+ *  "requiresFullPossession": false, "diagnostic": false, "active": true, "orderIndex": 1,
+ *  "requiredEquipment": ["EARTHING"], "version": 0}
  * }</pre>
+ *
+ * <p>{@code requiredEquipment} ({@code V24}) es lo que tiene que llevar el turno para asignar, iniciar o
+ * completar una tarea de este tipo; {@code version}, el bloqueo optimista de su {@code PATCH}.</p>
  */
 public record MaintenanceTaskTypeResponse(
         UUID id,
@@ -27,6 +34,8 @@ public record MaintenanceTaskTypeResponse(
         Boolean requiresFullPossession,
         Boolean diagnostic,
         Boolean active,
-        Integer orderIndex
+        Integer orderIndex,
+        Set<TaskEquipment> requiredEquipment,
+        Long version
 ) {
 }

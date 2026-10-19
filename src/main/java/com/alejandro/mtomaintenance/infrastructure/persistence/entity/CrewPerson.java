@@ -25,7 +25,8 @@ import java.util.UUID;
  * escrituras). El id es el de mto-resources.
  *
  * <p>Sus cualificaciones ({@code V23}) son la lista de {@code person.*.qualifications} tal cual llega,
- * tambien las caducadas: quien decide por la fecha es el turno ({@code ShiftQualifications}).</p>
+ * tambien las caducadas: quien decide por la fecha es el turno ({@code ShiftQualifications}). Lo mismo
+ * sus periodos no disponibles ({@code V24}, {@code ShiftAvailability}).</p>
  */
 @Entity
 @Immutable
@@ -65,6 +66,14 @@ public class CrewPerson {
     @Column(name = "qualifications", nullable = false, columnDefinition = "jsonb")
     private List<Qualification> qualifications;
 
+    /**
+     * Cuando no esta disponible ({@code V24}, {@code person.*.unavailable}): vacaciones, bajas y demas
+     * ausencias de mto-resources, sin su clase; vacia si no tiene ninguna o aun no llego su evento.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "unavailable", nullable = false, columnDefinition = "jsonb")
+    private List<UnavailablePeriod> unavailable;
+
     @Column(name = "source_sequence_number")
     private Long sourceSequenceNumber;
 
@@ -88,6 +97,11 @@ public class CrewPerson {
     /** Nunca nula: una fila escrita antes de {@code V23}, o una persona construida a mano, no tiene ninguna. */
     public List<Qualification> getQualifications() {
         return qualifications == null ? List.of() : qualifications;
+    }
+
+    /** Nunca nula: una fila escrita antes de {@code V24}, o una persona construida a mano, no tiene ninguno. */
+    public List<UnavailablePeriod> getUnavailable() {
+        return unavailable == null ? List.of() : unavailable;
     }
 
     /**

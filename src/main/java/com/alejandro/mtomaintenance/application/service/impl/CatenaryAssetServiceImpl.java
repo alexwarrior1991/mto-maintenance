@@ -50,6 +50,7 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     private final MaintenanceLookups lookups;
     private final EntityAuditService auditService;
     private final DomainEventPublisher events;
+    private final MaintenanceScope scope;
 
     @Override
     @Transactional
@@ -73,6 +74,7 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
                 .trackKind(request.trackKind())
                 .preventiveIntervalDays(request.preventiveIntervalDays())
                 .build();
+        scope.requireAsset(asset);
 
         CatenaryAsset saved = repository.save(asset);
         LOGGER.info("Track section created: code={}, trackId={}, kp={}..{}", saved.getCode(), saved.getTrackId(), saved.getStartKp(), saved.getEndKp());
@@ -89,6 +91,7 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     @Transactional
     public CatenaryAssetResponse patch(UUID id, MergePatch<CatenaryAssetUpdateRequest> patch) {
         CatenaryAsset asset = lookups.asset(id);
+        scope.requireAsset(asset);
         CatenaryAssetUpdateRequest request = patch.values();
         StaleVersionException.check("Catenary asset " + asset.getCode(), asset.getVersion(), request.version());
         PatchRules.requireClearable(patch, CLEARABLE);
@@ -142,6 +145,8 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
                 domain(() -> new KilometricRange(asset.getStartKp(), asset.getEndKp()));
             }
         }
+        // Tambien el EP al que se lleva: un tramo no sale del ambito propio cambiandole el EP.
+        scope.requireAsset(asset);
 
         return mapper.toResponse(repository.save(asset));
     }
@@ -176,6 +181,7 @@ class CatenaryAssetServiceImpl implements CatenaryAssetService {
     @Transactional
     public void disable(UUID id) {
         CatenaryAsset asset = lookups.asset(id);
+        scope.requireAsset(asset);
         // Tambien si el origen ya lo tiene desactivado: la decision de aqui sobrevive a que lo reactive.
         if (asset.getDisabledLocally()) {
             return;

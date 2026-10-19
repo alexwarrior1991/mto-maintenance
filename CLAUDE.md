@@ -24,7 +24,8 @@ the fleet belong to `mto-resources` and arrive here as events. **Nothing of them
 here**: `catenary_asset` keeps only the snapshot a maintenance job needs (code, kp, track, station,
 sectioning), `crew_person`/`fleet_vehicle`/`maintenance_instrument`/a synchronized `maintenance_team`
 only what a shift needs (with the qualifications, documents and calibration dates its expiry rules
-read, `V23`), and every material line stores the `mto-stock` ids.
+read, `V23`, and when each person and vehicle is not available and the capabilities of each model,
+`V24`), and every material line stores the `mto-stock` ids.
 
 ⚠️ The local infrastructure (PostgreSQL, RabbitMQ, Keycloak, the trace collector, and `mto-stock`
 itself) is brought up by `mto-platform`. `compose.yaml` here holds **only the application**.
@@ -63,10 +64,12 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
   `ShiftStateMachine`, `KilometricRange`, `Quantity`, `WorkloadEstimate`, `DomainValidations`,
   `CrewComposition` (the copy of `mto-resources`' crew rule; returns the reason, does not throw),
   `ShiftQualifications` (nothing expired at the shift's date and a different qualified driver per
-  self-propelled vehicle, a bipartite matching; returns the reason too).
+  self-propelled vehicle, a bipartite matching; returns the reason too), `ShiftAvailability` (nobody and
+  no vehicle unavailable at the shift's date, and the minimum rest between two nights; the reason too).
   An `IllegalArgumentException` from here is turned into a 400 by `DomainGuard` in the services.
 - `application` — `dto` (one package per resource), `service` + `service.impl` (package-private
   impls behind public interfaces; `MaintenanceLookups`, `ShiftRules`, `ShiftCrew`, `ChecklistRules`,
+  `MaintenanceScope` (the execution packages whoever writes may write in, 403 `SCP-403`),
   `MaterialStockSynchronizer` (with `StockLine`, the detached copy a line's stock conversation runs
   on) and `MaterialLineFactory` are shared helpers; `BudgetedOperations` runs the background
   operations; the `IncomingEvent*` pipeline, `IdempotentIncomingEventProcessor` →
@@ -133,7 +136,12 @@ takes too), which is what holds between instances; with
 minutes that feed `WorkloadEstimator`; by default groups 1, 2 and 4 on a profile, `RG-03` and
 `RP-02` on an insulator plus `RG-04` and `RP-03` when it has turnouts (`switches`), `RP-07` on a
 disconnector plus `RP-06` when its `driveType` (`V16`) is `MOTOR` and `RG-06` when its
-`disconnectorFunction` (`V17`) is `SurgeA`, a surge arrester).
+`disconnectorFunction` (`V17`) is `SurgeA`, a surge arrester). The only thing of a task type that changes
+through the API is the equipment it requires (`requiredEquipment`, `V24`: `INSULATED_PLATFORM`,
+`EARTHING`; `PATCH /task-types/{code}` with `maintenance-supervise`, nothing seeded): such a task is
+assigned, started and completed only in a shift that carries it (a vehicle with that capability, or an
+active `EARTHING_POLE` for earthing; `ShiftRules.requireEquipment`, 409 `SHF-001`), and a shift change
+that takes it away from an assigned open task is refused.
 A `MaintenanceTeam` is local (edited here, `A`/`B` seeded) or synchronized from `mto-resources`
 (`V19`: leader, supervisor, linemen, packages and default vehicle; no base), which adopts the local
 team of its code on its first event; from then on it is read-only here (`PUT` is 409 `TEA-001`).
@@ -147,14 +155,23 @@ moves by itself nor is portable with a towing one, the crew within the seats (on
 self-propelled vehicle declares them), no vehicle, leader, lineman or instrument in two open shifts
 of one date (advisory locks), and nothing expired at the `shiftDate` (`ShiftQualifications`, `V23`: a
 qualification of the leader, the supervisor or a lineman, a document of a vehicle, the calibration of
-an instrument, or an instrument retired; `expiresOn < shiftDate`); to start and while `IN_PROGRESS`, a
+an instrument, or an instrument retired; `expiresOn < shiftDate`), nobody and no vehicle unavailable at
+the `shiftDate` (`ShiftAvailability`, `V24`: the absences of a person and the repairs that immobilise a
+vehicle, published by `mto-resources` as `unavailable [{from, to}]` without their reason), at least
+`app.shifts.minimum-rest` (12 h) between two nights of the leader or a lineman (the shift before and
+after, actual hours else planned; under the same person locks); to start and while `IN_PROGRESS`, a
 leader and 2 to 6 linemen (`CrewComposition`), only on a shift with a crew (`hasCrew()`), and a
 different person of the crew holding the qualification its model requires for each self-propelled
 vehicle (a matching, not a loop). A shift also carries its instruments of `mto-resources`
 (`instrumentIds`, a set; unknown is 404 `MSI-404`). Closing says where each vehicle was
 left (`parkings`: a site, a track and kp, or a text; a rail-only one never by text alone), and
 starting, closing and cancelling publish `shift.started`/`closed`/`cancelled`, which `mto-resources`
-reads to move the vehicles. A task can
+reads to move the vehicles. Writing may be limited by execution package (`MaintenanceScope`, `V24`):
+the person of the token in `crew_person` (by username) writes only in the packages of the synchronized
+teams they lead, supervise, chief-supervise or ride in; no record, the categories `CHIEF_MAINTENANCE`/
+`CHIEF_CONSTRUCTION`/`PROJECT_MANAGER` or `app.scope.enabled=false` has no limit, and reading never
+has. Every write of orders (and their tasks and material lines), shifts, inspections, defects and
+assets checks it first: 403 `SCP-403`. A task can
 only be completed with the order and a shift covering its track both `IN_PROGRESS`, a task type that requires
 full possession cannot be done in a `PARTIAL` shift, and a `DIVERTED` section only accepts `FULL`
 shifts. Completing a task can record `CatenaryDefect`s inline (`RESOLVED` in the shift if the work
@@ -186,7 +203,8 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
   `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle`,
   `maintenance_instrument` and the synchronized team (`upsertFromResources`, watermark = the
   `sequenceNumber` of the `mto-resources` outbox, not its `version`; the `jsonb` qualifications and
-  documents of `V23` go in the same statement, and an event without the key keeps the stored ones),
+  documents of `V23` and the `unavailable` periods and capabilities of `V24` go in the same statement,
+  and an event without the key keeps the stored ones),
   and for `background_operation` (`V21`), whose cap and turn per scope are decided by row count inside
   the writing statement.
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
@@ -214,8 +232,9 @@ Consumer of `mto-resources` too (`mto.resources.exchange`, own queue
 `app.rabbitmq.resources.*`) through the same inbox (`source_service = mto-resources`):
 `ResourcesEventConsumer` checks the signature, the `origin` and that `data` has `entityName` and
 `eventName`, and `DispatchingIncomingEventHandler` routes by source and entity to the
-`IncomingEventHandler`s `person` (with its `qualifications`), `vehicle` (with its `documents` and
-`type.requiredDriverQualification`), `team` (only `MAINTENANCE` teams; the people a team carries are
+`IncomingEventHandler`s `person` (with its `qualifications` and `unavailable`), `vehicle` (with its
+`documents`, `type.requiredDriverQualification`, `type.capabilities` and `unavailable`), `team` (with its
+`chiefSupervisor`; only `MAINTENANCE` teams; the people a team carries are
 inserted with `ON CONFLICT DO NOTHING` until their own event arrives) and `instrument` (`V23`). Its
 expiry warnings (`qualification.*`, `vehicle-document.*`, `calibration.*`) are not bound here: the
 shift reads the dates from the snapshot. This queue must
@@ -358,10 +377,12 @@ A background operation keeps its request's source, URI and correlation in its re
   transaction and the work runs on a virtual thread). Add a method to the
   matching class instead of a new class; the events of each hook are methods of `BusinessLayerTest`
   (`RecordingEventPublisher`) and the envelope, the actor and the correlation of `MessagingLayerTest`.
-  The crew rules (the expiries and the drivers too; the matching itself is `DomainModelTest`), the
+  The crew rules (the expiries, the drivers, the availability and the rest too; the matching itself is
+  `DomainModelTest`), the scope by execution package (`ScopeMocks`), the equipment of a task type, the
   parallel stock transitions and the deferred retry are methods of `BusinessLayerTest`; the resources
   handlers against PostgreSQL (adoption, the watermark, a team of construction, the `jsonb`
-  qualifications and documents, the instruments) of `MasterDataAssetSyncDataJpaTest`; the resources
+  qualifications and documents, the instruments, the `unavailable` periods and capabilities, the
+  packages of a person's teams) of `MasterDataAssetSyncDataJpaTest`; the resources
   topology of `MessagingLayerTest`; the shift report's appendices in the real .xlsx and .pdf of
   `ReportExportLayerTest`;
 the 202 of `Prefer: respond-async` of `MaintenanceOrderControllerMockMvcTest`.
