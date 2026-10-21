@@ -8,6 +8,7 @@ import com.alejandro.mtomaintenance.application.service.StockSyncRetryService;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.StockSyncStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository.LineRef;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.SessionAdvisoryLock;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +25,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * Sin transaccion a proposito: cada linea se sincroniza con {@link MaintenanceMaterialUsageService#sync},
  * en la suya, y lo que pase con una (stock dice que no, alguien la quito o la cambio mientras tanto) no
  * deshace lo de las demas.
+ *
+ * <p>La vuelta periodica es una sola en todo el despliegue: corre bajo un cerrojo de aviso de sesion
+ * ({@link SessionAdvisoryLock}), y la instancia que no lo consigue no hace nada esa vez. Sin el, todas
+ * las replicas reintentaban las mismas lineas a la vez: la clave de idempotencia y la version de la
+ * linea impedian el doble efecto, pero stock recibia la misma llamada una vez por replica y las que
+ * perdian dejaban un aviso de version vieja. El reintento diferido de una orden ({@link #retryLines})
+ * no lo toma: son las lineas que acaba de dejar en el aire esta misma instancia.</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -31,18 +39,31 @@ class StockSyncRetryServiceImpl implements StockSyncRetryService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StockSyncRetryServiceImpl.class);
 
+    /** Clave del cerrojo de aviso, propia de esta vuelta; cualquier otro trabajo usa otra. */
+    static final long LOCK_KEY = "mto-maintenance:stock-sync-retry".hashCode();
+
     private final MaintenanceMaterialUsageRepository repository;
     private final MaintenanceMaterialUsageService materialUsageService;
+    private final SessionAdvisoryLock lock;
 
     /**
      * La ultima linea intentada: la vuelta siguiente empieza despues de ella. Si una linea falla siempre
      * (un 5xx de stock con ese material), la vuelta se para en ella, y sin turnos las de detras no se
-     * intentarian nunca.
+     * intentarian nunca. Es de cada instancia: la que gana el cerrojo sigue desde la suya, y como la
+     * vuelta las recorre todas en circulo, ninguna se queda atras por cambiar de instancia.
      */
     private final AtomicReference<UUID> lastAttempted = new AtomicReference<>();
 
     @Override
     public int retryFailedLines() {
+        int[] synchronizedLines = {0};
+        if (!lock.runIfFree(LOCK_KEY, () -> synchronizedLines[0] = retryFailedLinesHoldingTheLock())) {
+            LOGGER.debug("Stock retry skipped: another instance is running it");
+        }
+        return synchronizedLines[0];
+    }
+
+    private int retryFailedLinesHoldingTheLock() {
         List<LineRef> failed = new ArrayList<>(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED));
         if (failed.isEmpty()) {
             return 0;

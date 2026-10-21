@@ -296,7 +296,10 @@ must also come out the same: no timestamp, and the same notes whichever path rea
 output. `StockSyncRetryService` retries every `FAILED` line every 5 minutes (`StockSyncRetryConfiguration`,
 `app.stock.sync-retry.*`, off with stock off and in tests), stopping at the first one stock does not
 answer and resuming after it: that settles a request in doubt while `mto-stock` still remembers its
-key (30 days). Completing an order rejected for such lines (`UnsyncedMaterialsException`)
+key (30 days). With several instances one round runs at a time: it holds a PostgreSQL advisory lock
+of **session** (`SessionAdvisoryLock`, one connection set aside outside any transaction, because each
+line syncs in its own transaction and an `xact` lock would not outlive the first), and an instance
+that does not get it skips the round. Completing an order rejected for such lines (`UnsyncedMaterialsException`)
 and an explicit `sync` keep what stock already did (`noRollbackFor`). `NoOpStockClient` replaces it
 with `app.stock.enabled=false`.
 
@@ -379,7 +382,7 @@ A background operation keeps its request's source, URI and correlation in its re
   (`RecordingEventPublisher`) and the envelope, the actor and the correlation of `MessagingLayerTest`.
   The crew rules (the expiries, the drivers, the availability and the rest too; the matching itself is
   `DomainModelTest`), the scope by execution package (`ScopeMocks`), the equipment of a task type, the
-  parallel stock transitions and the deferred retry are methods of `BusinessLayerTest`; the resources
+  parallel stock transitions, the deferred retry and the round skipped while another instance holds its lock are methods of `BusinessLayerTest` (the lock itself, against PostgreSQL, of `PersistenceLayerTest`); the resources
   handlers against PostgreSQL (adoption, the watermark, a team of construction, the `jsonb`
   qualifications and documents, the instruments, the `unavailable` periods and capabilities, the
   packages of a person's teams) of `MasterDataAssetSyncDataJpaTest`; the resources
