@@ -35,7 +35,23 @@
   vehicles and the instruments of `mto-resources` in the snapshots; nothing expired at the shift's
   date gets into a shift (`ShiftQualifications`, 409 `SHF-001`), each self-propelled vehicle starts
   with a different qualified driver, and the instruments of a shift (`instrumentIds`, `MSI-404`) in
-  its events and in the `Instruments` appendix of its report.
+  its events and in the `Instruments` appendix of its report. An instrument, like a person or a
+  vehicle, works in one open shift a night.
+- Availability, scope and task equipment (`V24`):
+  - **Availability and rest**: the `unavailable` periods that `mto-resources` publishes for every person
+    and vehicle (absences, repairs that immobilise) are kept in `crew_person` and `fleet_vehicle`, and
+    nobody and nothing unavailable at the `shiftDate` gets into a shift (`ShiftAvailability`). Between
+    two nights of the leader or a lineman there are at least `app.shifts.minimum-rest` (12 h). Both are
+    409 `SHF-001`.
+  - **Scope by execution package**: whoever writes orders, tasks, material lines, shifts, inspections,
+    defects or assets writes only in the packages of the synchronized teams they lead, supervise,
+    chief-supervise or ride in (`MaintenanceScope`, 403 `SCP-403`; `chief_supervisor_person_id` on the
+    team). Reading is never limited; the chiefs of maintenance and construction, the project manager, a
+    user without a record and `app.scope.enabled=false` have no limit.
+  - **Equipment of a task type**: `PATCH /task-types/{code}` (`maintenance-supervise`) says whether it
+    needs an `INSULATED_PLATFORM` or `EARTHING`, and such a task is assigned, started and completed only
+    in a shift that carries it (`fleet_vehicle.capabilities`, an earthing pole of the shift;
+    `ShiftRules.requireEquipment`, 409 `SHF-001`). None is seeded.
 
 ## Next
 
