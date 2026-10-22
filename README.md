@@ -44,7 +44,10 @@ no events out), `APP_OUTBOX_ENABLED=false` keeps writing the events and stops pu
 every `APP_STOCK_SYNC_RETRY_INTERVAL` (`PT5M`), `APP_STOCK_SYNC_IMMEDIATE_RETRY=false` leaves the lines
 an order transition could not settle within `APP_STOCK_SYNC_DEADLINE` (`15s`) to that round instead
 of retrying them right after commit, `APP_RABBITMQ_RESOURCES_LISTENER_ENABLED=false` stops consuming
-`mto-resources` (its queue is still declared), `APP_SECURITY_EXPOSE_API_DOCS=true` publishes Swagger
+`mto-resources` (its queue is still declared), `APP_RABBITMQ_QUEUES_TYPE=quorum` declares the two
+queues it consumes and their DLQs as quorum, for a RabbitMQ cluster as on OpenShift (`classic` by
+default; an existing queue has to be deleted to change type; `APP_RABBITMQ_QUEUES_DELIVERY_LIMIT`, `5`,
+the unacknowledged deliveries before the DLQ), `APP_SECURITY_EXPOSE_API_DOCS=true` publishes Swagger
 without a token, `APP_SHIFTS_MINIMUM_REST` (`PT12H`; `PT0S` switches it off) is the rest between two
 nights of the same person, and `APP_SCOPE_ENABLED=false` stops limiting writes to the execution
 packages of whoever writes.

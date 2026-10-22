@@ -16,9 +16,10 @@ import org.springframework.scheduling.annotation.Scheduled;
  * prueban el reintento llamandolo. {@code app.stock.sync-retry.enabled=false} la apaga con stock
  * encendido, y entonces las lineas FAILED vuelven a esperar a que alguien sincronice.</p>
  *
- * <p>Con varias instancias, todas reintentan sin coordinarse: dos que sincronizan la misma linea
- * mandan la misma clave, stock aplica la peticion una vez, y la version de la linea deja guardar solo
- * a una.</p>
+ * <p>Con varias instancias la programacion salta en todas, pero la vuelta corre en una sola: la que
+ * consigue el cerrojo de aviso de sesion de {@code StockSyncRetryServiceImpl}; las demas no hacen
+ * nada esa vez. Aunque dos coincidiesen, mandarian la misma clave, stock aplicaria la peticion una
+ * vez y la version de la linea dejaria guardar solo a una; el cerrojo ahorra la llamada repetida.</p>
  */
 @Configuration
 @EnableScheduling

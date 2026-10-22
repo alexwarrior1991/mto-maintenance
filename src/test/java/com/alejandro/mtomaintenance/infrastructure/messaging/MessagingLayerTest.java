@@ -11,6 +11,7 @@ import com.alejandro.mtomaintenance.configuration.messaging.MessagePayloadSignat
 import com.alejandro.mtomaintenance.configuration.messaging.MessagingConfiguration;
 import com.alejandro.mtomaintenance.configuration.messaging.MessageSignatureMode;
 import com.alejandro.mtomaintenance.configuration.messaging.MessageSignatureProperties;
+import com.alejandro.mtomaintenance.configuration.rabbitmq.ConsumerQueueProperties;
 import com.alejandro.mtomaintenance.configuration.rabbitmq.MasterDataRabbitProperties;
 import com.alejandro.mtomaintenance.configuration.rabbitmq.RabbitMqConfiguration;
 import com.alejandro.mtomaintenance.configuration.rabbitmq.ResourcesRabbitProperties;
@@ -617,6 +618,55 @@ class MessagingLayerTest {
     }
 
     /**
+     * Sin decir nada, las dos colas y sus DLQ se declaran exactamente como antes: clásicas, sin
+     * {@code x-queue-type} ni {@code x-delivery-limit}. Un argumento de más haría que el broker
+     * rechazase la redeclaración de una cola ya creada y se cayese toda la topología.
+     */
+    @Test
+    void byDefaultBothQueuesAndTheirDeadLettersAreClassicAndDeclaredAsBefore() {
+        contextRunner.run(context -> {
+            assertEquals(Map.of(
+                            MasterDataRabbitMqNames.ARG_DEAD_LETTER_EXCHANGE, MasterDataRabbitMqNames.MAINTENANCE_MASTER_DATA_DEAD_LETTER_EXCHANGE,
+                            MasterDataRabbitMqNames.ARG_DEAD_LETTER_ROUTING_KEY, MasterDataRabbitMqNames.MAINTENANCE_MASTER_DATA_DEAD_LETTER_ROUTING_KEY),
+                    context.getBean("masterDataQueue", Queue.class).getArguments());
+            assertEquals(Map.of(
+                            MasterDataRabbitMqNames.ARG_DEAD_LETTER_EXCHANGE, ResourcesRabbitMqNames.MAINTENANCE_RESOURCES_DEAD_LETTER_EXCHANGE,
+                            MasterDataRabbitMqNames.ARG_DEAD_LETTER_ROUTING_KEY, ResourcesRabbitMqNames.MAINTENANCE_RESOURCES_DEAD_LETTER_ROUTING_KEY),
+                    context.getBean("resourcesQueue", Queue.class).getArguments());
+            assertEquals(Map.of(), context.getBean("masterDataDeadLetterQueue", Queue.class).getArguments());
+            assertEquals(Map.of(), context.getBean("resourcesDeadLetterQueue", Queue.class).getArguments());
+        });
+    }
+
+    /**
+     * Con {@code app.rabbitmq.queues.type=quorum}, que es como corre en OpenShift, las dos colas son
+     * quorum con su límite de entregas (5, o el que se diga) y sus DLQ también, sin límite.
+     */
+    @Test
+    void withQuorumBothQueuesCarryTheirDeliveryLimitAndTheirDeadLettersAreQuorumToo() {
+        contextRunner.withPropertyValues("app.rabbitmq.queues.type=quorum").run(context -> {
+            for (String name : List.of("masterDataQueue", "resourcesQueue")) {
+                Map<String, Object> arguments = context.getBean(name, Queue.class).getArguments();
+                assertEquals("quorum", arguments.get("x-queue-type"), name);
+                assertEquals(ConsumerQueueProperties.DEFAULT_DELIVERY_LIMIT, arguments.get("x-delivery-limit"), name);
+                assertNotNull(arguments.get(MasterDataRabbitMqNames.ARG_DEAD_LETTER_EXCHANGE), name);
+            }
+            for (String name : List.of("masterDataDeadLetterQueue", "resourcesDeadLetterQueue")) {
+                assertEquals(Map.of("x-queue-type", "quorum"), context.getBean(name, Queue.class).getArguments(), name);
+            }
+        });
+        contextRunner.withPropertyValues("app.rabbitmq.queues.type=QUORUM", "app.rabbitmq.queues.delivery-limit=3")
+                .run(context -> assertEquals(3,
+                        context.getBean("resourcesQueue", Queue.class).getArguments().get("x-delivery-limit")));
+    }
+
+    @Test
+    void aDeliveryLimitBelowOneDoesNotStart() {
+        contextRunner.withPropertyValues("app.rabbitmq.queues.type=quorum", "app.rabbitmq.queues.delivery-limit=0")
+                .run(context -> assertNotNull(context.getStartupFailure()));
+    }
+
+    /**
      * Con el valor por defecto de Spring AMQP, un mensaje rechazado vuelve a la cabeza de la cola y
      * se reentrega sin fin: el consumidor gira en vacío y la DLQ nunca recibe nada.
      */
@@ -910,7 +960,7 @@ class MessagingLayerTest {
     private static MasterDataChangedMessage convert(String json) {
         MessageConverter converter = new RabbitMqConfiguration(
                 new MasterDataRabbitProperties(null, null, null, null, null, null), new MaintenanceEventsProperties(null),
-                new ResourcesRabbitProperties(null, null, null, null, null, null))
+                new ResourcesRabbitProperties(null, null, null, null, null, null), new ConsumerQueueProperties(null, null))
                 .masterDataMessageConverter(JsonMapper.builder().build());
 
         MessageProperties properties = new MessageProperties();

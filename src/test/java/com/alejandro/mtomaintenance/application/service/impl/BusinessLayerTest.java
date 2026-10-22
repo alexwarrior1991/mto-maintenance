@@ -170,6 +170,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.repository.Inspec
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceMaterialUsageRepository.LineRef;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.SessionAdvisoryLock;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceOrderRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceReportRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceShiftRepository;
@@ -3886,7 +3887,7 @@ class BusinessLayerTest {
     void theRetrySynchronizesFailedLinesAndStopsAtTheFirstOneStockDoesNotAnswer() {
         MaintenanceMaterialUsageRepository repository = mock(MaintenanceMaterialUsageRepository.class);
         MaintenanceMaterialUsageService materials = mock(MaintenanceMaterialUsageService.class);
-        StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials);
+        StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, freeLock());
         UUID orderId = UUID.randomUUID();
         List<UUID> ids = Stream.generate(UUID::randomUUID).limit(5).sorted().toList();
         when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
@@ -3911,7 +3912,7 @@ class BusinessLayerTest {
     void theNextRetryStartsAfterTheLastLineTriedSoNoneIsLeftBehind() {
         MaintenanceMaterialUsageRepository repository = mock(MaintenanceMaterialUsageRepository.class);
         MaintenanceMaterialUsageService materials = mock(MaintenanceMaterialUsageService.class);
-        StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials);
+        StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, freeLock());
         UUID orderId = UUID.randomUUID();
         List<UUID> ids = Stream.generate(UUID::randomUUID).limit(3).sorted().toList();
         when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
@@ -3930,6 +3931,38 @@ class BusinessLayerTest {
         order.verify(materials).sync(orderId, ids.get(0));
         when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED)).thenReturn(List.of());
         assertEquals(0, retry.retryFailedLines());
+    }
+
+    /**
+     * Con varias replicas la vuelta es una: la que no consigue el cerrojo de aviso no lee las lineas
+     * ni llama a stock. El cerrojo de verdad, contra PostgreSQL, en {@code PersistenceLayerTest}.
+     */
+    @Test
+    void theRetryDoesNothingWhileAnotherInstanceHoldsItsLock() {
+        MaintenanceMaterialUsageRepository repository = mock(MaintenanceMaterialUsageRepository.class);
+        MaintenanceMaterialUsageService materials = mock(MaintenanceMaterialUsageService.class);
+        SessionAdvisoryLock heldElsewhere = mock(SessionAdvisoryLock.class);
+        when(heldElsewhere.runIfFree(anyLong(), any())).thenReturn(false);
+        StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, heldElsewhere);
+        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+                .thenReturn(List.of(lineRef(UUID.randomUUID(), UUID.randomUUID())));
+
+        assertEquals(0, retry.retryFailedLines());
+
+        verify(heldElsewhere).runIfFree(eq(StockSyncRetryServiceImpl.LOCK_KEY), any());
+        verify(repository, never()).findRefsByStockSyncStatus(any());
+        verify(materials, never()).sync(any(), any());
+        assertNotEquals(PreventiveDueSoonServiceImpl.LOCK_KEY, StockSyncRetryServiceImpl.LOCK_KEY);
+    }
+
+    /** Un cerrojo que siempre esta libre: corre el trabajo, como la unica instancia. */
+    private static SessionAdvisoryLock freeLock() {
+        SessionAdvisoryLock lock = mock(SessionAdvisoryLock.class);
+        when(lock.runIfFree(anyLong(), any())).thenAnswer(invocation -> {
+            invocation.<Runnable>getArgument(1).run();
+            return true;
+        });
+        return lock;
     }
 
     /**

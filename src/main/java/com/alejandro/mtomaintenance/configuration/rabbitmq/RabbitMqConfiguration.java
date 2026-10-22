@@ -4,7 +4,6 @@ import com.alejandro.mtomaintenance.application.service.IncomingEventProcessor;
 import com.alejandro.mtomaintenance.application.service.MasterDataEventProcessor;
 import com.alejandro.mtomaintenance.configuration.messaging.MessagePayloadSignatureVerifier;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataEventConsumer;
-import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataRabbitMqNames;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.RabbitListenerContainerFactoryNames;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.ResourcesEventConsumer;
 import lombok.RequiredArgsConstructor;
@@ -16,7 +15,6 @@ import org.springframework.amqp.core.Declarable;
 import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
-import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -52,7 +50,8 @@ import tools.jackson.databind.json.JsonMapper;
  */
 @Configuration
 @RequiredArgsConstructor
-@EnableConfigurationProperties({MasterDataRabbitProperties.class, MaintenanceEventsProperties.class, ResourcesRabbitProperties.class})
+@EnableConfigurationProperties({MasterDataRabbitProperties.class, MaintenanceEventsProperties.class, ResourcesRabbitProperties.class,
+        ConsumerQueueProperties.class})
 @ConditionalOnProperty(prefix = "app.rabbitmq", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class RabbitMqConfiguration {
 
@@ -61,6 +60,7 @@ public class RabbitMqConfiguration {
     private final MasterDataRabbitProperties properties;
     private final MaintenanceEventsProperties eventsProperties;
     private final ResourcesRabbitProperties resourcesProperties;
+    private final ConsumerQueueProperties queues;
 
     /**
      * Exchange propio: lo que este servicio cuenta de sí mismo, con la clave
@@ -85,14 +85,11 @@ public class RabbitMqConfiguration {
      *
      * <p>Los argumentos de una cola ya creada son inmutables, así que añadir aquí un TTL o un
      * límite obliga a borrarla y recrearla en cada entorno; para eso están las policies del
-     * broker.</p>
+     * broker. Clásica o quorum, esta y la de recursos, lo dice {@link ConsumerQueueProperties}.</p>
      */
     @Bean
     public Queue masterDataQueue() {
-        return QueueBuilder.durable(properties.queue())
-                .withArgument(MasterDataRabbitMqNames.ARG_DEAD_LETTER_EXCHANGE, properties.deadLetterExchange())
-                .withArgument(MasterDataRabbitMqNames.ARG_DEAD_LETTER_ROUTING_KEY, properties.deadLetterRoutingKey())
-                .build();
+        return queues.queue(properties.queue(), properties.deadLetterExchange(), properties.deadLetterRoutingKey());
     }
 
     @Bean
@@ -111,7 +108,7 @@ public class RabbitMqConfiguration {
 
     @Bean
     public Queue masterDataDeadLetterQueue() {
-        return QueueBuilder.durable(properties.deadLetterQueue()).build();
+        return queues.deadLetterQueue(properties.deadLetterQueue());
     }
 
     @Bean
@@ -210,10 +207,8 @@ public class RabbitMqConfiguration {
 
     @Bean
     public Queue resourcesQueue() {
-        return QueueBuilder.durable(resourcesProperties.queue())
-                .withArgument(MasterDataRabbitMqNames.ARG_DEAD_LETTER_EXCHANGE, resourcesProperties.deadLetterExchange())
-                .withArgument(MasterDataRabbitMqNames.ARG_DEAD_LETTER_ROUTING_KEY, resourcesProperties.deadLetterRoutingKey())
-                .build();
+        return queues.queue(resourcesProperties.queue(), resourcesProperties.deadLetterExchange(),
+                resourcesProperties.deadLetterRoutingKey());
     }
 
     /** Un binding por clave ({@code mto.resources.person.*}, {@code team.*}, {@code vehicle.*}, {@code instrument.*}): nada mas llega aqui. */
@@ -231,7 +226,7 @@ public class RabbitMqConfiguration {
 
     @Bean
     public Queue resourcesDeadLetterQueue() {
-        return QueueBuilder.durable(resourcesProperties.deadLetterQueue()).build();
+        return queues.deadLetterQueue(resourcesProperties.deadLetterQueue());
     }
 
     @Bean

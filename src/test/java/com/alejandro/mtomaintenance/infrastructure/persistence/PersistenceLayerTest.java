@@ -43,6 +43,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.repository.Mainte
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceStatusHistoryRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTaskRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTeamRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.SessionAdvisoryLock;
 import com.alejandro.mtomaintenance.infrastructure.persistence.specification.CatenaryDefectSpecification;
 import com.alejandro.mtomaintenance.infrastructure.persistence.specification.MaintenanceInspectionSpecification;
 import java.util.EnumSet;
@@ -80,6 +81,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /** Repositorios, specifications y restricciones contra un PostgreSQL real con las migraciones aplicadas. */
 @DataJpaTest
@@ -98,6 +100,9 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
 
     @Autowired
     private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private javax.sql.DataSource dataSource;
 
     @Autowired
     private CatenaryAssetRepository assetRepository;
@@ -308,6 +313,44 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
             assetRepository.save(profile);
             entityManager.flush();
         }, "chk_catenary_asset_drive_type");
+    }
+
+    /**
+     * El cerrojo de sesion de la vuelta del reintento de stock: mientras corre, otra conexion no lo
+     * consigue; al acabar, bien o lanzando, queda libre, y la conexion vuelve al pool sin el.
+     */
+    @Test
+    void theSessionAdvisoryLockRunsTheWorkAloneAndIsFreeAfterItEvenIfItThrows() {
+        SessionAdvisoryLock lock = new SessionAdvisoryLock(dataSource);
+        long key = ("mto-maintenance:stock-sync-retry:" + System.nanoTime()).hashCode();
+        java.util.function.Supplier<Boolean> elsewhere = () -> java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> lock.runIfFree(key, () -> fail("Another session must not run while the lock is held")))
+                .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+
+        boolean[] ran = {false};
+        assertTrue(lock.runIfFree(key, () -> {
+            ran[0] = true;
+            assertEquals(1L, advisoryLocksHeld(key), "The lock lives in one session while the work runs");
+            assertFalse(elsewhere.get(), "Another session finds it taken and does not wait");
+        }));
+        assertTrue(ran[0]);
+        assertEquals(0L, advisoryLocksHeld(key), "Released when the work ends: no pooled connection keeps it");
+
+        assertThrows(IllegalStateException.class, () -> lock.runIfFree(key, () -> {
+            throw new IllegalStateException("the work failed");
+        }));
+        assertEquals(0L, advisoryLocksHeld(key), "Released also when the work throws");
+        assertTrue(lock.runIfFree(key, () -> { }), "And free for the next round");
+    }
+
+    private long advisoryLocksHeld(long key) {
+        return ((Number) entityManager.createNativeQuery("""
+                        select count(*) from pg_locks
+                        where locktype = 'advisory' and objsubid = 1 and granted
+                          and ((classid::bigint << 32) | objid::bigint) = :key
+                        """)
+                .setParameter("key", key)
+                .getSingleResult()).longValue();
     }
 
     @Test

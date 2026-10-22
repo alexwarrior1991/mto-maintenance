@@ -263,6 +263,13 @@ app:
       dead-letter-queue: ${APP_RABBITMQ_RESOURCES_DEAD_LETTER_QUEUE:mto.maintenance.resources.queue.dlq}
       dead-letter-routing-key: ${APP_RABBITMQ_RESOURCES_DEAD_LETTER_ROUTING_KEY:mto.maintenance.resources.queue.dlq}
       listener-enabled: ${APP_RABBITMQ_RESOURCES_LISTENER_ENABLED:true}
+    # Tipo de las dos colas que consume este servicio y de sus DLQ: classic, por defecto y en local, o
+    # quorum, replicada entre los nodos de un RabbitMQ en cluster, como en OpenShift. El tipo de una
+    # cola que ya existe no cambia: hay que borrarla antes. delivery-limit solo cuenta con quorum (ver
+    # ConsumerQueueProperties).
+    queues:
+      type: ${APP_RABBITMQ_QUEUES_TYPE:classic}
+      delivery-limit: ${APP_RABBITMQ_QUEUES_DELIVERY_LIMIT:5}
     # Exchange propio: lo que este servicio cuenta de si mismo (ordenes, defectos, inspecciones,
     # turnos, material, activos, preventivos), con la clave mto.maintenance.<entidad>.<evento>. Aqui
     # solo se declara el exchange; la cola es de quien lo consume (mto-notification).
@@ -387,8 +394,10 @@ app:
     # Reintento automatico de las lineas de material FAILED (stock no contesto). Es lo que resuelve
     # una reserva o una salida en duda mientras mto-stock todavia recuerda su clave de idempotencia
     # (app.idempotency.retention alli, 30 dias). Cada vuelta se para en la primera linea a la que stock
-    # sigue sin contestar, asi que con stock caido cuesta una llamada. Con enabled=false las lineas
-    # FAILED esperan a que alguien sincronice, y una peticion en duda puede sobrevivir a su clave.
+    # sigue sin contestar, asi que con stock caido cuesta una llamada. Con varias replicas la vuelta
+    # corre en una (un cerrojo de aviso de sesion de PostgreSQL); las demas se la saltan. Con
+    # enabled=false las lineas FAILED esperan a que alguien sincronice, y una peticion en duda puede
+    # sobrevivir a su clave.
     sync-retry:
       enabled: ${APP_STOCK_SYNC_RETRY_ENABLED:true}
       interval: ${APP_STOCK_SYNC_RETRY_INTERVAL:PT5M}
