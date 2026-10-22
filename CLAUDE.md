@@ -220,7 +220,10 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
 ### Messaging
 
 Consumer of the master-data channel of `mto-configuration` (`mto.master-data.exchange`, own queue
-`mto.maintenance.master-data.queue` with DLX/DLQ) through the same idempotent **inbox** as
+`mto.maintenance.master-data.queue` with DLX/DLQ; this queue and the resources one below are `classic`
+by default and `quorum` with `app.rabbitmq.queues.type`, as on OpenShift, with `x-delivery-limit` 5 —
+`ConsumerQueueProperties`, which declares them exactly as before when `classic`, because a new argument
+on an existing queue is refused by the broker) through the same idempotent **inbox** as
 `mto-stock` (`inbox_message`, unique `(message_id, source_service)`). Four `MasterDataEntityHandler`s:
 `profile`, `disconnector`, `section-insulator` (upsert/deactivate assets) and `track` (`DELETED`
 only, deactivates every asset on the track). The other four entity names are logged and ignored.

@@ -17,11 +17,24 @@ by this repository and documented in [Published events](#published-events).
 |---|---|
 | Exchange (publisher's) | `mto.master-data.exchange` (topic) |
 | Routing key pattern | `mto.master-data.#` (`mto.master-data.<entity>.<created|updated|deleted>`) |
-| Queue (own) | `mto.maintenance.master-data.queue` |
-| Dead letter | `mto.maintenance.master-data.queue.dlx` → `mto.maintenance.master-data.queue.dlq` |
+| Queue (own) | `mto.maintenance.master-data.queue` (durable; classic, or quorum, see below) |
+| Dead letter | `mto.maintenance.master-data.queue.dlx` → `mto.maintenance.master-data.queue.dlq` (the type of its queue) |
 
 Gated by `app.rabbitmq.enabled` (topology) and `app.rabbitmq.master-data.listener-enabled`
 (consumer). With the first off the application starts without a broker (what the tests do).
+
+**Classic or quorum.** `app.rabbitmq.queues.type` (`ConsumerQueueProperties`) says it for both queues
+this service consumes, master data and resources, and their DLQs: `classic` by default and locally (one
+broker node), `quorum` where RabbitMQ runs as a cluster, as on OpenShift
+(`APP_RABBITMQ_QUEUES_TYPE=quorum`), so that a queue survives the loss of a node. With `classic` the
+queues are declared exactly as before, without `x-queue-type`: adding the argument to a queue that
+already exists would be another declaration and the broker would refuse it. A quorum queue carries
+`x-delivery-limit` (`app.rabbitmq.queues.delivery-limit`, 5): nothing rejected is requeued here (the
+retries happen inside one delivery and then the message goes to the DLQ), so the broker's count only
+grows when a message comes back unacknowledged because the consumer died or lost its connection; five
+lets a couple of ordinary restarts through and stops the message that kills the consumer every time.
+The DLQs are quorum too, without a limit. Changing the type of an existing queue means deleting it
+first (stop the consumer, let it drain, delete, redeploy).
 
 ### Envelope
 
@@ -159,8 +172,8 @@ instruments (`instrument`, `V23`), and keeps of each the snapshot it reads (`cre
 |---|---|
 | Exchange (publisher's) | `mto.resources.exchange` (topic, durable; redeclared with the same attributes) |
 | Bindings | `mto.resources.person.*`, `mto.resources.team.*`, `mto.resources.vehicle.*`, `mto.resources.instrument.*` (`app.rabbitmq.resources.routing-keys`; the last since `V23`): nothing else it publishes reaches this queue. Its expiry warnings (`qualification.*`, `vehicle-document.*`, `calibration.*`) are for `mto-notification`: here the shift reads the dates from the snapshot |
-| Queue (own) | `mto.maintenance.resources.queue` |
-| Dead letter | `mto.maintenance.resources.queue.dlx` → `mto.maintenance.resources.queue.dlq` |
+| Queue (own) | `mto.maintenance.resources.queue` (durable; classic or quorum, like the master-data one) |
+| Dead letter | `mto.maintenance.resources.queue.dlx` → `mto.maintenance.resources.queue.dlq` (the type of its queue) |
 | Listener factory | `resourcesRabbitListenerContainerFactory`: the master-data converter, nothing rejected is requeued |
 
 Gated by `app.rabbitmq.enabled` (topology) and `app.rabbitmq.resources.listener-enabled` (consumer,
