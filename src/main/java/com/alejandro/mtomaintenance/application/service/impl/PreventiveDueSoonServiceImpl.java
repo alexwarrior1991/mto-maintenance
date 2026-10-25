@@ -41,7 +41,7 @@ class PreventiveDueSoonServiceImpl implements PreventiveDueSoonService {
     private static final Logger LOGGER = LoggerFactory.getLogger(PreventiveDueSoonServiceImpl.class);
 
     /** Clave del cerrojo de aviso, propia de este trabajo; cualquier otro trabajo usa otra. */
-    static final long LOCK_KEY = "mto-maintenance:preventive-due-soon".hashCode();
+    static final long LOCK_KEY = AdvisoryLockKeys.of("mto-maintenance:preventive-due-soon");
 
     static final String OPERATION_ID_PREFIX = "preventive-due-soon:";
 

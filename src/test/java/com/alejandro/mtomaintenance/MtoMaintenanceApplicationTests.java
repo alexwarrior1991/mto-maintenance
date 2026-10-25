@@ -280,6 +280,10 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
                 .forEach(defaults.getPropertySources()::addLast);
         assertEquals(10, defaults.getProperty("spring.datasource.hikari.maximum-pool-size", Integer.class),
                 "the default of DATABASE_POOL_MAX_SIZE");
+        // Esperar una conexion, por debajo del read-timeout del gateway (15 s): pasado, un 503 que el cliente ve.
+        assertEquals(10_000L, context.getBean(DataSource.class).unwrap(HikariDataSource.class).getConnectionTimeout());
+        assertEquals(10_000L, defaults.getProperty("spring.datasource.hikari.connection-timeout", Long.class),
+                "the default of DATABASE_POOL_CONNECTION_TIMEOUT");
     }
 
     /**

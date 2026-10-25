@@ -3,6 +3,7 @@ package com.alejandro.mtomaintenance.application.service.impl;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamRequest;
 import com.alejandro.mtomaintenance.application.dto.team.MaintenanceTeamResponse;
 import com.alejandro.mtomaintenance.application.exception.DuplicateCodeException;
+import com.alejandro.mtomaintenance.application.exception.NotFoundException;
 import com.alejandro.mtomaintenance.application.exception.SynchronizedTeamException;
 import com.alejandro.mtomaintenance.application.mapper.MaintenanceTeamMapper;
 import com.alejandro.mtomaintenance.application.service.MaintenanceTeamService;
@@ -45,7 +46,9 @@ class MaintenanceTeamServiceImpl implements MaintenanceTeamService {
     @Override
     @Transactional
     public MaintenanceTeamResponse update(UUID id, MaintenanceTeamRequest request) {
-        MaintenanceTeam team = lookups.team(id);
+        // Con la fila bloqueada: si el primer evento de mto-resources lo adopta a la vez, o lo adopta
+        // antes y aqui se ve sincronizado, o lo adopta despues y sustituye esta modificacion.
+        MaintenanceTeam team = repository.findForUpdateById(id).orElseThrow(() -> new NotFoundException("Maintenance team", id));
         if (team.isSynchronized()) {
             throw new SynchronizedTeamException("Team " + team.getCode() + " is kept by mto-resources (its leader, linemen, packages "
                     + "and vehicle): change it there, it arrives here by event");

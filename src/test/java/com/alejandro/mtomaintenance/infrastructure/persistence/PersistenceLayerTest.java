@@ -307,6 +307,18 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
         assertFalse(elsewhere, "Another transaction finds it taken until this one ends");
 
+        // El compartido, el de todas las generaciones: lo tienen muchas a la vez, y nadie en exclusiva mientras.
+        long anyPackage = ("mto-maintenance:generate-tasks:any-package:" + System.nanoTime()).hashCode();
+        assertEquals(1, taskRepository.advisoryTransactionLockShared(anyPackage));
+        Boolean exclusiveElsewhere = java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> other.execute(status -> assetRepository.tryAdvisoryTransactionLock(anyPackage)))
+                .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+        assertFalse(exclusiveElsewhere, "An order without a package waits while any generation holds it shared");
+        Integer sharedElsewhere = java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> other.execute(status -> taskRepository.advisoryTransactionLockShared(anyPackage)))
+                .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+        assertEquals(1, sharedElsewhere, "Two generations of two packages hold it at once");
+
         CatenaryAsset profile = profile("DRV-" + UUID.randomUUID().toString().substring(0, 8), System.nanoTime(), "12900.000");
         profile.setDriveType(DisconnectorDriveType.MOTOR);
         assertThrows(PersistenceException.class, () -> {
@@ -607,6 +619,39 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertEquals("system", reloaded.getCreatedBy(), "Outside a request the auditor is the system");
     }
 
+    /**
+     * Modificar un equipo bloquea su fila: el primer evento de mto-resources, que lo adopta con un
+     * UPDATE de esa fila, espera a que la modificacion termine en vez de que esta lo pise despues.
+     */
+    @Test
+    void modifyingATeamLocksItsRowSoThatTheAdoptionByMtoResourcesWaits() {
+        MaintenanceTeam seeded = teamRepository.findByCode("B").orElseThrow();
+        entityManager.clear();
+        assertTrue(teamRepository.findForUpdateById(seeded.getId()).isPresent());
+
+        org.springframework.transaction.support.TransactionTemplate other =
+                new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        other.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        RuntimeException waited = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                other.executeWithoutResult(status -> {
+                    // Siempre se deshace: si el cerrojo no estuviera, la adopcion no debe quedarse.
+                    status.setRollbackOnly();
+                    entityManager.createNativeQuery("set local lock_timeout = '300ms'").executeUpdate();
+                    teamRepository.adoptByCode("B", "mto-resources", UUID.randomUUID());
+                });
+                return null;
+            } catch (RuntimeException failure) {
+                return failure;
+            }
+        }).orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+
+        assertNotNull(waited, "The adoption cannot touch the row while the modification holds it");
+        assertTrue(waited instanceof org.springframework.dao.PessimisticLockingFailureException
+                || waited.getCause() instanceof jakarta.persistence.PessimisticLockException, waited.toString());
+        assertFalse(teamRepository.findByCode("B").orElseThrow().isSynchronized());
+    }
+
     @Test
     void aStatusHistoryRowBelongsToExactlyOneOrderOrDefect() {
         long trackId = System.nanoTime();
@@ -800,6 +845,14 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 .toList();
 
         assertEquals(List.of(failed.getId()), refs.stream().map(LineRef::getId).toList());
+        // La vuelta periodica no coge la que acaba de cambiar (una linea cortada por su plazo): un minuto despues, si.
+        java.util.function.Function<Instant, List<UUID>> unchangedSince = before -> materialRepository
+                .findRefsByStockSyncStatusUnchangedSince(StockSyncStatus.FAILED, before).stream()
+                .filter(ref -> ref.getOrderId().equals(order.getId()))
+                .map(LineRef::getId)
+                .toList();
+        assertEquals(List.of(), unchangedSince.apply(Instant.now().minus(1, ChronoUnit.MINUTES)));
+        assertEquals(List.of(failed.getId()), unchangedSince.apply(Instant.now().plus(1, ChronoUnit.MINUTES)));
         assertEquals(StockRequestType.RESERVATION, materialRepository.findById(failed.getId()).orElseThrow().getStockRequestInDoubt());
         assertNull(materialRepository.findById(reserved.getId()).orElseThrow().getStockRequestInDoubt());
     }

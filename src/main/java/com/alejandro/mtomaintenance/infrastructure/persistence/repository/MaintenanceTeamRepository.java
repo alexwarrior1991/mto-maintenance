@@ -1,7 +1,9 @@
 package com.alejandro.mtomaintenance.infrastructure.persistence.repository;
 
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTeam;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,6 +19,16 @@ public interface MaintenanceTeamRepository extends JpaRepository<MaintenanceTeam
     boolean existsByCode(String code);
 
     Optional<MaintenanceTeam> findBySourceEntityId(UUID sourceEntityId);
+
+    /**
+     * El equipo con su fila bloqueada hasta el final de la transaccion ({@code PUT /teams/{id}}). El
+     * primer evento de mto-resources lo adopta con un {@code UPDATE} de esa fila ({@link #adoptByCode}):
+     * o espera a que la modificacion confirme y la sustituye, o la modificacion espera a la adopcion y
+     * ya lo ve sincronizado. Sin el cerrojo, una modificacion que lo leyo local pisaria lo adoptado.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select t from MaintenanceTeam t where t.id = :id")
+    Optional<MaintenanceTeam> findForUpdateById(@Param("id") UUID id);
 
     /**
      * Adopta el equipo local de ese codigo la primera vez que mto-resources publica uno: desde ese

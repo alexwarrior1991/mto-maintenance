@@ -85,6 +85,10 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
         CatenaryAsset asset = lookups.enabledAsset(request.assetId());
         scope.requireAsset(asset);
         MaintenanceOrder originOrder = request.originOrderId() == null ? null : lookups.order(request.originOrderId());
+        if (originOrder != null) {
+            // La inspeccion sale en esa orden: tambien ella tiene que estar en el ambito de quien escribe.
+            scope.requireOrder(originOrder);
+        }
         if (originOrder != null && originOrder.isTerminal()) {
             throw new InvalidTransitionException("Order " + originOrder.getCode() + " is " + originOrder.getStatus() + " and cannot receive inspections");
         }

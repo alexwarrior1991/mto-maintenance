@@ -597,7 +597,7 @@ class BusinessLayerTest {
                 .thenReturn(List.of(first));
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
-        long key = "mto-maintenance:generate-tasks:EP-6".hashCode();
+        long key = AdvisoryLockKeys.of("mto-maintenance:generate-tasks:EP-6");
 
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
 
@@ -605,6 +605,7 @@ class BusinessLayerTest {
         verify(fixture.generationLocks).withLock(eq("EP-6"), any());
         // Entre instancias, el cerrojo de aviso del EP, antes de mirar que esta libre.
         InOrder inOrder = inOrder(fixture.repository);
+        inOrder.verify(fixture.repository).advisoryTransactionLockShared(MaintenanceTaskServiceImpl.ANY_PACKAGE_LOCK);
         inOrder.verify(fixture.repository).advisoryTransactionLock(key);
         inOrder.verify(fixture.repository).findAssetIdsByOrderId(order.getId());
         // La orden se lee para saber su EP antes del turno, y otra vez dentro de la transaccion: como la dejo la anterior.
@@ -874,6 +875,53 @@ class BusinessLayerTest {
         assertTrue(tasks.stream().allMatch(MaintenanceTask::requiresFullPossession), "RP-07 waits for a FULL shift");
     }
 
+    /**
+     * Un poste puede llevar dos seccionadores (V29 de mto-configuration): cada uno es su activo y su
+     * tarea, en el kp del poste, por codigo. El que maniobra otra via que la del poste (own_track) se
+     * trabaja desde un turno de su via, o de la que une con ella; no desde uno de la via del poste.
+     */
+    @Test
+    void twoDisconnectorsOnOnePoleGetATaskEachAndOneThatSwitchesAnotherTrackIsWorkedFromItsOwn() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        CatenaryAsset onThePole = disconnectorAt("NAT-NS3", 2L, "12900.000", DisconnectorDriveType.MANUAL);
+        onThePole.setProfileSourceId("P-68-2.05");
+        // Del mismo poste, une su via (la del poste) con la 3.
+        CatenaryAsset joining = disconnectorAt("NAT-NS4", 3L, "12900.000", DisconnectorDriveType.MANUAL);
+        joining.setProfileSourceId("P-68-2.05");
+        joining.setOwnTrack(true);
+        joining.setConnectedTrackId(2L);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledByTypeTouchingSection(eq(CatenaryAssetType.DISCONNECTOR), eq(2L), any(), any()))
+                .thenReturn(List.of(joining, onThePole));
+        when(fixture.lookups.taskTypes(any())).thenAnswer(call -> fullPossessionTypesOf(call.<Collection<String>>getArgument(0).toArray(String[]::new)));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(null, null, List.of(CatenaryAssetType.DISCONNECTOR), null, null));
+
+        assertEquals(2, response.createdTasks());
+        assertEquals(List.of(onThePole, joining), order.getTasks().stream().map(MaintenanceTask::getAsset).toList(),
+                "Same kp, so by code");
+
+        // Uno que maniobra la via 3 desde un poste de la 2, sin unirlas: su turno es el de la 3.
+        MaintenanceOrder inProgress = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        CatenaryAsset switching = disconnectorAt("NAT-NS5", 3L, "12900.000", DisconnectorDriveType.MANUAL);
+        switching.setProfileSourceId("P-68-2.05");
+        switching.setOwnTrack(true);
+        MaintenanceTask task = task(inProgress, MaintenanceTaskStatus.PENDING);
+        task.setAsset(switching);
+        when(fixture.lookups.order(inProgress.getId())).thenReturn(inProgress);
+        when(fixture.repository.findByIdAndOrderId(task.getId(), inProgress.getId())).thenReturn(Optional.of(task));
+        MaintenanceShift poleTrack = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        MaintenanceShift ownTrack = shift(3L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        when(fixture.lookups.shift(poleTrack.getId())).thenReturn(poleTrack);
+        when(fixture.lookups.shift(ownTrack.getId())).thenReturn(ownTrack);
+        assertThrows(ShiftException.class, () -> fixture.service.complete(inProgress.getId(), task.getId(), complete(poleTrack.getId(), List.of("RP-07"))));
+        fixture.service.complete(inProgress.getId(), task.getId(), complete(ownTrack.getId(), List.of("RP-07")));
+        assertEquals(MaintenanceTaskStatus.COMPLETED, task.getStatus());
+    }
+
     @Test
     void anOrderMixesProfilesOfAnotherSectionInsulatorsOfAnotherTrackAndTheDisconnectorsOfItsPackage() {
         TaskFixture fixture = new TaskFixture();
@@ -1094,7 +1142,7 @@ class BusinessLayerTest {
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
         when(fixture.lookups.order(order.getId())).thenReturn(order);
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
-        long packageLock = "mto-maintenance:generate-tasks:EP-6".hashCode();
+        long packageLock = AdvisoryLockKeys.of("mto-maintenance:generate-tasks:EP-6");
 
         fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
         InOrder inOrder = inOrder(fixture.repository);
@@ -1111,7 +1159,72 @@ class BusinessLayerTest {
         when(fixture.workloadEstimator.estimate(withoutPackage)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
         fixture.service.generatePreventiveTasks(withoutPackage.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
         verify(fixture.generationLocks).withLock(eq("order-" + withoutPackage.getId()), any());
-        verify(fixture.repository).advisoryTransactionLock(("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()).hashCode());
+        // Una orden sin EP puede llevarse activos de cualquier EP: espera en exclusiva a todas las demas, que
+        // cogen el mismo cerrojo compartido antes que el de su EP.
+        verify(fixture.repository).advisoryTransactionLock(MaintenanceTaskServiceImpl.ANY_PACKAGE_LOCK);
+        verify(fixture.repository, times(2)).advisoryTransactionLockShared(MaintenanceTaskServiceImpl.ANY_PACKAGE_LOCK);
+        verify(fixture.repository, never()).advisoryTransactionLock(AdvisoryLockKeys.of("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()));
+    }
+
+    @Test
+    void anAssetWithoutPackageIsTakenUnderItsOwnLockAndTheSelectionIsRepeatedAfterIt() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        CatenaryAsset packaged = profile("12-2.27", "12847.990");
+        CatenaryAsset hole = profile("12-2.28", "12900.000");
+        hole.setExecutionPackageId(null);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledByTypeOnTrackBetween(CatenaryAssetType.PROFILE, 2L, order.getAsset().getStartKp(), order.getAsset().getEndKp()))
+                .thenReturn(List.of(packaged, hole));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01"));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
+        // Otra generacion de otro EP se lo llevo mientras se esperaba su cerrojo: la segunda seleccion lo ve.
+        MaintenanceTaskRepository.AssetInOtherOrder taken = mock(MaintenanceTaskRepository.AssetInOtherOrder.class);
+        when(taken.getAssetId()).thenReturn(hole.getId());
+        when(taken.getOrderCode()).thenReturn("MO-000077");
+        when(fixture.repository.findOpenPreventiveTasksElsewhere(any(), eq(order.getId()))).thenReturn(List.of()).thenReturn(List.of(taken));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(null, null, null, null, null));
+
+        InOrder inOrder = inOrder(fixture.repository);
+        inOrder.verify(fixture.repository).advisoryTransactionLock(AdvisoryLockKeys.of("mto-maintenance:generate-tasks:EP-6"));
+        inOrder.verify(fixture.repository).advisoryTransactionLock(MaintenanceTaskServiceImpl.assetLockKey(hole.getId()));
+        verify(fixture.repository, never()).advisoryTransactionLock(MaintenanceTaskServiceImpl.assetLockKey(packaged.getId()));
+        verify(fixture.repository, times(2)).findOpenPreventiveTasksElsewhere(any(), eq(order.getId()));
+        assertEquals(1, response.createdTasks(), "Only the profile nobody else took");
+        assertEquals(1, response.skippedInOtherOrders());
+        assertEquals(List.of(packaged), order.getTasks().stream().map(MaintenanceTask::getAsset).toList());
+    }
+
+    @Test
+    void aTaskAddedByHandKeepsTheOrderInOnePackageAndAPreventiveIsNotDoneTwice() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        CatenaryAsset foreign = profile("40-1.01", "40000.000");
+        foreign.setExecutionPackageId(9L);
+        when(fixture.lookups.enabledAsset(foreign.getId())).thenReturn(foreign);
+        ValidationException otherPackage = assertThrows(ValidationException.class,
+                () -> fixture.service.create(order.getId(), new MaintenanceTaskRequest("By hand", foreign.getId(), null, null, null)));
+        assertTrue(otherPackage.getMessage().startsWith("assetId: PRF-40-1.01 is in execution package 9"), otherPackage.getMessage());
+
+        CatenaryAsset busy = profile("12-2.27", "12847.990");
+        when(fixture.lookups.enabledAsset(busy.getId())).thenReturn(busy);
+        MaintenanceTaskRepository.AssetInOtherOrder elsewhere = mock(MaintenanceTaskRepository.AssetInOtherOrder.class);
+        when(elsewhere.getAssetId()).thenReturn(busy.getId());
+        when(elsewhere.getOrderCode()).thenReturn("MO-000042");
+        when(fixture.repository.findOpenPreventiveTasksElsewhere(List.of(busy.getId()), order.getId())).thenReturn(List.of(elsewhere));
+        ValidationException twice = assertThrows(ValidationException.class,
+                () -> fixture.service.create(order.getId(), new MaintenanceTaskRequest("By hand", busy.getId(), null, null, null)));
+        assertTrue(twice.getMessage().contains("open task in preventive order MO-000042"), twice.getMessage());
+        verify(fixture.repository, never()).save(any());
+
+        // Una correctiva sobre ese activo es otro trabajo: entra.
+        MaintenanceOrder corrective = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(corrective.getId())).thenReturn(corrective);
+        fixture.service.create(corrective.getId(), new MaintenanceTaskRequest("Repair", busy.getId(), null, null, null));
+        assertEquals(busy, fixture.savedTask().getAsset());
     }
 
     @Test
@@ -1410,6 +1523,21 @@ class BusinessLayerTest {
         assertEquals(7L, draft.getExecutionPackageId());
         assertThrows(ValidationException.class, () -> fixture.service.update(draft.getId(),
                 new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null, null, new BigDecimal("15000.000"), null, null, null)));
+
+        // Con tareas de su EP no se lleva a otro: una orden es de un solo EP. Las canceladas no cuentan.
+        MaintenanceOrder generated = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(generated.getId())).thenReturn(generated);
+        MaintenanceTask onProfile = task(generated, MaintenanceTaskStatus.PENDING);
+        onProfile.setAsset(profile("12-2.27", "12847.990"));
+        generated.getTasks().add(onProfile);
+        ValidationException moved = assertThrows(ValidationException.class, () -> fixture.service.update(generated.getId(),
+                new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, 9L, null, null, null, null, null, null)));
+        assertTrue(moved.getMessage().startsWith("executionPackageId: order MO-DRAFT has tasks on assets of another execution package (PRF-12-2.27)"),
+                moved.getMessage());
+        assertEquals(6L, generated.getExecutionPackageId());
+        onProfile.setStatus(MaintenanceTaskStatus.CANCELLED);
+        fixture.service.update(generated.getId(), new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, 9L, null, null, null, null, null, null));
+        assertEquals(9L, generated.getExecutionPackageId());
 
         // URGENT no baja nunca de CRITICAL aunque la peticion lo pida.
         MaintenanceOrder urgent = order(MaintenanceOrderType.URGENT, MaintenanceOrderStatus.IN_PROGRESS);
@@ -2260,7 +2388,7 @@ class BusinessLayerTest {
         assertEquals(Set.of(6L), saved.getExecutionPackageIds());
 
         ReflectionTestUtils.setField(saved, "id", UUID.randomUUID());
-        when(fixture.lookups.team(saved.getId())).thenReturn(saved);
+        when(fixture.repository.findForUpdateById(saved.getId())).thenReturn(Optional.of(saved));
         assertThrows(DuplicateCodeException.class, () -> fixture.service.update(saved.getId(), new MaintenanceTeamRequest("C", "Team C", null, null, null, null)));
         fixture.service.update(saved.getId(), new MaintenanceTeamRequest("d", "Team D bis", null, null, false, Set.of(7L, 8L)));
 
@@ -2276,11 +2404,15 @@ class BusinessLayerTest {
         MaintenanceTeam synced = team("A");
         ReflectionTestUtils.setField(synced, "sourceService", "mto-resources");
         ReflectionTestUtils.setField(synced, "sourceEntityId", UUID.randomUUID());
-        when(fixture.lookups.team(synced.getId())).thenReturn(synced);
+        // Leido con su fila bloqueada: lo que se ve es lo que adopto el evento, si llego antes.
+        when(fixture.repository.findForUpdateById(synced.getId())).thenReturn(Optional.of(synced));
 
         assertThrows(SynchronizedTeamException.class, () -> fixture.service.update(synced.getId(),
                 new MaintenanceTeamRequest("A", "Renamed", null, null, null, null)));
         assertEquals("Team A", synced.getName());
+        verify(fixture.lookups, never()).team(any());
+        UUID unknown = UUID.randomUUID();
+        assertThrows(NotFoundException.class, () -> fixture.service.update(unknown, new MaintenanceTeamRequest("Z", "Z", null, null, null, null)));
     }
 
     // ------------------------------------------------------------ shift crew
@@ -2379,7 +2511,7 @@ class BusinessLayerTest {
         ShiftException refused = assertThrows(ShiftException.class, () -> fixture.service.start(shift.getId(), new StartShiftRequest(null, null)));
         assertTrue(refused.getMessage().contains("SH-000099") && refused.getMessage().contains("an instrument works in one shift a night"),
                 refused.getMessage());
-        verify(fixture.repository).lockResource(("mto-maintenance:shift-resource:instrument:" + detector.getId()).hashCode());
+        verify(fixture.repository).lockResource(AdvisoryLockKeys.of("mto-maintenance:shift-resource:instrument:" + detector.getId()));
     }
 
     @Test
@@ -2522,6 +2654,90 @@ class BusinessLayerTest {
         when(materials.lookups.order(order.getId())).thenReturn(order);
         materials.scopeMocks.actAs(leader, mine, List.of());
         assertThrows(ScopeException.class, () -> materials.service.sync(order.getId(), UUID.randomUUID()));
+    }
+
+    @Test
+    void startingOrCompletingATaskChecksTheScopeOfTheShiftItIsBoundTo() {
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceTask task = task(order, MaintenanceTaskStatus.PENDING);
+        task.setAsset(profile("12-2.27", "12847.990"));
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.repository.findByIdAndOrderId(task.getId(), order.getId())).thenReturn(Optional.of(task));
+        when(fixture.lookups.taskTypes(List.of("RG-01"))).thenReturn(taskTypes("RG-01"));
+        MaintenanceShift foreign = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        foreign.setExecutionPackageId(9L);
+        when(fixture.lookups.shift(foreign.getId())).thenReturn(foreign);
+        fixture.scopeMocks.actAs(leader, List.of(6L), List.of());
+
+        // La orden es del EP 6, el de quien escribe; el turno, del 9: asignar ya lo rechazaba, e iniciar o
+        // completar atan la tarea al turno igual.
+        assertThrows(ScopeException.class, () -> fixture.service.start(order.getId(), task.getId(), new StartTaskRequest(foreign.getId(), null)));
+        assertThrows(ScopeException.class, () -> fixture.service.complete(order.getId(), task.getId(), complete(foreign.getId(), List.of("RG-01"))));
+        assertEquals(MaintenanceTaskStatus.PENDING, task.getStatus());
+        assertNull(task.getShift());
+
+        MaintenanceShift mine = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        mine.setExecutionPackageId(6L);
+        when(fixture.lookups.shift(mine.getId())).thenReturn(mine);
+        fixture.service.start(order.getId(), task.getId(), new StartTaskRequest(mine.getId(), null));
+        fixture.service.complete(order.getId(), task.getId(), complete(mine.getId(), List.of("RG-01")));
+        assertEquals(MaintenanceTaskStatus.COMPLETED, task.getStatus());
+        assertEquals(mine, task.getShift());
+    }
+
+    @Test
+    void outsideItsScopeNobodyLinksADefectOrAnInspectionToAnOrderNorWritesAnInspectionOrGenerates() {
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        List<Long> mine = List.of(6L);
+        MaintenanceOrder foreign = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
+        foreign.setExecutionPackageId(9L);
+        CatenaryAsset profile = profile("12-2.27", "12847.990");
+
+        // El defecto y la inspeccion son del EP 6, el de quien escribe; la orden a la que se atan, del 9.
+        DefectFixture defects = new DefectFixture();
+        defects.scopeMocks.actAs(leader, mine, List.of());
+        when(defects.lookups.enabledAsset(profile.getId())).thenReturn(profile);
+        when(defects.lookups.order(foreign.getId())).thenReturn(foreign);
+        assertThrows(ScopeException.class, () -> defects.service.create(new CatenaryDefectRequest(profile.getId(), DefectSeverity.LOW, "Loose dropper",
+                null, null, null, foreign.getId(), null, null, null, null, null, null)));
+        CatenaryDefect defect = CatenaryDefect.builder().code("DEF-6").asset(profile).severity(DefectSeverity.LOW).status(DefectStatus.OPEN).build();
+        defect.locateAt(profile);
+        ReflectionTestUtils.setField(defect, "id", UUID.randomUUID());
+        when(defects.repository.findById(defect.getId())).thenReturn(Optional.of(defect));
+        assertThrows(ScopeException.class, () -> defects.service.linkOrder(defect.getId(), foreign.getId()));
+        assertNull(defect.getOrder());
+        verify(defects.repository, never()).save(any());
+
+        InspectionFixture inspections = new InspectionFixture();
+        inspections.scopeMocks.actAs(leader, mine, List.of());
+        when(inspections.lookups.enabledAsset(profile.getId())).thenReturn(profile);
+        when(inspections.lookups.order(foreign.getId())).thenReturn(foreign);
+        assertThrows(ScopeException.class, () -> inspections.service.create(new MaintenanceInspectionRequest(profile.getId(), LocalDate.now(), null,
+                null, InspectionResult.OK, null, null, null, null, foreign.getId(), null)));
+        // Y una inspeccion de otro EP no se escribe: ni su defecto.
+        MaintenanceInspection elsewhere = inspection(InspectionResult.MAJOR_DEFECT);
+        elsewhere.setExecutionPackageId(9L);
+        when(inspections.repository.findById(elsewhere.getId())).thenReturn(Optional.of(elsewhere));
+        assertThrows(ScopeException.class, () -> inspections.service.createDefect(elsewhere.getId(), new CreateDefectFromInspectionRequest(null, null, null, null)));
+        verify(inspections.repository, never()).save(any());
+
+        // Generar en una orden de otro EP tampoco, ni con la previsualizacion ya dentro de su transaccion.
+        TaskFixture tasks = new TaskFixture();
+        tasks.scopeMocks.actAs(leader, mine, List.of());
+        MaintenanceOrder preventive = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        preventive.setExecutionPackageId(9L);
+        when(tasks.lookups.order(preventive.getId())).thenReturn(preventive);
+        assertThrows(ScopeException.class, () -> tasks.service.generatePreventiveTasks(preventive.getId(),
+                new GeneratePreventiveTasksRequest(null, null, null, null, null)));
+        verify(tasks.repository, never()).save(any());
+        // Con respond-async, el ambito de la operacion de fondo ya lo dice antes de encolarla: 403, no un FAILED.
+        assertThrows(ScopeException.class, () -> tasks.service.generationScope(preventive.getId()));
+        verify(tasks.generationLocks, never()).withLock(anyString(), any());
+        MaintenanceOrder corrective = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
+        when(tasks.lookups.order(corrective.getId())).thenReturn(corrective);
+        assertThrows(InvalidTransitionException.class, () -> tasks.service.generationScope(corrective.getId()));
     }
 
     @Test
@@ -3473,6 +3689,39 @@ class BusinessLayerTest {
     }
 
     @Test
+    void resolvingTheStockProjectOfTheOrderCountsAgainstTheDeadlineOfTheTransition() throws Exception {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
+        MaintenanceMaterialUsage line = line(order);
+        UUID project = UUID.randomUUID();
+        when(stockClient.findProjectIdByCode("EP-6")).thenAnswer(invocation -> {
+            Thread.sleep(400);
+            return Optional.of(project);
+        });
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            Thread.sleep(100);
+            return new StockReservation(UUID.randomUUID(), invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+                    invocation.getArgument(3), "ACTIVE");
+        });
+        List<Object> deferred = new ArrayList<>();
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher(), virtualThreads(), 4,
+                Duration.ofMillis(300), true, deferred::add);
+
+        long started = System.nanoTime();
+        synchronizer.reserveAll(order);
+
+        // El proyecto se llevo todo el plazo: la reserva, que habria cabido sola, no espera mas.
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 700, "The deadline covers the project lookup too");
+        assertEquals(project, order.getStockProjectId());
+        assertEquals(StockSyncStatus.FAILED, line.getStockSyncStatus());
+        assertTrue(line.getStockSyncError().contains("deferred"), line.getStockSyncError());
+        StockLinesDeferred event = (StockLinesDeferred) deferred.getFirst();
+        assertEquals(List.of(line.getId()), event.lineIds());
+        CompletableFuture.allOf(event.inFlight().toArray(CompletableFuture[]::new)).get(5, TimeUnit.SECONDS);
+    }
+
+    @Test
     void aConversationCutByItsDeadlineSendsNothingMoreToStock() throws Exception {
         StockClient stockClient = mock(StockClient.class);
         when(stockClient.isEnabled()).thenReturn(true);
@@ -3890,7 +4139,7 @@ class BusinessLayerTest {
         StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, freeLock());
         UUID orderId = UUID.randomUUID();
         List<UUID> ids = Stream.generate(UUID::randomUUID).limit(5).sorted().toList();
-        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+        when(repository.findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), any()))
                 .thenReturn(ids.stream().map(id -> lineRef(orderId, id)).toList());
         when(materials.sync(orderId, ids.get(0))).thenReturn(usageResponse(StockSyncStatus.RESERVED));
         when(materials.sync(orderId, ids.get(1)))
@@ -3902,6 +4151,11 @@ class BusinessLayerTest {
 
         verify(materials, times(4)).sync(any(), any());
         verify(materials, never()).sync(orderId, ids.get(4));
+        // Sin las que cambiaron en el ultimo minuto: una cortada por su plazo puede tener su llamada en el aire.
+        ArgumentCaptor<Instant> before = ArgumentCaptor.forClass(Instant.class);
+        verify(repository).findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), before.capture());
+        long secondsAgo = Duration.between(before.getValue(), Instant.now()).toSeconds();
+        assertTrue(secondsAgo >= 59 && secondsAgo <= 61, "About a minute ago: " + secondsAgo);
     }
 
     /**
@@ -3915,7 +4169,7 @@ class BusinessLayerTest {
         StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, freeLock());
         UUID orderId = UUID.randomUUID();
         List<UUID> ids = Stream.generate(UUID::randomUUID).limit(3).sorted().toList();
-        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+        when(repository.findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), any()))
                 .thenReturn(ids.stream().map(id -> lineRef(orderId, id)).toList());
         when(materials.sync(orderId, ids.get(0))).thenThrow(new StockUnavailableException("mto-stock answered 500"));
         when(materials.sync(orderId, ids.get(1))).thenReturn(usageResponse(StockSyncStatus.CONSUMED));
@@ -3929,7 +4183,7 @@ class BusinessLayerTest {
         order.verify(materials).sync(orderId, ids.get(1));
         order.verify(materials).sync(orderId, ids.get(2));
         order.verify(materials).sync(orderId, ids.get(0));
-        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED)).thenReturn(List.of());
+        when(repository.findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), any())).thenReturn(List.of());
         assertEquals(0, retry.retryFailedLines());
     }
 
@@ -3944,13 +4198,13 @@ class BusinessLayerTest {
         SessionAdvisoryLock heldElsewhere = mock(SessionAdvisoryLock.class);
         when(heldElsewhere.runIfFree(anyLong(), any())).thenReturn(false);
         StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, heldElsewhere);
-        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+        when(repository.findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), any()))
                 .thenReturn(List.of(lineRef(UUID.randomUUID(), UUID.randomUUID())));
 
         assertEquals(0, retry.retryFailedLines());
 
         verify(heldElsewhere).runIfFree(eq(StockSyncRetryServiceImpl.LOCK_KEY), any());
-        verify(repository, never()).findRefsByStockSyncStatus(any());
+        verify(repository, never()).findRefsByStockSyncStatusUnchangedSince(any(), any());
         verify(materials, never()).sync(any(), any());
         assertNotEquals(PreventiveDueSoonServiceImpl.LOCK_KEY, StockSyncRetryServiceImpl.LOCK_KEY);
     }

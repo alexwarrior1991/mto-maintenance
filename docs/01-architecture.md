@@ -78,7 +78,10 @@ Rules that keep the layers honest:
   coalesces wake-ups on it. A single request is no faster; what changes is how many can wait at once
   without an OS thread each. The limit is the connection pool (`DATABASE_POOL_MAX_SIZE`, 10 by
   default), and the pools of every service share the `max_connections` (100) of the PostgreSQL of
-  `mto-platform`. A connection is held while a stock call runs inside an order transition, and by
+  `mto-platform`. A request waits for a connection at most `spring.datasource.hikari.connection-timeout`
+  (`DATABASE_POOL_CONNECTION_TIMEOUT`, in ms: 10000 instead of Hikari's 30 s, below the gateway's 15 s read
+  timeout): past it, 503 `APP-503`, instead of waiting, and committing, after the gateway has answered
+  504. A connection is held while a stock call runs inside an order transition, and by
   every background operation while it runs (`app.operations.max-active`, 4, is chosen with the pool in
   view). The background work itself runs on `AsyncConfiguration`'s executor, a virtual thread per task
   with the caller's `SecurityContext` and MDC, and so do the material lines of one order transition.

@@ -12,8 +12,11 @@ import java.time.Duration;
  *                       conversacion no retiene conexion (no toca la base), pero si una del pool HTTP
  *                       y una llamada de stock: no se sube sin mirar a mto-stock
  * @param deadline       el plazo de toda la conversacion de una transicion (planificar, completar,
- *                       cancelar). La linea que no ha terminado queda FAILED, con lo que tuviera en duda,
- *                       y la orden sigue sin esperar a un stock lento
+ *                       cancelar), contado desde antes de resolver el proyecto de stock de la orden. La
+ *                       linea que no ha terminado queda FAILED, con lo que tuviera en duda, y la orden
+ *                       sigue sin esperar a un stock lento. Por debajo del read-timeout del gateway
+ *                       (15 s), con margen para la transaccion: si no, el gateway responde 504 mientras
+ *                       la transicion confirma
  * @param immediateRetry al confirmar, reintentar en ese momento las lineas que se quedaron sin
  *                       respuesta, en vez de esperar a la vuelta de {@code app.stock.sync-retry}
  */
@@ -22,7 +25,7 @@ public record StockSyncProperties(int parallelism, Duration deadline, Boolean im
 
     public StockSyncProperties {
         parallelism = parallelism <= 0 ? 4 : parallelism;
-        deadline = deadline == null ? Duration.ofSeconds(15) : deadline;
+        deadline = deadline == null ? Duration.ofSeconds(10) : deadline;
         immediateRetry = immediateRetry == null || immediateRetry;
     }
 }

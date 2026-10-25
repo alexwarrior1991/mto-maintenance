@@ -95,4 +95,12 @@ public interface MaintenanceTaskRepository extends JpaRepository<MaintenanceTask
      */
     @Query(value = "select 1 from (select pg_advisory_xact_lock(:key)) as locked", nativeQuery = true)
     int advisoryTransactionLock(@Param("key") long key);
+
+    /**
+     * El mismo cerrojo, compartido: muchos a la vez, pero ninguno mientras alguien lo tenga en exclusiva
+     * ({@link #advisoryTransactionLock}). Es el de todas las generaciones, que lo cogen compartido y en
+     * exclusiva la de una orden sin EP, que puede tocar activos de cualquiera.
+     */
+    @Query(value = "select 1 from (select pg_advisory_xact_lock_shared(:key)) as locked", nativeQuery = true)
+    int advisoryTransactionLockShared(@Param("key") long key);
 }

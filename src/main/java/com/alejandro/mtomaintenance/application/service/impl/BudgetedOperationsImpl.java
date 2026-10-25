@@ -60,7 +60,7 @@ class BudgetedOperationsImpl implements BudgetedOperations {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BudgetedOperationsImpl.class);
 
-    private static final long CAPACITY_LOCK = "mto-maintenance:background-operation:capacity".hashCode();
+    private static final long CAPACITY_LOCK = AdvisoryLockKeys.of("mto-maintenance:background-operation:capacity");
     private static final int MAX_MESSAGE_LENGTH = 4000;
     private static final int MAX_URI_LENGTH = 500;
 
@@ -117,13 +117,14 @@ class BudgetedOperationsImpl implements BudgetedOperations {
         Duration budget = properties.effectiveWait(wait);
 
         try {
-            T result = budget.isZero()
-                    ? future.getNow(null)
-                    : future.get(budget.toMillis(), TimeUnit.MILLISECONDS);
-            if (future.isDone() && !future.isCompletedExceptionally()) {
-                return new Outcome<>(response(load(id)), result, true);
+            // Sin espera: lo que no ha terminado ya es 202. Lo terminado se lee con get(), que no espera y
+            // lanza el fallo como el plazo (getNow lo lanzaria envuelto en CompletionException, un 500, y
+            // mirar isDone despues de getNow podia dar por terminada sin resultado una que acababa entre medias).
+            if (budget.isZero() && !future.isDone()) {
+                return new Outcome<>(response(load(id)), null, false);
             }
-            return new Outcome<>(response(load(id)), null, false);
+            T result = budget.isZero() ? future.get() : future.get(budget.toMillis(), TimeUnit.MILLISECONDS);
+            return new Outcome<>(response(load(id)), result, true);
         } catch (TimeoutException pending) {
             LOGGER.info("Background operation {} {} answered 202 after {}: it keeps running", kind, id, budget);
             return new Outcome<>(response(load(id)), null, false);
@@ -298,7 +299,7 @@ class BudgetedOperationsImpl implements BudgetedOperations {
     }
 
     private static long scopeKey(String scope) {
-        return ("mto-maintenance:background-operation:scope:" + scope).hashCode();
+        return AdvisoryLockKeys.of("mto-maintenance:background-operation:scope:" + scope);
     }
 
     private static RuntimeException rethrowable(Throwable failure) {

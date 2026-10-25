@@ -55,6 +55,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -678,6 +679,60 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         assertEquals(switchedB, asset(second).getTrackId());
     }
 
+    /**
+     * Desde su V29 mto-configuration admite varios seccionadores en un poste (en pocos sitios, dos). Cada
+     * uno es su activo, con su codigo, su kp del poste y su paquete del perfil: el que no trae via toma la
+     * del poste y el que maniobra otra conserva la suya, al llegar y cuando el perfil cambia; y borrar la
+     * via del poste baja a los dos con el.
+     */
+    @Test
+    void twoDisconnectorsOnOnePoleAreTwoAssetsAndEachKeepsWhatIsItsOwn() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long poleTrackId = System.nanoTime();
+        long switchedTrackId = poleTrackId + 1;
+        long movedTrackId = poleTrackId + 2;
+        long profileId = poleTrackId + 7;
+        String plain = "d-two-plain-" + poleTrackId;
+        String own = "d-two-own-" + poleTrackId;
+
+        // Llegan despues de su perfil: los dos leen de el su paquete (inherit), y el de la via del poste, su via.
+        dispatcher.handle(trackProfileMessage(profileId, poleTrackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(1L));
+        dispatcher.handle(withValue(disconnectorMessage(plain, profileId), "name", "NAT-NS3"), new MasterDataEventContext(1L));
+        dispatcher.handle(withValue(withTrack(disconnectorMessage(own, profileId), switchedTrackId), "name", "NAT-NS4"),
+                new MasterDataEventContext(1L));
+        entityManager.clear();
+        CatenaryAsset first = asset(plain);
+        CatenaryAsset second = asset(own);
+        assertNotEquals(first.getId(), second.getId());
+        assertNotEquals(first.getCode(), second.getCode());
+        assertEquals(String.valueOf(profileId), first.getProfileSourceId());
+        assertEquals(String.valueOf(profileId), second.getProfileSourceId());
+        assertEquals(0, first.getStartKp().compareTo(second.getStartKp()), "The kp of their pole, both");
+        assertEquals(poleTrackId, first.getTrackId());
+        assertFalse(first.isOwnTrack());
+        assertEquals(switchedTrackId, second.getTrackId());
+        assertTrue(second.isOwnTrack());
+        assertEquals(6L, first.getExecutionPackageId());
+        assertEquals(6L, second.getExecutionPackageId());
+
+        // El perfil cambia de via y de paquete: los dos lo reciben (propagate), cada uno con lo suyo.
+        dispatcher.handle(trackProfileMessage(profileId, movedTrackId, 7L, MasterDataOperation.UPDATED), new MasterDataEventContext(2L));
+        entityManager.clear();
+        assertEquals(movedTrackId, asset(plain).getTrackId());
+        assertEquals(7L, asset(plain).getExecutionPackageId());
+        assertEquals(switchedTrackId, asset(own).getTrackId());
+        assertEquals(7L, asset(own).getExecutionPackageId());
+
+        // Borrar la via del poste baja el poste y los dos (deactivateByTrack), tambien el que tiene otra via.
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.TRACK, String.valueOf(movedTrackId), MasterDataOperation.DELETED,
+                Map.of("id", movedTrackId)), new MasterDataEventContext(3L));
+        entityManager.clear();
+        assertFalse(asset(String.valueOf(profileId)).getEnabled());
+        assertFalse(asset(plain).getEnabled());
+        assertFalse(asset(own).getEnabled());
+        assertEquals(3L, asset(own).getSourceSequenceNumber());
+    }
+
     @Test
     void aSectionInsulatorTakesThePackageOfTheProfilesOfItsTrackWhicheverArrivesFirst() {
         MasterDataEventHandler dispatcher = dispatcher();
@@ -780,6 +835,16 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
 
         assertEquals(InboxProcessingResult.PROCESSED, result);
         assertEquals(before, assetRepository.count());
+
+        // Un punto de acceso a la via (V28 de mto-configuration) es de mto-resources: se registra y no toca nada.
+        UUID accessId = UUID.randomUUID();
+        MasterDataChangedMessage accessPoint = message(accessId, MasterDataEntityNames.TRACK_ACCESS_POINT, "3", MasterDataOperation.CREATED,
+                Map.of("id", 3, "name", "PN-12", "track", Map.of("id", 12, "name", "TRACK 1", "executionPackageId", 6)));
+        assertEquals(InboxProcessingResult.PROCESSED, inbox.process(command(accessId, MasterDataEntityNames.TRACK_ACCESS_POINT, "3"),
+                () -> dispatcher.handle(accessPoint, new MasterDataEventContext(11L))));
+        entityManager.flush();
+        assertEquals(before, assetRepository.count());
+        assertEquals(9, MasterDataEntityNames.PUBLISHED_TODAY.size(), "What mto-configuration publishes today");
     }
 
     private CatenaryAsset asset(String sourceEntityId) {

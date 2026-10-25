@@ -246,11 +246,15 @@ class MaterialStockSynchronizer {
      * Reserva las lineas dadas contra el proyecto de stock de la orden, resuelto una vez y antes de
      * copiarlas: la copia lleva el proyecto. Si no se puede resolver, ninguna se reserva y todas lo
      * dicen. Devuelve el primer fallo, o null.
+     *
+     * <p>Con {@code together}, el plazo empieza antes de resolver el proyecto: es otra llamada a stock
+     * de la misma transicion, y lo que tarde se descuenta de lo que les queda a las lineas.</p>
      */
     private RuntimeException reserve(MaintenanceOrder order, List<MaintenanceMaterialUsage> lines, boolean together) {
         if (lines.isEmpty()) {
             return null;
         }
+        long startedAt = System.nanoTime();
         Optional<UUID> project;
         try {
             project = projectOf(order);
@@ -258,7 +262,7 @@ class MaterialStockSynchronizer {
             lines.forEach(line -> record(line, "resolve project", exception, LineState.of(line)));
             return exception;
         }
-        return converse(order, lines, "reserve", line -> hold(line, project), together);
+        return converse(order, lines, "reserve", line -> hold(line, project), together, startedAt);
     }
 
     /**
@@ -268,11 +272,17 @@ class MaterialStockSynchronizer {
      */
     private RuntimeException converse(MaintenanceOrder order, List<MaintenanceMaterialUsage> lines, String step, Consumer<StockLine> action,
                                       boolean together) {
+        return converse(order, lines, step, action, together, System.nanoTime());
+    }
+
+    /** Como el de arriba, con el plazo contado desde {@code startedAt} ({@link System#nanoTime()}). */
+    private RuntimeException converse(MaintenanceOrder order, List<MaintenanceMaterialUsage> lines, String step, Consumer<StockLine> action,
+                                      boolean together, long startedAt) {
         if (lines.isEmpty()) {
             return null;
         }
         if (together && deadline != null) {
-            return converseTogether(order, lines, step, action);
+            return converseTogether(order, lines, step, action, startedAt);
         }
         RuntimeException failure = null;
         for (MaintenanceMaterialUsage usage : lines) {
@@ -310,7 +320,7 @@ class MaterialStockSynchronizer {
      * programacion) se lanza despues de dejar las demas como contesto stock, como lo haria el bucle.</p>
      */
     private RuntimeException converseTogether(MaintenanceOrder order, List<MaintenanceMaterialUsage> lines, String step,
-                                              Consumer<StockLine> action) {
+                                              Consumer<StockLine> action, long startedAt) {
         Semaphore permits = new Semaphore(parallelism);
         List<Conversation> conversations = new ArrayList<>(lines.size());
         for (MaintenanceMaterialUsage usage : lines) {
@@ -319,7 +329,7 @@ class MaterialStockSynchronizer {
             executor.execute(() -> conversation.run(permits, action));
         }
 
-        long end = System.nanoTime() + deadline.toNanos();
+        long end = startedAt + deadline.toNanos();
         boolean interrupted = false;
         RuntimeException failure = null;
         RuntimeException unexpected = null;

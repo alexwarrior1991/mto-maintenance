@@ -42,7 +42,8 @@ no events out), `APP_OUTBOX_ENABLED=false` keeps writing the events and stops pu
 `APP_STOCK_ENABLED=false` starts without `mto-stock` (material lines stay `NOT_REQUESTED`),
 `APP_STOCK_SYNC_RETRY_ENABLED=false` stops retrying the material lines stock did not answer (`FAILED`)
 every `APP_STOCK_SYNC_RETRY_INTERVAL` (`PT5M`), `APP_STOCK_SYNC_IMMEDIATE_RETRY=false` leaves the lines
-an order transition could not settle within `APP_STOCK_SYNC_DEADLINE` (`15s`) to that round instead
+an order transition could not settle within `APP_STOCK_SYNC_DEADLINE` (`10s`, counted from before the
+order's stock project is resolved and kept below the gateway's 15 s read timeout) to that round instead
 of retrying them right after commit, `APP_RABBITMQ_RESOURCES_LISTENER_ENABLED=false` stops consuming
 `mto-resources` (its queue is still declared), `APP_RABBITMQ_QUEUES_TYPE=quorum` declares the two
 queues it consumes and their DLQs as quorum, for a RabbitMQ cluster as on OpenShift (`classic` by
@@ -54,7 +55,9 @@ packages of whoever writes.
 
 Sizing: Tomcat, the schedulers and the listeners run on virtual threads
 (`SPRING_THREADS_VIRTUAL_ENABLED`, `true`), so the limit of concurrency is the database pool,
-`DATABASE_POOL_MAX_SIZE` (`10`). `APP_OPERATIONS_MAX_ACTIVE` (`4`), the background
+`DATABASE_POOL_MAX_SIZE` (`10`); a request waits for a connection at most
+`DATABASE_POOL_CONNECTION_TIMEOUT` (`10000` ms, below the gateway's 15 s read timeout) and then gets a 503
+`APP-503`. `APP_OPERATIONS_MAX_ACTIVE` (`4`), the background
 operations alive at once in the whole deployment, each holding a connection while it runs, is chosen
 with it in view, and `APP_STOCK_SYNC_PARALLELISM` (`4`) is how many material lines of one order talk
 to `mto-stock` at once.

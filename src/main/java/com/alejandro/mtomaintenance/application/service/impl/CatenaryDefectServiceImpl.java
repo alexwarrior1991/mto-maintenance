@@ -67,6 +67,10 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
         CatenaryAsset asset = lookups.enabledAsset(request.assetId());
         scope.requireAsset(asset);
         MaintenanceOrder order = request.orderId() == null ? null : lookups.order(request.orderId());
+        if (order != null) {
+            // El defecto entra en esa orden: tambien ella tiene que estar en el ambito de quien escribe.
+            scope.requireOrder(order);
+        }
         if (order != null && order.isTerminal()) {
             throw new InvalidTransitionException("Order " + order.getCode() + " is " + order.getStatus() + " and cannot take new defects");
         }
@@ -224,6 +228,7 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
         CatenaryDefect defect = defect(id);
         scope.requireDefect(defect);
         MaintenanceOrder order = lookups.order(orderId);
+        scope.requireOrder(order);
         if (!DefectStateMachine.canLinkOrder(defect.getStatus())) {
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is " + defect.getStatus() + " and cannot be linked to an order");
         }

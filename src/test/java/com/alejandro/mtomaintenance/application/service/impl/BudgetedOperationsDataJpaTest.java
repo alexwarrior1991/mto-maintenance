@@ -151,6 +151,31 @@ class BudgetedOperationsDataJpaTest extends PostgreSQLTestContainer {
         assertEquals(new OperationError(409, "SHF-001", "Shift SH-000001 cannot take it"), failed.error());
     }
 
+    /**
+     * Sin espera ({@code wait=0}) y con el trabajo ya terminado al mirar (aqui corre en el mismo hilo): su
+     * resultado, o su fallo como el de la llamada sincrona; nunca un 500 por el fallo envuelto, ni un 200
+     * sin cuerpo.
+     */
+    @Test
+    void withoutWaitAnOperationAlreadyOverAnswersItsResultOrItsFailure() {
+        authenticateAs("planner");
+        OperationsProperties properties = new OperationsProperties(Duration.ofSeconds(5), Duration.ofSeconds(10), MAX_ACTIVE, null,
+                Duration.ofMinutes(1), Duration.ofMillis(20), Duration.ofMillis(100), null, 0, false);
+        BudgetedOperations inline = new BudgetedOperationsImpl(repository, new org.springframework.core.task.support.TaskExecutorAdapter(Runnable::run),
+                transactionManager, failure -> failure instanceof ShiftException
+                        ? new OperationError(409, "SHF-001", failure.getMessage())
+                        : new OperationError(500, "APP-500", failure.getMessage()),
+                new CurrentUserService(), properties, JsonMapper.builder().build(), new OperationScopeLocks());
+
+        BudgetedOperations.Outcome<String> done = inline.run("GENERATE_TASKS", null, 200, Duration.ZERO, () -> "ok");
+        assertTrue(done.completed());
+        assertEquals("ok", done.result());
+        ShiftException failed = assertThrows(ShiftException.class, () -> inline.run("GENERATE_TASKS", null, 200, Duration.ZERO, () -> {
+            throw new ShiftException("Shift SH-000002 cannot take it");
+        }));
+        assertEquals("Shift SH-000002 cannot take it", failed.getMessage());
+    }
+
     @Test
     void twoOperationsOfTheSamePackageDoNotRunAtOnceAndTheCapSaysTooMany() throws Exception {
         authenticateAs("planner");

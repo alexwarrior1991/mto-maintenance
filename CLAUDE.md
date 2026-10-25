@@ -52,7 +52,8 @@ cd ../mto-platform && docker compose --profile all up -d && ./keycloak/apply-par
 - Swagger UI: `http://localhost:8083/swagger-ui.html` (`dev` profile); OpenAPI JSON: `/v3/api-docs`.
 - Virtual threads are on (`SPRING_THREADS_VIRTUAL_ENABLED`, see `docs/01-architecture.md`, Threads):
   the limit is the connection pool (`DATABASE_POOL_MAX_SIZE`, 10), not the threads; `outbox-dispatch`
-  stays one platform thread on purpose.
+  stays one platform thread on purpose. A request waits at most `DATABASE_POOL_CONNECTION_TIMEOUT` (10000 ms,
+  below the gateway's 15 s) for a connection, and then it is 503 `APP-503`.
 - Profiles: `dev`, `test`, `prod`, selected via `SPRING_PROFILES_ACTIVE`. Local port is **8083**
   (`dev`); the container listens on 8080 and `mto-platform` publishes it on 8083.
 
@@ -128,8 +129,14 @@ order. `PreventiveTaskSelector` decides what fits and what is skipped (already i
 another package, open in another open preventive order, without a task type), `dryRun` previews it,
 and generations of one package queue twice: in one instance on a `ReentrantLock` per scope
 (`GenerationLocks`), waited for before the transaction opens, so without a connection; inside the
-transaction on the PostgreSQL advisory lock (`pg_advisory_xact_lock`, the one a task added by hand
-takes too), which is what holds between instances; with
+transaction on the PostgreSQL advisory locks, which is what holds between instances: one shared by
+every generation and taken exclusively by an order without a package (which may take assets of any),
+then the package's (`pg_advisory_xact_lock`, the one a task added by hand takes too), then one per
+asset without a package, after which the selection is repeated. A task added by hand follows the
+generation's rules too: no asset of another package, and in a preventive no asset with an open task
+in another open preventive order (400); an order with tasks of its package does not move to another.
+Every advisory key is the 64-bit `AdvisoryLockKeys.of(name)` (SHA-256), never a 32-bit `hashCode`; with
+
 `Prefer: respond-async` one that does not finish in time answers 202 with a background operation
 (`BudgetedOperations`, `GET /operations/{id}`, a deployment-wide cap, 429 `OPS-429`). Each task carries the
 `MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan, with standard
@@ -226,7 +233,11 @@ by default and `quorum` with `app.rabbitmq.queues.type`, as on OpenShift, with `
 on an existing queue is refused by the broker) through the same idempotent **inbox** as
 `mto-stock` (`inbox_message`, unique `(message_id, source_service)`). Four `MasterDataEntityHandler`s:
 `profile`, `disconnector`, `section-insulator` (upsert/deactivate assets) and `track` (`DELETED`
-only, deactivates every asset on the track). The other four entity names are logged and ignored.
+only, deactivates every asset on the track). The other five entity names (`execution-package`, `station`,
+`cantilever`, `steady-arm` and, since `V28` of `mto-configuration`, `track-access-point`, which
+`mto-resources` consumes) are logged and ignored. Since its `V29` a pole may carry several
+disconnectors: each is its own asset, and the profile event's `disconnectors` (and `disconnector`) are
+not read here.
 The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before touching
 `application/dto/messaging`.
 
@@ -297,7 +308,8 @@ already did instead of doing it twice. The line marks the request in doubt befor
 line's planned and consumed quantities and the order's stock project answer 409 `MAT-001`. The body
 must also come out the same: no timestamp, and the same notes whichever path reaches the direct
 output. `StockSyncRetryService` retries every `FAILED` line every 5 minutes (`StockSyncRetryConfiguration`,
-`app.stock.sync-retry.*`, off with stock off and in tests), stopping at the first one stock does not
+`app.stock.sync-retry.*`, off with stock off and in tests), leaving out those changed in the last minute
+(a line cut by a deadline may still have its call in the air), stopping at the first one stock does not
 answer and resuming after it: that settles a request in doubt while `mto-stock` still remembers its
 key (30 days). With several instances one round runs at a time: it holds a PostgreSQL advisory lock
 of **session** (`SessionAdvisoryLock`, one connection set aside outside any transaction, because each
@@ -308,7 +320,8 @@ with `app.stock.enabled=false`.
 
 An order transition (`reserveAll` on plan and start, `consumeAll`, `releaseAll`) talks to stock for
 all its lines at once, each on a virtual thread (at most `app.stock.sync.parallelism`, 4) under one
-deadline (`app.stock.sync.deadline`, 15 s). Each conversation runs on a `StockLine`, a copy that never
+deadline (`app.stock.sync.deadline`, 10 s, counted from before the order's stock project is resolved, so
+the transition stays below the gateway's 15 s read timeout). Each conversation runs on a `StockLine`, a copy that never
 touches the entity or the database; the transaction thread applies it back and publishes, in line
 order. A line not answered by the deadline is cut (`StockLine.cancel`: its thread sends nothing more
 to stock) and left `FAILED` with what it had in doubt, the order goes on, and after commit

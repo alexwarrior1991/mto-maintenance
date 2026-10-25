@@ -106,15 +106,26 @@ insulators, one on a disconnector only disconnectors.
   one that already has a task in the order, even cancelled, is skipped (`skippedAssets`,
   `skippedProfiles` for profiles, as before); and so is one with an open task (`PENDING` or
   `IN_PROGRESS`) in another preventive order that is not finished (`skippedInOtherOrders`,
-  `otherOrderCodes`). Generations in one package queue behind a PostgreSQL advisory lock (per
-  package, or per order without one), taken also by a task added by hand, so two at once never take
-  the same asset as free. In one instance a generation waits for its turn before opening its
+  `otherOrderCodes`). Generations in one package queue behind a PostgreSQL advisory lock per
+  package, taken also by a task added by hand, so two at once never take the same asset as free.
+  Before it every generation takes one lock shared by all of them, which an order without a package
+  takes exclusively: it may take assets of any package, so it waits for no other generation to be
+  running and the rest wait for it. An asset without a package (a hole of the master data) is not
+  skipped by package, so two generations of two packages could both take it: each locks it on its
+  own key, after the package's, and selects again to see what the other committed. Every key is the
+  64-bit `AdvisoryLockKeys.of(name)` (the first 8 bytes of its SHA-256), never `String.hashCode()`:
+  all the advisory locks of the database share one keyspace, and several are taken in key order. In one instance a generation waits for its turn before opening its
   transaction, on a `ReentrantLock` per scope (`GenerationLocks`), so without a connection taken, and
   opens it once the previous one has committed, reading the order as it was left. Inside the
   transaction it takes the advisory lock (`pg_advisory_xact_lock`), already free in that instance:
   that is what keeps two instances apart, and a generation waiting for another instance waits there,
   with its connection. A task added by hand waits on the same lock inside its transaction: it is one
   row, not a package. A preview takes neither.
+- **A task added by hand follows the same rules** (`POST /orders/{id}/tasks`): an asset of another
+  package than the order is a 400 (an order is of one package), and in a preventive order so is an
+  asset with an open task in another open preventive order (it would be done twice). A corrective or
+  an inspection takes any asset. And an order holding tasks (not cancelled) on assets of its package
+  does not move to another package (`PATCH`, 400 on `executionPackageId`).
 - **`Prefer: respond-async`** turns a generation that does not finish in time into a background
   operation (202, see [Background operations](#background-operations)); without the header, or with
   `dryRun`, it stays synchronous.
@@ -323,9 +334,9 @@ What is checked, at the start of every write of the services (create, `PUT`/`PAT
 | Resource | Its package |
 |---|---|
 | Order, and its tasks, check items and material lines | the order's `executionPackageId`; a change of package is checked on the old and on the new one |
-| Inspection, defect | the package of its asset (copied when created) |
+| Inspection, defect | the package of its asset (copied when created); the order it is linked to (a defect's `orderId` or `link-order`, an inspection's `originOrderId`) is checked too |
 | Asset | its own; a change of package too |
-| Shift | its `executionPackageId`; without one, its team must be one of the person's teams. Assigning or unassigning a task checks the shift and the task's order |
+| Shift | its `executionPackageId`; without one, its team must be one of the person's teams. Assigning, unassigning, starting or completing a task checks the shift it is bound to and the task's order |
 
 Something without a package is only written by who has no limit (save that shift of one's own team).
 Local teams are not limited. Out of scope is 403 `SCP-403`, whose message says which package it is and
@@ -422,7 +433,11 @@ without an answer in `stockRequestInDoubt` (`RESERVATION` or `OUTPUT`) until sto
 - Stock remembers a key for 30 days (`app.idempotency.retention` there). `FAILED` lines are retried on
   their own every 5 minutes (`app.stock.sync-retry.*`, `StockSyncRetryService`), exactly like a
   `sync`, so a request in doubt is settled within minutes of stock answering again; each round stops
-  at the first line stock still does not answer, and the next one carries on after it. With several
+  at the first line stock still does not answer, and the next one carries on after it. A round leaves
+  out the lines changed in the last minute (`QUIET_PERIOD`): a line cut by a transition's deadline may
+  still have its consume or release in the air, here or in another replica, and its deferred retry
+  waits up to 30 s for it; repeating it meanwhile would get it refused by stock and leave the line
+  `REJECTED` without being so. The next round takes them. With several
   instances the round runs in one of them: it holds a PostgreSQL advisory lock of session for its
   whole length (`SessionAdvisoryLock`: a connection of its own, outside any transaction, since each
   line goes in its own), and the others skip it. Two instances retrying the same line would still be
@@ -441,13 +456,16 @@ doubt: nobody knows which request failed.
 An order transition talks to stock for all its lines at once: `plan` and `start` reserve
 (`reserveAll`), `complete` consumes (`consumeAll`), `cancel` releases (`releaseAll`). Each line's
 conversation runs on a virtual thread, at most `app.stock.sync.parallelism` (4) at a time, under one
-deadline for all of them, `app.stock.sync.deadline` (15 s): four slow lines take the time of one.
+deadline for all of them, `app.stock.sync.deadline` (10 s): four slow lines take the time of one. The
+deadline starts before the order's stock project is resolved (`findProjectIdByCode` is a stock call of
+the same transition), so the whole conversation stays below the gateway's 15 s read timeout with room
+for the transaction; a longer one would make the gateway answer 504 while the transition commits.
 
 - A conversation works on a detached copy of its line (`StockLine`), never on the entity nor the
   database (the Hibernate session is not that thread's, and a lazy proxy would go to the database from
   it). The transaction thread waits, applies each copy back to its line and publishes the
   `material.*` events, in the order of the lines. The order's stock project is resolved once, before
-  copying.
+  copying, inside the deadline.
 - A line not finished at the deadline is cut: it is left `FAILED` with whatever it knew, its request
   in doubt included (`deferred: mto-stock did not answer within …`), and the order changes state
   without waiting for it (`complete` refuses it like any `FAILED` line, 409 `MAT-001` unless `force`,
