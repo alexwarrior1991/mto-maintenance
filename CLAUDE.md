@@ -303,7 +303,8 @@ already did instead of doing it twice. The line marks the request in doubt befor
 line's planned and consumed quantities and the order's stock project answer 409 `MAT-001`. The body
 must also come out the same: no timestamp, and the same notes whichever path reaches the direct
 output. `StockSyncRetryService` retries every `FAILED` line every 5 minutes (`StockSyncRetryConfiguration`,
-`app.stock.sync-retry.*`, off with stock off and in tests), stopping at the first one stock does not
+`app.stock.sync-retry.*`, off with stock off and in tests), leaving out those changed in the last minute
+(a line cut by a deadline may still have its call in the air), stopping at the first one stock does not
 answer and resuming after it: that settles a request in doubt while `mto-stock` still remembers its
 key (30 days). With several instances one round runs at a time: it holds a PostgreSQL advisory lock
 of **session** (`SessionAdvisoryLock`, one connection set aside outside any transaction, because each

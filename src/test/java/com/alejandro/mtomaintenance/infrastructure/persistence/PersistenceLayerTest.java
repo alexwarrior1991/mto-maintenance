@@ -845,6 +845,14 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 .toList();
 
         assertEquals(List.of(failed.getId()), refs.stream().map(LineRef::getId).toList());
+        // La vuelta periodica no coge la que acaba de cambiar (una linea cortada por su plazo): un minuto despues, si.
+        java.util.function.Function<Instant, List<UUID>> unchangedSince = before -> materialRepository
+                .findRefsByStockSyncStatusUnchangedSince(StockSyncStatus.FAILED, before).stream()
+                .filter(ref -> ref.getOrderId().equals(order.getId()))
+                .map(LineRef::getId)
+                .toList();
+        assertEquals(List.of(), unchangedSince.apply(Instant.now().minus(1, ChronoUnit.MINUTES)));
+        assertEquals(List.of(failed.getId()), unchangedSince.apply(Instant.now().plus(1, ChronoUnit.MINUTES)));
         assertEquals(StockRequestType.RESERVATION, materialRepository.findById(failed.getId()).orElseThrow().getStockRequestInDoubt());
         assertNull(materialRepository.findById(reserved.getId()).orElseThrow().getStockRequestInDoubt());
     }

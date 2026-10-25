@@ -14,6 +14,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -42,6 +44,16 @@ class StockSyncRetryServiceImpl implements StockSyncRetryService {
     /** Clave del cerrojo de aviso, propia de esta vuelta; cualquier otro trabajo usa otra. */
     static final long LOCK_KEY = AdvisoryLockKeys.of("mto-maintenance:stock-sync-retry");
 
+    /**
+     * Lo que una linea FAILED tiene que llevar sin cambiar para que la vuelta la coja. Una transicion
+     * que corta una linea por su plazo la deja FAILED con su llamada a stock quiza aun en el aire (como
+     * mucho el read-timeout de stock, 10 s), y su reintento diferido la espera hasta 30 s antes de
+     * repetirla. Si la vuelta la cogiera entre medias, repetiria un consumo o una liberacion que sigue
+     * en curso, stock rechazaria la segunda y la linea quedaria REJECTED sin serlo. Un minuto los cubre;
+     * lo que se salta lo coge la vuelta siguiente.
+     */
+    static final Duration QUIET_PERIOD = Duration.ofMinutes(1);
+
     private final MaintenanceMaterialUsageRepository repository;
     private final MaintenanceMaterialUsageService materialUsageService;
     private final SessionAdvisoryLock lock;
@@ -64,7 +76,8 @@ class StockSyncRetryServiceImpl implements StockSyncRetryService {
     }
 
     private int retryFailedLinesHoldingTheLock() {
-        List<LineRef> failed = new ArrayList<>(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED));
+        List<LineRef> failed = new ArrayList<>(repository.findRefsByStockSyncStatusUnchangedSince(StockSyncStatus.FAILED,
+                Instant.now().minus(QUIET_PERIOD)));
         if (failed.isEmpty()) {
             return 0;
         }

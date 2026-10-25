@@ -2685,6 +2685,12 @@ class BusinessLayerTest {
         assertThrows(ScopeException.class, () -> tasks.service.generatePreventiveTasks(preventive.getId(),
                 new GeneratePreventiveTasksRequest(null, null, null, null, null)));
         verify(tasks.repository, never()).save(any());
+        // Con respond-async, el ambito de la operacion de fondo ya lo dice antes de encolarla: 403, no un FAILED.
+        assertThrows(ScopeException.class, () -> tasks.service.generationScope(preventive.getId()));
+        verify(tasks.generationLocks, never()).withLock(anyString(), any());
+        MaintenanceOrder corrective = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
+        when(tasks.lookups.order(corrective.getId())).thenReturn(corrective);
+        assertThrows(InvalidTransitionException.class, () -> tasks.service.generationScope(corrective.getId()));
     }
 
     @Test
@@ -4086,7 +4092,7 @@ class BusinessLayerTest {
         StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, freeLock());
         UUID orderId = UUID.randomUUID();
         List<UUID> ids = Stream.generate(UUID::randomUUID).limit(5).sorted().toList();
-        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+        when(repository.findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), any()))
                 .thenReturn(ids.stream().map(id -> lineRef(orderId, id)).toList());
         when(materials.sync(orderId, ids.get(0))).thenReturn(usageResponse(StockSyncStatus.RESERVED));
         when(materials.sync(orderId, ids.get(1)))
@@ -4098,6 +4104,11 @@ class BusinessLayerTest {
 
         verify(materials, times(4)).sync(any(), any());
         verify(materials, never()).sync(orderId, ids.get(4));
+        // Sin las que cambiaron en el ultimo minuto: una cortada por su plazo puede tener su llamada en el aire.
+        ArgumentCaptor<Instant> before = ArgumentCaptor.forClass(Instant.class);
+        verify(repository).findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), before.capture());
+        long secondsAgo = Duration.between(before.getValue(), Instant.now()).toSeconds();
+        assertTrue(secondsAgo >= 59 && secondsAgo <= 61, "About a minute ago: " + secondsAgo);
     }
 
     /**
@@ -4111,7 +4122,7 @@ class BusinessLayerTest {
         StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, freeLock());
         UUID orderId = UUID.randomUUID();
         List<UUID> ids = Stream.generate(UUID::randomUUID).limit(3).sorted().toList();
-        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+        when(repository.findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), any()))
                 .thenReturn(ids.stream().map(id -> lineRef(orderId, id)).toList());
         when(materials.sync(orderId, ids.get(0))).thenThrow(new StockUnavailableException("mto-stock answered 500"));
         when(materials.sync(orderId, ids.get(1))).thenReturn(usageResponse(StockSyncStatus.CONSUMED));
@@ -4125,7 +4136,7 @@ class BusinessLayerTest {
         order.verify(materials).sync(orderId, ids.get(1));
         order.verify(materials).sync(orderId, ids.get(2));
         order.verify(materials).sync(orderId, ids.get(0));
-        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED)).thenReturn(List.of());
+        when(repository.findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), any())).thenReturn(List.of());
         assertEquals(0, retry.retryFailedLines());
     }
 
@@ -4140,13 +4151,13 @@ class BusinessLayerTest {
         SessionAdvisoryLock heldElsewhere = mock(SessionAdvisoryLock.class);
         when(heldElsewhere.runIfFree(anyLong(), any())).thenReturn(false);
         StockSyncRetryServiceImpl retry = new StockSyncRetryServiceImpl(repository, materials, heldElsewhere);
-        when(repository.findRefsByStockSyncStatus(StockSyncStatus.FAILED))
+        when(repository.findRefsByStockSyncStatusUnchangedSince(eq(StockSyncStatus.FAILED), any()))
                 .thenReturn(List.of(lineRef(UUID.randomUUID(), UUID.randomUUID())));
 
         assertEquals(0, retry.retryFailedLines());
 
         verify(heldElsewhere).runIfFree(eq(StockSyncRetryServiceImpl.LOCK_KEY), any());
-        verify(repository, never()).findRefsByStockSyncStatus(any());
+        verify(repository, never()).findRefsByStockSyncStatusUnchangedSince(any(), any());
         verify(materials, never()).sync(any(), any());
         assertNotEquals(PreventiveDueSoonServiceImpl.LOCK_KEY, StockSyncRetryServiceImpl.LOCK_KEY);
     }

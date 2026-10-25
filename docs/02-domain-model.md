@@ -433,7 +433,11 @@ without an answer in `stockRequestInDoubt` (`RESERVATION` or `OUTPUT`) until sto
 - Stock remembers a key for 30 days (`app.idempotency.retention` there). `FAILED` lines are retried on
   their own every 5 minutes (`app.stock.sync-retry.*`, `StockSyncRetryService`), exactly like a
   `sync`, so a request in doubt is settled within minutes of stock answering again; each round stops
-  at the first line stock still does not answer, and the next one carries on after it. With several
+  at the first line stock still does not answer, and the next one carries on after it. A round leaves
+  out the lines changed in the last minute (`QUIET_PERIOD`): a line cut by a transition's deadline may
+  still have its consume or release in the air, here or in another replica, and its deferred retry
+  waits up to 30 s for it; repeating it meanwhile would get it refused by stock and leave the line
+  `REJECTED` without being so. The next round takes them. With several
   instances the round runs in one of them: it holds a PostgreSQL advisory lock of session for its
   whole length (`SessionAdvisoryLock`: a connection of its own, outside any transaction, since each
   line goes in its own), and the others skip it. Two instances retrying the same line would still be

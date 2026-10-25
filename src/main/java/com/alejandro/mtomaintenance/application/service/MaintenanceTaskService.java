@@ -33,7 +33,9 @@ public interface MaintenanceTaskService {
 
     /**
      * El ambito en el que las generaciones de una orden hacen fila: su EP ({@code EP-14}) o, sin EP, la
-     * propia orden. Es el {@code scope} de la operacion de fondo cuando se pide {@code respond-async}.
+     * propia orden. Es el {@code scope} de la operacion de fondo cuando se pide {@code respond-async}, y
+     * antes de darlo comprueba lo que ya se puede decir (que la orden genera y que esta en el ambito de
+     * quien escribe): lo que va a fallar no se encola.
      */
     String generationScope(UUID orderId);
 

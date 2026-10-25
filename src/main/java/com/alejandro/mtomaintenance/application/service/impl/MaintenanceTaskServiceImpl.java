@@ -223,21 +223,34 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         return generationLocks.withLock(generationScope(orderId), () -> transactions.execute(status -> generate(orderId, request)));
     }
 
+    /**
+     * Antes de esperar el turno, y antes de encolar una operacion de fondo con {@code respond-async}: lo
+     * que ya se puede decir de la orden (su tipo, su estado y el ambito de quien escribe) se dice aqui, con
+     * su 409 o su 403, en vez de ocupar un turno o un hueco de {@code app.operations.max-active} para
+     * acabar FAILED. Dentro de la transaccion se vuelve a mirar: puede haber cambiado mientras esperaba.
+     */
     @Override
     @Transactional(readOnly = true)
     public String generationScope(UUID orderId) {
-        return generationScope(lookups.order(orderId));
+        MaintenanceOrder order = lookups.order(orderId);
+        requireGenerates(order);
+        scope.requireOrder(order);
+        return generationScope(order);
     }
 
-    /** La generacion (o su previsualizacion), dentro de su transaccion. */
-    private GeneratePreventiveTasksResponse generate(UUID orderId, GeneratePreventiveTasksRequest request) {
-        MaintenanceOrder order = lookups.order(orderId);
+    private static void requireGenerates(MaintenanceOrder order) {
         if (order.getType() != MaintenanceOrderType.PREVENTIVE) {
             throw new InvalidTransitionException("Only preventive orders generate profile tasks; " + order.getCode() + " is " + order.getType());
         }
         if (order.getStatus() != MaintenanceOrderStatus.DRAFT && order.getStatus() != MaintenanceOrderStatus.PLANNED) {
             throw new InvalidTransitionException("Order " + order.getCode() + " is " + order.getStatus() + "; tasks are generated in DRAFT or PLANNED");
         }
+    }
+
+    /** La generacion (o su previsualizacion), dentro de su transaccion. */
+    private GeneratePreventiveTasksResponse generate(UUID orderId, GeneratePreventiveTasksRequest request) {
+        MaintenanceOrder order = lookups.order(orderId);
+        requireGenerates(order);
         boolean dryRun = request.previewOnly();
         if (!dryRun) {
             scope.requireOrder(order);
