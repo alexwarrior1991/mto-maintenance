@@ -51,7 +51,9 @@ import java.util.List;
                 @Index(name = "idx_catenary_asset_track_kp", columnList = "track_id, start_kp"),
                 @Index(name = "idx_catenary_asset_type_enabled", columnList = "type, enabled"),
                 @Index(name = "idx_catenary_asset_execution_package", columnList = "execution_package_id"),
-                @Index(name = "idx_catenary_asset_station", columnList = "station_id")
+                @Index(name = "idx_catenary_asset_station", columnList = "station_id"),
+                // Los seccionadores de un poste (V25): un poste admite varios.
+                @Index(name = "idx_catenary_asset_profile_source", columnList = "source_service, profile_source_id")
         }
 )
 @Getter

@@ -61,7 +61,13 @@ transaction; `recordFailure` runs in its own after it. A message without `data`,
 | `disconnector` | `DisconnectorMasterDataHandler` | Upsert `DISCONNECTOR` (`DSC-<id>`, `station.id` or none; on a pole `profile.id` and `profile.kp`, and `track.id` when it switches another track than its pole's; without one its own `kp` and `track.id`; `connectedTrack.id` either way; `driveType` `MOTOR`/`MANUAL`, anything else stored as nothing; `disconnectorFunction.code` as it comes, trimmed, blank stored as nothing), then takes the package from its profile, and the track too unless it brought its own, or without a pole the package of its track / deactivate |
 | `section-insulator` | `SectionInsulatorMasterDataHandler` | Upsert `SECTION_INSULATOR` (`SIN-<id>`, `station.id`, `enabled`, `installationType`, `track.id`, `connectedTrack.id`, kp range) **plus its `switches[]` into `catenary_asset_switch`**, then takes the package of the profiles of its track / deactivate |
 | `track` | `TrackMasterDataHandler` | `DELETED` only: `deactivateByTrack(trackId)` |
-| `execution-package`, `station`, `cantilever`, `steady-arm` | none | logged and ignored |
+| `execution-package`, `station`, `cantilever`, `steady-arm`, `track-access-point` (`V28` of `mto-configuration`, for `mto-resources`) | none | logged and ignored |
+
+A pole may carry several disconnectors since `V29` of `mto-configuration` (few, usually two): each is
+its own asset with its own `DSC-<id>`, `profile_source_id` is not unique and never was, and the profile
+event passes its track and package on to all of them in one statement (`V25` indexes
+`(source_service, profile_source_id)` for it). The `disconnectors` list that event gained, like the
+single `disconnector` before it, is not read here: each disconnector comes by its own event.
 
 Upserts and deactivations are native SQL in `CatenaryAssetRepository` with the `sequenceNumber`
 watermark compared inside the `WHERE`: an older event returns 0 rows and is discarded; a missing
@@ -144,8 +150,10 @@ the asset's own flag.
 
 `start_kp`/`end_kp` are the **minimum and maximum** of the insulator's own kp and its turnouts',
 sorted, so `chk_catenary_asset_kp_range` can never fire and the insulator shows up in `?kpFrom/kpTo`.
-It gets no task from `POST /orders/{id}/tasks/generate`, which only creates one per `PROFILE`: an
-insulator is checked with its own inspection or corrective order.
+It gets its own task from `POST /orders/{id}/tasks/generate` when `SECTION_INSULATOR` is among the
+`assetTypes` or a selection's type (`RG-03` and `RP-02`, plus `RG-04` and `RP-03` when it has
+turnouts), on its own track or on the one it connects with; without them a generation still creates
+one per `PROFILE` only, as before. It can also be checked with its own inspection or corrective order.
 
 The block is replaced whole after an applied upsert: the emitter always sends the complete list, so
 what arrives is the final state. Two things follow from the order of operations, and both are

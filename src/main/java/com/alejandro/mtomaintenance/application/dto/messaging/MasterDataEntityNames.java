@@ -42,10 +42,16 @@ public final class MasterDataEntityNames {
     /** Aislador de sección. */
     public static final String SECTION_INSULATOR = "section-insulator";
 
+    /**
+     * Punto de acceso a la vía ({@code V28} de mto-configuration): por donde encarrila un vehículo. Lo
+     * consume mto-resources; aquí no se atiende.
+     */
+    public static final String TRACK_ACCESS_POINT = "track-access-point";
+
     /** Solo para documentación y tests; el despachador no la usa para filtrar. */
     public static final Set<String> PUBLISHED_TODAY = Set.of(
             EXECUTION_PACKAGE, STATION, TRACK, PROFILE,
-            CANTILEVER, STEADY_ARM, DISCONNECTOR, SECTION_INSULATOR);
+            CANTILEVER, STEADY_ARM, DISCONNECTOR, SECTION_INSULATOR, TRACK_ACCESS_POINT);
 
     private MasterDataEntityNames() {
     }

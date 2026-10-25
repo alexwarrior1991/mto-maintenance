@@ -233,7 +233,11 @@ by default and `quorum` with `app.rabbitmq.queues.type`, as on OpenShift, with `
 on an existing queue is refused by the broker) through the same idempotent **inbox** as
 `mto-stock` (`inbox_message`, unique `(message_id, source_service)`). Four `MasterDataEntityHandler`s:
 `profile`, `disconnector`, `section-insulator` (upsert/deactivate assets) and `track` (`DELETED`
-only, deactivates every asset on the track). The other four entity names are logged and ignored.
+only, deactivates every asset on the track). The other five entity names (`execution-package`, `station`,
+`cantilever`, `steady-arm` and, since `V28` of `mto-configuration`, `track-access-point`, which
+`mto-resources` consumes) are logged and ignored. Since its `V29` a pole may carry several
+disconnectors: each is its own asset, and the profile event's `disconnectors` (and `disconnector`) are
+not read here.
 The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before touching
 `application/dto/messaging`.
 

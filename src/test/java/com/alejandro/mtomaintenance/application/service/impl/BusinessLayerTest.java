@@ -875,6 +875,53 @@ class BusinessLayerTest {
         assertTrue(tasks.stream().allMatch(MaintenanceTask::requiresFullPossession), "RP-07 waits for a FULL shift");
     }
 
+    /**
+     * Un poste puede llevar dos seccionadores (V29 de mto-configuration): cada uno es su activo y su
+     * tarea, en el kp del poste, por codigo. El que maniobra otra via que la del poste (own_track) se
+     * trabaja desde un turno de su via, o de la que une con ella; no desde uno de la via del poste.
+     */
+    @Test
+    void twoDisconnectorsOnOnePoleGetATaskEachAndOneThatSwitchesAnotherTrackIsWorkedFromItsOwn() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        CatenaryAsset onThePole = disconnectorAt("NAT-NS3", 2L, "12900.000", DisconnectorDriveType.MANUAL);
+        onThePole.setProfileSourceId("P-68-2.05");
+        // Del mismo poste, une su via (la del poste) con la 3.
+        CatenaryAsset joining = disconnectorAt("NAT-NS4", 3L, "12900.000", DisconnectorDriveType.MANUAL);
+        joining.setProfileSourceId("P-68-2.05");
+        joining.setOwnTrack(true);
+        joining.setConnectedTrackId(2L);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledByTypeTouchingSection(eq(CatenaryAssetType.DISCONNECTOR), eq(2L), any(), any()))
+                .thenReturn(List.of(joining, onThePole));
+        when(fixture.lookups.taskTypes(any())).thenAnswer(call -> fullPossessionTypesOf(call.<Collection<String>>getArgument(0).toArray(String[]::new)));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(null, null, List.of(CatenaryAssetType.DISCONNECTOR), null, null));
+
+        assertEquals(2, response.createdTasks());
+        assertEquals(List.of(onThePole, joining), order.getTasks().stream().map(MaintenanceTask::getAsset).toList(),
+                "Same kp, so by code");
+
+        // Uno que maniobra la via 3 desde un poste de la 2, sin unirlas: su turno es el de la 3.
+        MaintenanceOrder inProgress = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        CatenaryAsset switching = disconnectorAt("NAT-NS5", 3L, "12900.000", DisconnectorDriveType.MANUAL);
+        switching.setProfileSourceId("P-68-2.05");
+        switching.setOwnTrack(true);
+        MaintenanceTask task = task(inProgress, MaintenanceTaskStatus.PENDING);
+        task.setAsset(switching);
+        when(fixture.lookups.order(inProgress.getId())).thenReturn(inProgress);
+        when(fixture.repository.findByIdAndOrderId(task.getId(), inProgress.getId())).thenReturn(Optional.of(task));
+        MaintenanceShift poleTrack = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        MaintenanceShift ownTrack = shift(3L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        when(fixture.lookups.shift(poleTrack.getId())).thenReturn(poleTrack);
+        when(fixture.lookups.shift(ownTrack.getId())).thenReturn(ownTrack);
+        assertThrows(ShiftException.class, () -> fixture.service.complete(inProgress.getId(), task.getId(), complete(poleTrack.getId(), List.of("RP-07"))));
+        fixture.service.complete(inProgress.getId(), task.getId(), complete(ownTrack.getId(), List.of("RP-07")));
+        assertEquals(MaintenanceTaskStatus.COMPLETED, task.getStatus());
+    }
+
     @Test
     void anOrderMixesProfilesOfAnotherSectionInsulatorsOfAnotherTrackAndTheDisconnectorsOfItsPackage() {
         TaskFixture fixture = new TaskFixture();

@@ -362,12 +362,23 @@ The JPA entities map the two `jsonb` columns as typed lists (`@JdbcTypeCode(SqlT
   (`vehicle.*.type.capabilities`, names of `mto-resources` such as `INSULATED_PLATFORM` or `EARTHING`),
   read for the equipment a task type requires. A row written before `V24` has none until the next event
   (republish `mto-resources`).
-- `maintenance_team.chief_supervisor_person_id uuid` (no FK, like the leader and the supervisor): the
-  chief supervisor of a synchronized team, for the scope by execution package.
+- `maintenance_team.chief_supervisor_person_id uuid`, **without** an FK, unlike the leader and the
+  supervisor (`V19` gave those two theirs, `on delete restrict`; the comment of `V24`, which cannot be
+  edited, says otherwise): the chief supervisor of a synchronized team, for the scope by execution
+  package.
 - `maintenance_task_type.version bigint NOT NULL DEFAULT 0` (the optimistic lock of its `PATCH`) and
   `maintenance_task_type_equipment (task_type_id, equipment)`, PK both, `CHECK equipment IN
   ('INSULATED_PLATFORM', 'EARTHING')`, cascade from the type. Nothing is seeded. None of them is audited:
   the snapshots are written with native SQL and the task types are a catalogue.
+## Disconnectors of a pole (`V25`)
+
+`idx_catenary_asset_profile_source` on `catenary_asset (source_service, profile_source_id)`: the
+disconnectors of a pole, which the profile event updates in one statement
+(`propagateLocationToDisconnectors`), a disconnector reads from its profile
+(`inheritLocationOfDisconnector`) and a track deletion takes down (`deactivateByTrack`). Since `V29` of
+`mto-configuration` a pole may carry several; `profile_source_id` was never unique here, so nothing else
+changes.
+
 ## Auditing (`V4`)
 
 `audit_revision` (custom revision entity: instant, username, user id, source) and the `_aud`
