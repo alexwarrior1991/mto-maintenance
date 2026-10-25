@@ -55,7 +55,9 @@ packages of whoever writes.
 
 Sizing: Tomcat, the schedulers and the listeners run on virtual threads
 (`SPRING_THREADS_VIRTUAL_ENABLED`, `true`), so the limit of concurrency is the database pool,
-`DATABASE_POOL_MAX_SIZE` (`10`). `APP_OPERATIONS_MAX_ACTIVE` (`4`), the background
+`DATABASE_POOL_MAX_SIZE` (`10`); a request waits for a connection at most
+`DATABASE_POOL_CONNECTION_TIMEOUT` (`10000` ms, below the gateway's 15 s read timeout) and then gets a 503
+`APP-503`. `APP_OPERATIONS_MAX_ACTIVE` (`4`), the background
 operations alive at once in the whole deployment, each holding a connection while it runs, is chosen
 with it in view, and `APP_STOCK_SYNC_PARALLELISM` (`4`) is how many material lines of one order talk
 to `mto-stock` at once.

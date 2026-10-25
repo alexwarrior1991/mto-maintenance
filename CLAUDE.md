@@ -52,7 +52,8 @@ cd ../mto-platform && docker compose --profile all up -d && ./keycloak/apply-par
 - Swagger UI: `http://localhost:8083/swagger-ui.html` (`dev` profile); OpenAPI JSON: `/v3/api-docs`.
 - Virtual threads are on (`SPRING_THREADS_VIRTUAL_ENABLED`, see `docs/01-architecture.md`, Threads):
   the limit is the connection pool (`DATABASE_POOL_MAX_SIZE`, 10), not the threads; `outbox-dispatch`
-  stays one platform thread on purpose.
+  stays one platform thread on purpose. A request waits at most `DATABASE_POOL_CONNECTION_TIMEOUT` (10000 ms,
+  below the gateway's 15 s) for a connection, and then it is 503 `APP-503`.
 - Profiles: `dev`, `test`, `prod`, selected via `SPRING_PROFILES_ACTIVE`. Local port is **8083**
   (`dev`); the container listens on 8080 and `mto-platform` publishes it on 8083.
 

@@ -23,12 +23,14 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.core.PropertyReferenceException;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
@@ -133,6 +135,21 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(StockRejectedException.class)
     public ResponseEntity<ApiErrorResponse> handleStockRejected(StockRejectedException exception, HttpServletRequest request) {
         return businessResponse(exception, exception.isInsufficientStock() ? HttpStatus.CONFLICT : HttpStatus.UNPROCESSABLE_CONTENT, request);
+    }
+
+    /**
+     * 503 APP-503 con {@code Retry-After}: el pool no dio una conexion a tiempo
+     * ({@code spring.datasource.hikari.connection-timeout}, por debajo del read-timeout del gateway) o la
+     * base no responde. Es transitorio, y el cliente lo ve en vez del 504 del gateway con la peticion
+     * todavia esperando detras.
+     */
+    @ExceptionHandler({CannotCreateTransactionException.class, DataAccessResourceFailureException.class})
+    public ResponseEntity<ApiErrorResponse> handleDatabaseUnavailable(Exception exception, HttpServletRequest request) {
+        LOGGER.warn("Database unavailable for {} {}: {}", request.getMethod(), request.getRequestURI(), exception.toString());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", "1")
+                .body(errorResponse(HttpStatus.SERVICE_UNAVAILABLE, "The database did not answer in time; try again in a moment",
+                        "APP-503", List.of(), request));
     }
 
     /**

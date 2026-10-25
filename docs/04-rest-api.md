@@ -398,6 +398,7 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 422 `STK-422` | `mto-stock` rejected the step for another reason (a material or warehouse retired, a reservation no longer active...), on an explicit `sync` or when removing a reserved line; its code and message are in `message` |
 | 429 `OPS-429` + `Retry-After` | As many background operations live as the deployment admits (`app.operations.max-active`): try again in the seconds `Retry-After` says |
 | 503 `STK-503` | `mto-stock` unreachable on an explicit `sync`, or when removing a reserved line (the line stays) |
+| 503 `APP-503` + `Retry-After` | No database connection was free within `spring.datasource.hikari.connection-timeout` (`DATABASE_POOL_CONNECTION_TIMEOUT`, 10000 ms, below the gateway's 15 s read timeout), or the database does not answer: transient, nothing was written |
 
 ## Security
 

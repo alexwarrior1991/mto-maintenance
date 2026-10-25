@@ -19,9 +19,13 @@ spring:
   # El PostgreSQL de mto-platform es uno para todos los servicios (max_connections 100 por defecto),
   # asi que la suma de los pools de todas las instancias tiene que quedar por debajo. Cada operacion de
   # fondo en marcha retiene una de estas conexiones: app.operations.max-active se elige con el a la vista.
+  # La espera de una conexion queda por debajo del read-timeout del gateway (15 s): con la de Hikari por
+  # defecto (30 s), una peticion encolada en el pool seguia esperando, y confirmando, despues de que el
+  # gateway hubiera respondido 504. Pasado el plazo es un 503 que el cliente si ve.
   datasource:
     hikari:
       maximum-pool-size: ${DATABASE_POOL_MAX_SIZE:10}
+      connection-timeout: ${DATABASE_POOL_CONNECTION_TIMEOUT:10000}
   # La API es un resource server: no emite tokens ni guarda usuarios, solo valida los que emite
   # Keycloak. El JWK Set se descarga de forma perezosa, con lo que un Keycloak que aun no responde
   # no impide arrancar.

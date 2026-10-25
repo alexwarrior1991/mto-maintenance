@@ -81,6 +81,13 @@ class GlobalExceptionHandlerTest {
 
         assertEquals("INS-001", codeOf(handler.handleInspection(new InspectionException("no"), request), HttpStatus.UNPROCESSABLE_CONTENT));
         assertEquals("STK-503", codeOf(handler.handleStockUnavailable(new StockUnavailableException("down"), request), HttpStatus.SERVICE_UNAVAILABLE));
+        // El pool sin conexion a tiempo (por debajo del gateway) es un 503 transitorio, no un 500.
+        ResponseEntity<ApiErrorResponse> pool = handler.handleDatabaseUnavailable(new org.springframework.transaction.CannotCreateTransactionException(
+                "Could not open JPA EntityManager for transaction", new java.sql.SQLTransientConnectionException("Connection is not available")), request);
+        assertEquals("APP-503", codeOf(pool, HttpStatus.SERVICE_UNAVAILABLE));
+        assertEquals("1", pool.getHeaders().getFirst("Retry-After"));
+        assertEquals("APP-503", codeOf(handler.handleDatabaseUnavailable(new org.springframework.dao.DataAccessResourceFailureException("down"), request),
+                HttpStatus.SERVICE_UNAVAILABLE));
         assertEquals("VAL-001", codeOf(handler.handleValidation(new ValidationException("bad"), request), HttpStatus.BAD_REQUEST));
     }
 
