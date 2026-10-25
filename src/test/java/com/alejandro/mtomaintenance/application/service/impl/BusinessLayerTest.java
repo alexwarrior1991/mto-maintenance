@@ -2525,6 +2525,37 @@ class BusinessLayerTest {
     }
 
     @Test
+    void startingOrCompletingATaskChecksTheScopeOfTheShiftItIsBoundTo() {
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        MaintenanceTask task = task(order, MaintenanceTaskStatus.PENDING);
+        task.setAsset(profile("12-2.27", "12847.990"));
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.repository.findByIdAndOrderId(task.getId(), order.getId())).thenReturn(Optional.of(task));
+        when(fixture.lookups.taskTypes(List.of("RG-01"))).thenReturn(taskTypes("RG-01"));
+        MaintenanceShift foreign = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        foreign.setExecutionPackageId(9L);
+        when(fixture.lookups.shift(foreign.getId())).thenReturn(foreign);
+        fixture.scopeMocks.actAs(leader, List.of(6L), List.of());
+
+        // La orden es del EP 6, el de quien escribe; el turno, del 9: asignar ya lo rechazaba, e iniciar o
+        // completar atan la tarea al turno igual.
+        assertThrows(ScopeException.class, () -> fixture.service.start(order.getId(), task.getId(), new StartTaskRequest(foreign.getId(), null)));
+        assertThrows(ScopeException.class, () -> fixture.service.complete(order.getId(), task.getId(), complete(foreign.getId(), List.of("RG-01"))));
+        assertEquals(MaintenanceTaskStatus.PENDING, task.getStatus());
+        assertNull(task.getShift());
+
+        MaintenanceShift mine = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        mine.setExecutionPackageId(6L);
+        when(fixture.lookups.shift(mine.getId())).thenReturn(mine);
+        fixture.service.start(order.getId(), task.getId(), new StartTaskRequest(mine.getId(), null));
+        fixture.service.complete(order.getId(), task.getId(), complete(mine.getId(), List.of("RG-01")));
+        assertEquals(MaintenanceTaskStatus.COMPLETED, task.getStatus());
+        assertEquals(mine, task.getShift());
+    }
+
+    @Test
     void aTaskTypeThatRequiresEquipmentIsOnlyWorkedInAShiftThatCarriesIt() {
         TaskFixture fixture = new TaskFixture();
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
@@ -3470,6 +3501,39 @@ class BusinessLayerTest {
         assertEquals(created, slow.getStockReservationId());
         String slowKey = MaterialStockSynchronizer.idempotencyKey(slow, StockRequestType.RESERVATION, null);
         assertEquals(2, keys.stream().filter(slowKey::equals).count(), "Sent twice with one key: stock applies it once");
+    }
+
+    @Test
+    void resolvingTheStockProjectOfTheOrderCountsAgainstTheDeadlineOfTheTransition() throws Exception {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
+        MaintenanceMaterialUsage line = line(order);
+        UUID project = UUID.randomUUID();
+        when(stockClient.findProjectIdByCode("EP-6")).thenAnswer(invocation -> {
+            Thread.sleep(400);
+            return Optional.of(project);
+        });
+        when(stockClient.reserve(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            Thread.sleep(100);
+            return new StockReservation(UUID.randomUUID(), invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+                    invocation.getArgument(3), "ACTIVE");
+        });
+        List<Object> deferred = new ArrayList<>();
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, new RecordingEventPublisher(), virtualThreads(), 4,
+                Duration.ofMillis(300), true, deferred::add);
+
+        long started = System.nanoTime();
+        synchronizer.reserveAll(order);
+
+        // El proyecto se llevo todo el plazo: la reserva, que habria cabido sola, no espera mas.
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 700, "The deadline covers the project lookup too");
+        assertEquals(project, order.getStockProjectId());
+        assertEquals(StockSyncStatus.FAILED, line.getStockSyncStatus());
+        assertTrue(line.getStockSyncError().contains("deferred"), line.getStockSyncError());
+        StockLinesDeferred event = (StockLinesDeferred) deferred.getFirst();
+        assertEquals(List.of(line.getId()), event.lineIds());
+        CompletableFuture.allOf(event.inFlight().toArray(CompletableFuture[]::new)).get(5, TimeUnit.SECONDS);
     }
 
     @Test

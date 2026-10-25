@@ -308,7 +308,8 @@ with `app.stock.enabled=false`.
 
 An order transition (`reserveAll` on plan and start, `consumeAll`, `releaseAll`) talks to stock for
 all its lines at once, each on a virtual thread (at most `app.stock.sync.parallelism`, 4) under one
-deadline (`app.stock.sync.deadline`, 15 s). Each conversation runs on a `StockLine`, a copy that never
+deadline (`app.stock.sync.deadline`, 10 s, counted from before the order's stock project is resolved, so
+the transition stays below the gateway's 15 s read timeout). Each conversation runs on a `StockLine`, a copy that never
 touches the entity or the database; the transaction thread applies it back and publishes, in line
 order. A line not answered by the deadline is cut (`StockLine.cancel`: its thread sends nothing more
 to stock) and left `FAILED` with what it had in doubt, the order goes on, and after commit

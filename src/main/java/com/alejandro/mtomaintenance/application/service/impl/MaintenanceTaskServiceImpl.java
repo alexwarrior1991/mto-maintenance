@@ -526,9 +526,14 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         template.ifPresent(value -> value.getItems().forEach(item -> task.getCheckItems().add(MaintenanceTaskCheckItem.fromTemplate(task, item))));
     }
 
-    /** El turno en que se trabaja: en curso, de la misma via y con una posesion compatible con la tarea. */
+    /**
+     * El turno en que se trabaja: en el ambito de quien escribe (como al asignar: iniciar o completar
+     * tambien ata la tarea al turno, y lo que se haga en ella sale en su parte), en curso, de la misma
+     * via y con una posesion compatible con la tarea.
+     */
     private MaintenanceShift workingShift(MaintenanceTask task, UUID shiftId) {
         MaintenanceShift shift = lookups.shift(shiftId);
+        scope.requireShift(shift);
         ShiftRules.requireInProgress(shift);
         ShiftRules.requireSameTrack(shift, task);
         ShiftRules.requireCompatiblePossession(shift, task);

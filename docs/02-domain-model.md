@@ -441,13 +441,16 @@ doubt: nobody knows which request failed.
 An order transition talks to stock for all its lines at once: `plan` and `start` reserve
 (`reserveAll`), `complete` consumes (`consumeAll`), `cancel` releases (`releaseAll`). Each line's
 conversation runs on a virtual thread, at most `app.stock.sync.parallelism` (4) at a time, under one
-deadline for all of them, `app.stock.sync.deadline` (15 s): four slow lines take the time of one.
+deadline for all of them, `app.stock.sync.deadline` (10 s): four slow lines take the time of one. The
+deadline starts before the order's stock project is resolved (`findProjectIdByCode` is a stock call of
+the same transition), so the whole conversation stays below the gateway's 15 s read timeout with room
+for the transaction; a longer one would make the gateway answer 504 while the transition commits.
 
 - A conversation works on a detached copy of its line (`StockLine`), never on the entity nor the
   database (the Hibernate session is not that thread's, and a lazy proxy would go to the database from
   it). The transaction thread waits, applies each copy back to its line and publishes the
   `material.*` events, in the order of the lines. The order's stock project is resolved once, before
-  copying.
+  copying, inside the deadline.
 - A line not finished at the deadline is cut: it is left `FAILED` with whatever it knew, its request
   in doubt included (`deferred: mto-stock did not answer within …`), and the order changes state
   without waiting for it (`complete` refuses it like any `FAILED` line, 409 `MAT-001` unless `force`,
