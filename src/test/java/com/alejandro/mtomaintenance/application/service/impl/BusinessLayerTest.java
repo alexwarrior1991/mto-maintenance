@@ -2260,7 +2260,7 @@ class BusinessLayerTest {
         assertEquals(Set.of(6L), saved.getExecutionPackageIds());
 
         ReflectionTestUtils.setField(saved, "id", UUID.randomUUID());
-        when(fixture.lookups.team(saved.getId())).thenReturn(saved);
+        when(fixture.repository.findForUpdateById(saved.getId())).thenReturn(Optional.of(saved));
         assertThrows(DuplicateCodeException.class, () -> fixture.service.update(saved.getId(), new MaintenanceTeamRequest("C", "Team C", null, null, null, null)));
         fixture.service.update(saved.getId(), new MaintenanceTeamRequest("d", "Team D bis", null, null, false, Set.of(7L, 8L)));
 
@@ -2276,11 +2276,15 @@ class BusinessLayerTest {
         MaintenanceTeam synced = team("A");
         ReflectionTestUtils.setField(synced, "sourceService", "mto-resources");
         ReflectionTestUtils.setField(synced, "sourceEntityId", UUID.randomUUID());
-        when(fixture.lookups.team(synced.getId())).thenReturn(synced);
+        // Leido con su fila bloqueada: lo que se ve es lo que adopto el evento, si llego antes.
+        when(fixture.repository.findForUpdateById(synced.getId())).thenReturn(Optional.of(synced));
 
         assertThrows(SynchronizedTeamException.class, () -> fixture.service.update(synced.getId(),
                 new MaintenanceTeamRequest("A", "Renamed", null, null, null, null)));
         assertEquals("Team A", synced.getName());
+        verify(fixture.lookups, never()).team(any());
+        UUID unknown = UUID.randomUUID();
+        assertThrows(NotFoundException.class, () -> fixture.service.update(unknown, new MaintenanceTeamRequest("Z", "Z", null, null, null, null)));
     }
 
     // ------------------------------------------------------------ shift crew

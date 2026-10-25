@@ -607,6 +607,39 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertEquals("system", reloaded.getCreatedBy(), "Outside a request the auditor is the system");
     }
 
+    /**
+     * Modificar un equipo bloquea su fila: el primer evento de mto-resources, que lo adopta con un
+     * UPDATE de esa fila, espera a que la modificacion termine en vez de que esta lo pise despues.
+     */
+    @Test
+    void modifyingATeamLocksItsRowSoThatTheAdoptionByMtoResourcesWaits() {
+        MaintenanceTeam seeded = teamRepository.findByCode("B").orElseThrow();
+        entityManager.clear();
+        assertTrue(teamRepository.findForUpdateById(seeded.getId()).isPresent());
+
+        org.springframework.transaction.support.TransactionTemplate other =
+                new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        other.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        RuntimeException waited = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                other.executeWithoutResult(status -> {
+                    // Siempre se deshace: si el cerrojo no estuviera, la adopcion no debe quedarse.
+                    status.setRollbackOnly();
+                    entityManager.createNativeQuery("set local lock_timeout = '300ms'").executeUpdate();
+                    teamRepository.adoptByCode("B", "mto-resources", UUID.randomUUID());
+                });
+                return null;
+            } catch (RuntimeException failure) {
+                return failure;
+            }
+        }).orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+
+        assertNotNull(waited, "The adoption cannot touch the row while the modification holds it");
+        assertTrue(waited instanceof org.springframework.dao.PessimisticLockingFailureException
+                || waited.getCause() instanceof jakarta.persistence.PessimisticLockException, waited.toString());
+        assertFalse(teamRepository.findByCode("B").orElseThrow().isSynchronized());
+    }
+
     @Test
     void aStatusHistoryRowBelongsToExactlyOneOrderOrDefect() {
         long trackId = System.nanoTime();
