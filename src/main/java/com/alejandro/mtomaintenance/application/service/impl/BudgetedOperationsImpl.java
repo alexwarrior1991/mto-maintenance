@@ -60,7 +60,7 @@ class BudgetedOperationsImpl implements BudgetedOperations {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BudgetedOperationsImpl.class);
 
-    private static final long CAPACITY_LOCK = "mto-maintenance:background-operation:capacity".hashCode();
+    private static final long CAPACITY_LOCK = AdvisoryLockKeys.of("mto-maintenance:background-operation:capacity");
     private static final int MAX_MESSAGE_LENGTH = 4000;
     private static final int MAX_URI_LENGTH = 500;
 
@@ -298,7 +298,7 @@ class BudgetedOperationsImpl implements BudgetedOperations {
     }
 
     private static long scopeKey(String scope) {
-        return ("mto-maintenance:background-operation:scope:" + scope).hashCode();
+        return AdvisoryLockKeys.of("mto-maintenance:background-operation:scope:" + scope);
     }
 
     private static RuntimeException rethrowable(Throwable failure) {

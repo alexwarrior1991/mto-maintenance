@@ -307,6 +307,18 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
         assertFalse(elsewhere, "Another transaction finds it taken until this one ends");
 
+        // El compartido, el de todas las generaciones: lo tienen muchas a la vez, y nadie en exclusiva mientras.
+        long anyPackage = ("mto-maintenance:generate-tasks:any-package:" + System.nanoTime()).hashCode();
+        assertEquals(1, taskRepository.advisoryTransactionLockShared(anyPackage));
+        Boolean exclusiveElsewhere = java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> other.execute(status -> assetRepository.tryAdvisoryTransactionLock(anyPackage)))
+                .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+        assertFalse(exclusiveElsewhere, "An order without a package waits while any generation holds it shared");
+        Integer sharedElsewhere = java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> other.execute(status -> taskRepository.advisoryTransactionLockShared(anyPackage)))
+                .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+        assertEquals(1, sharedElsewhere, "Two generations of two packages hold it at once");
+
         CatenaryAsset profile = profile("DRV-" + UUID.randomUUID().toString().substring(0, 8), System.nanoTime(), "12900.000");
         profile.setDriveType(DisconnectorDriveType.MOTOR);
         assertThrows(PersistenceException.class, () -> {

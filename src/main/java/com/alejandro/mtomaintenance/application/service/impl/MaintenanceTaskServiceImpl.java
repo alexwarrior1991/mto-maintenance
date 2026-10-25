@@ -70,6 +70,9 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     /** Lo que un PATCH puede vaciar de una tarea; la descripcion es obligatoria. */
     private static final Set<String> CLEARABLE = Set.of("assignedUser", "taskTypeCodes", "notes", "defectsFound", "photoRefs");
 
+    /** El cerrojo de todas las generaciones: compartido por las de un EP, exclusivo para la de una orden sin EP. */
+    static final long ANY_PACKAGE_LOCK = AdvisoryLockKeys.of("mto-maintenance:generate-tasks:any-package");
+
     /** Lo que se hace en cada perfil de via principal: grupos 1, 2 y 4 del plan. */
     static final List<String> DEFAULT_PREVENTIVE_TASK_TYPES =
             List.of("RG-01", "RG-05", "RG-08", "RG-10", "RG-11", "RG-12", "RG-13", "RP-08");
@@ -145,6 +148,9 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
         requireAcceptsTasks(order);
         lockGeneration(order);
         CatenaryAsset asset = request.assetId() == null ? null : lookups.enabledAsset(request.assetId());
+        if (asset != null) {
+            requireFitsTheOrder(order, asset);
+        }
 
         MaintenanceTask task = MaintenanceTask.builder()
                 .order(order)
@@ -243,6 +249,9 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
             lockGeneration(order);
         }
         PreventiveTaskSelector.Plan plan = selector.select(order, request);
+        if (!dryRun && lockAssetsWithoutPackage(order, plan.candidates().stream().map(PreventiveTaskSelector.Candidate::asset).toList())) {
+            plan = selector.select(order, request);
+        }
 
         int sequence = repository.findMaxSequence(orderId);
         List<MaintenanceTask> planned = new ArrayList<>();
@@ -297,16 +306,71 @@ class MaintenanceTaskServiceImpl implements MaintenanceTaskService {
     }
 
     /**
-     * Pone en fila lo que escribe tareas en un mismo EP (en una orden sin EP, en la misma orden): la
-     * generacion, para que dos a la vez no den el mismo activo por libre en dos ordenes, y el alta a
-     * mano, para no chocar con ella en la secuencia. Se suelta al terminar la transaccion.
+     * Pone en fila lo que escribe tareas en un mismo EP: la generacion, para que dos a la vez no den el
+     * mismo activo por libre en dos ordenes, y el alta a mano, para no chocar con ella en la secuencia.
+     * Se suelta al terminar la transaccion.
+     *
+     * <p>Dos cerrojos, siempre en este orden: el de todas las generaciones ({@link #ANY_PACKAGE_LOCK}),
+     * compartido, y el del EP. Una orden sin EP puede llevarse activos de cualquier EP, asi que coge el
+     * primero en exclusiva: espera a que no haya ninguna otra generacion, y las demas a ella.</p>
      */
     private void lockGeneration(MaintenanceOrder order) {
+        if (order.getExecutionPackageId() == null) {
+            repository.advisoryTransactionLock(ANY_PACKAGE_LOCK);
+            return;
+        }
+        repository.advisoryTransactionLockShared(ANY_PACKAGE_LOCK);
         repository.advisoryTransactionLock(generationLockKey(order));
     }
 
-    private static long generationLockKey(MaintenanceOrder order) {
-        return ("mto-maintenance:generate-tasks:" + generationScope(order)).hashCode();
+    static long generationLockKey(MaintenanceOrder order) {
+        return AdvisoryLockKeys.of("mto-maintenance:generate-tasks:" + generationScope(order));
+    }
+
+    /**
+     * Lo que la generacion ya no deja pasar tampoco entra a mano: un activo de otro EP que la orden (una
+     * orden es de un solo EP: su proyecto de almacen y el informe mensual lo son), y en un preventivo uno
+     * con una tarea abierta en otra orden preventiva sin terminar, que se haria dos veces. En una
+     * correctiva o una inspeccion, un activo con su preventivo pendiente si entra: es otro trabajo.
+     */
+    private void requireFitsTheOrder(MaintenanceOrder order, CatenaryAsset asset) {
+        if (order.getExecutionPackageId() != null && asset.getExecutionPackageId() != null
+                && !order.getExecutionPackageId().equals(asset.getExecutionPackageId())) {
+            throw new ValidationException("assetId: " + asset.getCode() + " is in execution package " + asset.getExecutionPackageId()
+                    + " and order " + order.getCode() + " in " + order.getExecutionPackageId() + "; it goes in an order of its own package");
+        }
+        if (order.getType() != MaintenanceOrderType.PREVENTIVE) {
+            return;
+        }
+        lockAssetsWithoutPackage(order, List.of(asset));
+        repository.findOpenPreventiveTasksElsewhere(List.of(asset.getId()), order.getId()).stream().findFirst().ifPresent(found -> {
+            throw new ValidationException("assetId: " + asset.getCode() + " already has an open task in preventive order "
+                    + found.getOrderCode() + "; it is done there");
+        });
+    }
+
+    /**
+     * Un activo sin EP (un hueco de los datos maestros) no se descarta por EP, asi que dos generaciones de
+     * dos EP distintos, cada una con su cerrojo, podrian darlo por libre a la vez. Se pone en fila por
+     * activo, ordenados por clave, despues de los cerrojos de la generacion. Devuelve si cogio alguno: la
+     * seleccion se repite entonces, para ver lo que confirmo quien lo tuviera.
+     */
+    private boolean lockAssetsWithoutPackage(MaintenanceOrder order, List<CatenaryAsset> assets) {
+        if (order.getExecutionPackageId() == null) {
+            return false;
+        }
+        List<Long> keys = assets.stream()
+                .filter(asset -> asset.getExecutionPackageId() == null && asset.getId() != null)
+                .map(asset -> assetLockKey(asset.getId()))
+                .distinct()
+                .sorted()
+                .toList();
+        keys.forEach(repository::advisoryTransactionLock);
+        return !keys.isEmpty();
+    }
+
+    static long assetLockKey(UUID assetId) {
+        return AdvisoryLockKeys.of("mto-maintenance:generate-tasks:asset-" + assetId);
     }
 
     private static String generationScope(MaintenanceOrder order) {

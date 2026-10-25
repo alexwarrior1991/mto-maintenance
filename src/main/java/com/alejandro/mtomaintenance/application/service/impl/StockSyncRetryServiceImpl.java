@@ -40,7 +40,7 @@ class StockSyncRetryServiceImpl implements StockSyncRetryService {
     private static final Logger LOGGER = LoggerFactory.getLogger(StockSyncRetryServiceImpl.class);
 
     /** Clave del cerrojo de aviso, propia de esta vuelta; cualquier otro trabajo usa otra. */
-    static final long LOCK_KEY = "mto-maintenance:stock-sync-retry".hashCode();
+    static final long LOCK_KEY = AdvisoryLockKeys.of("mto-maintenance:stock-sync-retry");
 
     private final MaintenanceMaterialUsageRepository repository;
     private final MaintenanceMaterialUsageService materialUsageService;

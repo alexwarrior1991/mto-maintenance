@@ -128,8 +128,14 @@ order. `PreventiveTaskSelector` decides what fits and what is skipped (already i
 another package, open in another open preventive order, without a task type), `dryRun` previews it,
 and generations of one package queue twice: in one instance on a `ReentrantLock` per scope
 (`GenerationLocks`), waited for before the transaction opens, so without a connection; inside the
-transaction on the PostgreSQL advisory lock (`pg_advisory_xact_lock`, the one a task added by hand
-takes too), which is what holds between instances; with
+transaction on the PostgreSQL advisory locks, which is what holds between instances: one shared by
+every generation and taken exclusively by an order without a package (which may take assets of any),
+then the package's (`pg_advisory_xact_lock`, the one a task added by hand takes too), then one per
+asset without a package, after which the selection is repeated. A task added by hand follows the
+generation's rules too: no asset of another package, and in a preventive no asset with an open task
+in another open preventive order (400); an order with tasks of its package does not move to another.
+Every advisory key is the 64-bit `AdvisoryLockKeys.of(name)` (SHA-256), never a 32-bit `hashCode`; with
+
 `Prefer: respond-async` one that does not finish in time answers 202 with a background operation
 (`BudgetedOperations`, `GET /operations/{id}`, a deployment-wide cap, 429 `OPS-429`). Each task carries the
 `MaintenanceTaskType`s performed (the `RG-xx`/`RP-xx` catalogue of the OCS plan, with standard

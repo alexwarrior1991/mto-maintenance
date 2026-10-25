@@ -597,7 +597,7 @@ class BusinessLayerTest {
                 .thenReturn(List.of(first));
         when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01", "RG-12"));
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(new BigDecimal("60")));
-        long key = "mto-maintenance:generate-tasks:EP-6".hashCode();
+        long key = AdvisoryLockKeys.of("mto-maintenance:generate-tasks:EP-6");
 
         GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
 
@@ -605,6 +605,7 @@ class BusinessLayerTest {
         verify(fixture.generationLocks).withLock(eq("EP-6"), any());
         // Entre instancias, el cerrojo de aviso del EP, antes de mirar que esta libre.
         InOrder inOrder = inOrder(fixture.repository);
+        inOrder.verify(fixture.repository).advisoryTransactionLockShared(MaintenanceTaskServiceImpl.ANY_PACKAGE_LOCK);
         inOrder.verify(fixture.repository).advisoryTransactionLock(key);
         inOrder.verify(fixture.repository).findAssetIdsByOrderId(order.getId());
         // La orden se lee para saber su EP antes del turno, y otra vez dentro de la transaccion: como la dejo la anterior.
@@ -1094,7 +1095,7 @@ class BusinessLayerTest {
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
         when(fixture.lookups.order(order.getId())).thenReturn(order);
         when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
-        long packageLock = "mto-maintenance:generate-tasks:EP-6".hashCode();
+        long packageLock = AdvisoryLockKeys.of("mto-maintenance:generate-tasks:EP-6");
 
         fixture.service.generatePreventiveTasks(order.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
         InOrder inOrder = inOrder(fixture.repository);
@@ -1111,7 +1112,72 @@ class BusinessLayerTest {
         when(fixture.workloadEstimator.estimate(withoutPackage)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
         fixture.service.generatePreventiveTasks(withoutPackage.getId(), new GeneratePreventiveTasksRequest(null, null, null, null, null));
         verify(fixture.generationLocks).withLock(eq("order-" + withoutPackage.getId()), any());
-        verify(fixture.repository).advisoryTransactionLock(("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()).hashCode());
+        // Una orden sin EP puede llevarse activos de cualquier EP: espera en exclusiva a todas las demas, que
+        // cogen el mismo cerrojo compartido antes que el de su EP.
+        verify(fixture.repository).advisoryTransactionLock(MaintenanceTaskServiceImpl.ANY_PACKAGE_LOCK);
+        verify(fixture.repository, times(2)).advisoryTransactionLockShared(MaintenanceTaskServiceImpl.ANY_PACKAGE_LOCK);
+        verify(fixture.repository, never()).advisoryTransactionLock(AdvisoryLockKeys.of("mto-maintenance:generate-tasks:order-" + withoutPackage.getId()));
+    }
+
+    @Test
+    void anAssetWithoutPackageIsTakenUnderItsOwnLockAndTheSelectionIsRepeatedAfterIt() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        CatenaryAsset packaged = profile("12-2.27", "12847.990");
+        CatenaryAsset hole = profile("12-2.28", "12900.000");
+        hole.setExecutionPackageId(null);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        when(fixture.assetRepository.findEnabledByTypeOnTrackBetween(CatenaryAssetType.PROFILE, 2L, order.getAsset().getStartKp(), order.getAsset().getEndKp()))
+                .thenReturn(List.of(packaged, hole));
+        when(fixture.lookups.taskTypes(MaintenanceTaskServiceImpl.DEFAULT_PREVENTIVE_TASK_TYPES)).thenReturn(taskTypes("RG-01"));
+        when(fixture.workloadEstimator.estimate(order)).thenReturn(WorkloadEstimate.ofMinutes(BigDecimal.ZERO));
+        // Otra generacion de otro EP se lo llevo mientras se esperaba su cerrojo: la segunda seleccion lo ve.
+        MaintenanceTaskRepository.AssetInOtherOrder taken = mock(MaintenanceTaskRepository.AssetInOtherOrder.class);
+        when(taken.getAssetId()).thenReturn(hole.getId());
+        when(taken.getOrderCode()).thenReturn("MO-000077");
+        when(fixture.repository.findOpenPreventiveTasksElsewhere(any(), eq(order.getId()))).thenReturn(List.of()).thenReturn(List.of(taken));
+
+        GeneratePreventiveTasksResponse response = fixture.service.generatePreventiveTasks(order.getId(),
+                new GeneratePreventiveTasksRequest(null, null, null, null, null));
+
+        InOrder inOrder = inOrder(fixture.repository);
+        inOrder.verify(fixture.repository).advisoryTransactionLock(AdvisoryLockKeys.of("mto-maintenance:generate-tasks:EP-6"));
+        inOrder.verify(fixture.repository).advisoryTransactionLock(MaintenanceTaskServiceImpl.assetLockKey(hole.getId()));
+        verify(fixture.repository, never()).advisoryTransactionLock(MaintenanceTaskServiceImpl.assetLockKey(packaged.getId()));
+        verify(fixture.repository, times(2)).findOpenPreventiveTasksElsewhere(any(), eq(order.getId()));
+        assertEquals(1, response.createdTasks(), "Only the profile nobody else took");
+        assertEquals(1, response.skippedInOtherOrders());
+        assertEquals(List.of(packaged), order.getTasks().stream().map(MaintenanceTask::getAsset).toList());
+    }
+
+    @Test
+    void aTaskAddedByHandKeepsTheOrderInOnePackageAndAPreventiveIsNotDoneTwice() {
+        TaskFixture fixture = new TaskFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(order.getId())).thenReturn(order);
+        CatenaryAsset foreign = profile("40-1.01", "40000.000");
+        foreign.setExecutionPackageId(9L);
+        when(fixture.lookups.enabledAsset(foreign.getId())).thenReturn(foreign);
+        ValidationException otherPackage = assertThrows(ValidationException.class,
+                () -> fixture.service.create(order.getId(), new MaintenanceTaskRequest("By hand", foreign.getId(), null, null, null)));
+        assertTrue(otherPackage.getMessage().startsWith("assetId: PRF-40-1.01 is in execution package 9"), otherPackage.getMessage());
+
+        CatenaryAsset busy = profile("12-2.27", "12847.990");
+        when(fixture.lookups.enabledAsset(busy.getId())).thenReturn(busy);
+        MaintenanceTaskRepository.AssetInOtherOrder elsewhere = mock(MaintenanceTaskRepository.AssetInOtherOrder.class);
+        when(elsewhere.getAssetId()).thenReturn(busy.getId());
+        when(elsewhere.getOrderCode()).thenReturn("MO-000042");
+        when(fixture.repository.findOpenPreventiveTasksElsewhere(List.of(busy.getId()), order.getId())).thenReturn(List.of(elsewhere));
+        ValidationException twice = assertThrows(ValidationException.class,
+                () -> fixture.service.create(order.getId(), new MaintenanceTaskRequest("By hand", busy.getId(), null, null, null)));
+        assertTrue(twice.getMessage().contains("open task in preventive order MO-000042"), twice.getMessage());
+        verify(fixture.repository, never()).save(any());
+
+        // Una correctiva sobre ese activo es otro trabajo: entra.
+        MaintenanceOrder corrective = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(corrective.getId())).thenReturn(corrective);
+        fixture.service.create(corrective.getId(), new MaintenanceTaskRequest("Repair", busy.getId(), null, null, null));
+        assertEquals(busy, fixture.savedTask().getAsset());
     }
 
     @Test
@@ -1410,6 +1476,21 @@ class BusinessLayerTest {
         assertEquals(7L, draft.getExecutionPackageId());
         assertThrows(ValidationException.class, () -> fixture.service.update(draft.getId(),
                 new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, null, null, null, new BigDecimal("15000.000"), null, null, null)));
+
+        // Con tareas de su EP no se lleva a otro: una orden es de un solo EP. Las canceladas no cuentan.
+        MaintenanceOrder generated = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        when(fixture.lookups.order(generated.getId())).thenReturn(generated);
+        MaintenanceTask onProfile = task(generated, MaintenanceTaskStatus.PENDING);
+        onProfile.setAsset(profile("12-2.27", "12847.990"));
+        generated.getTasks().add(onProfile);
+        ValidationException moved = assertThrows(ValidationException.class, () -> fixture.service.update(generated.getId(),
+                new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, 9L, null, null, null, null, null, null)));
+        assertTrue(moved.getMessage().startsWith("executionPackageId: order MO-DRAFT has tasks on assets of another execution package (PRF-12-2.27)"),
+                moved.getMessage());
+        assertEquals(6L, generated.getExecutionPackageId());
+        onProfile.setStatus(MaintenanceTaskStatus.CANCELLED);
+        fixture.service.update(generated.getId(), new MaintenanceOrderUpdateRequest(null, null, null, null, null, null, null, 9L, null, null, null, null, null, null));
+        assertEquals(9L, generated.getExecutionPackageId());
 
         // URGENT no baja nunca de CRITICAL aunque la peticion lo pida.
         MaintenanceOrder urgent = order(MaintenanceOrderType.URGENT, MaintenanceOrderStatus.IN_PROGRESS);
@@ -2383,7 +2464,7 @@ class BusinessLayerTest {
         ShiftException refused = assertThrows(ShiftException.class, () -> fixture.service.start(shift.getId(), new StartShiftRequest(null, null)));
         assertTrue(refused.getMessage().contains("SH-000099") && refused.getMessage().contains("an instrument works in one shift a night"),
                 refused.getMessage());
-        verify(fixture.repository).lockResource(("mto-maintenance:shift-resource:instrument:" + detector.getId()).hashCode());
+        verify(fixture.repository).lockResource(AdvisoryLockKeys.of("mto-maintenance:shift-resource:instrument:" + detector.getId()));
     }
 
     @Test

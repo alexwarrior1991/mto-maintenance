@@ -106,15 +106,26 @@ insulators, one on a disconnector only disconnectors.
   one that already has a task in the order, even cancelled, is skipped (`skippedAssets`,
   `skippedProfiles` for profiles, as before); and so is one with an open task (`PENDING` or
   `IN_PROGRESS`) in another preventive order that is not finished (`skippedInOtherOrders`,
-  `otherOrderCodes`). Generations in one package queue behind a PostgreSQL advisory lock (per
-  package, or per order without one), taken also by a task added by hand, so two at once never take
-  the same asset as free. In one instance a generation waits for its turn before opening its
+  `otherOrderCodes`). Generations in one package queue behind a PostgreSQL advisory lock per
+  package, taken also by a task added by hand, so two at once never take the same asset as free.
+  Before it every generation takes one lock shared by all of them, which an order without a package
+  takes exclusively: it may take assets of any package, so it waits for no other generation to be
+  running and the rest wait for it. An asset without a package (a hole of the master data) is not
+  skipped by package, so two generations of two packages could both take it: each locks it on its
+  own key, after the package's, and selects again to see what the other committed. Every key is the
+  64-bit `AdvisoryLockKeys.of(name)` (the first 8 bytes of its SHA-256), never `String.hashCode()`:
+  all the advisory locks of the database share one keyspace, and several are taken in key order. In one instance a generation waits for its turn before opening its
   transaction, on a `ReentrantLock` per scope (`GenerationLocks`), so without a connection taken, and
   opens it once the previous one has committed, reading the order as it was left. Inside the
   transaction it takes the advisory lock (`pg_advisory_xact_lock`), already free in that instance:
   that is what keeps two instances apart, and a generation waiting for another instance waits there,
   with its connection. A task added by hand waits on the same lock inside its transaction: it is one
   row, not a package. A preview takes neither.
+- **A task added by hand follows the same rules** (`POST /orders/{id}/tasks`): an asset of another
+  package than the order is a 400 (an order is of one package), and in a preventive order so is an
+  asset with an open task in another open preventive order (it would be done twice). A corrective or
+  an inspection takes any asset. And an order holding tasks (not cancelled) on assets of its package
+  does not move to another package (`PATCH`, 400 on `executionPackageId`).
 - **`Prefer: respond-async`** turns a generation that does not finish in time into a background
   operation (202, see [Background operations](#background-operations)); without the header, or with
   `dryRun`, it stays synchronous.

@@ -164,6 +164,9 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
             if (request.teamId() != null && request.assignedUser() == null && !patch.clears("assignedUser")) {
                 fillLeader(order, previousLeader);
             }
+            if (request.executionPackageId() != null && !request.executionPackageId().equals(order.getExecutionPackageId())) {
+                requireTasksOfPackage(order, request.executionPackageId());
+            }
             set(patch, "executionPackageId", request.executionPackageId(), order::setExecutionPackageId);
             set(patch, "trackId", request.trackId(), order::setTrackId);
             set(patch, "stationId", request.stationId(), order::setStationId);
@@ -185,6 +188,26 @@ class MaintenanceOrderServiceImpl implements MaintenanceOrderService {
             }
         }
         return toResponse(repository.save(order));
+    }
+
+    /**
+     * Una orden es de un solo EP: no se lleva a otro mientras tenga tareas (sin cancelar) sobre activos
+     * del que tenia, que es lo que la generacion y el alta a mano ya no dejan mezclar.
+     */
+    private static void requireTasksOfPackage(MaintenanceOrder order, Long executionPackageId) {
+        List<String> foreign = order.getTasks().stream()
+                .filter(task -> task.getStatus() != MaintenanceTaskStatus.CANCELLED && task.getAsset() != null)
+                .map(MaintenanceTask::getAsset)
+                .filter(asset -> asset.getExecutionPackageId() != null && !asset.getExecutionPackageId().equals(executionPackageId))
+                .map(CatenaryAsset::getCode)
+                .distinct()
+                .sorted()
+                .toList();
+        if (!foreign.isEmpty()) {
+            throw new ValidationException("executionPackageId: order " + order.getCode() + " has tasks on assets of another execution package ("
+                    + String.join(", ", foreign.subList(0, Math.min(10, foreign.size()))) + (foreign.size() > 10 ? ", ..." : "")
+                    + "); cancel them or keep its package");
+        }
     }
 
     @Override

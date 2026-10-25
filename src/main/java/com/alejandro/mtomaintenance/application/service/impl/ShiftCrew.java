@@ -313,7 +313,10 @@ class ShiftCrew {
         vehicleIds.forEach(id -> keys.add("vehicle:" + id));
         personIds.forEach(id -> keys.add("person:" + id));
         instrumentIds.forEach(id -> keys.add("instrument:" + id));
-        keys.stream().sorted().forEach(key -> shiftRepository.lockResource(("mto-maintenance:shift-resource:" + key).hashCode()));
+        // Ordenados por la clave del cerrojo, que es lo que PostgreSQL compara: dos turnos que comparten
+        // recursos los piden en el mismo orden y no se cruzan.
+        keys.stream().map(key -> AdvisoryLockKeys.of("mto-maintenance:shift-resource:" + key)).distinct().sorted()
+                .forEach(shiftRepository::lockResource);
 
         UUID self = shift.getId() == null ? NO_SHIFT : shift.getId();
         if (!vehicleIds.isEmpty()) {
