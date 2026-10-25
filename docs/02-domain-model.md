@@ -334,9 +334,9 @@ What is checked, at the start of every write of the services (create, `PUT`/`PAT
 | Resource | Its package |
 |---|---|
 | Order, and its tasks, check items and material lines | the order's `executionPackageId`; a change of package is checked on the old and on the new one |
-| Inspection, defect | the package of its asset (copied when created) |
+| Inspection, defect | the package of its asset (copied when created); the order it is linked to (a defect's `orderId` or `link-order`, an inspection's `originOrderId`) is checked too |
 | Asset | its own; a change of package too |
-| Shift | its `executionPackageId`; without one, its team must be one of the person's teams. Assigning or unassigning a task checks the shift and the task's order |
+| Shift | its `executionPackageId`; without one, its team must be one of the person's teams. Assigning, unassigning, starting or completing a task checks the shift it is bound to and the task's order |
 
 Something without a package is only written by who has no limit (save that shift of one's own team).
 Local teams are not limited. Out of scope is 403 `SCP-403`, whose message says which package it is and

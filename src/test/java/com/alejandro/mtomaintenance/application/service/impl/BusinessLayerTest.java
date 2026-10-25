@@ -2641,6 +2641,53 @@ class BusinessLayerTest {
     }
 
     @Test
+    void outsideItsScopeNobodyLinksADefectOrAnInspectionToAnOrderNorWritesAnInspectionOrGenerates() {
+        CrewPerson leader = crewPerson("TEAM_LEADER");
+        List<Long> mine = List.of(6L);
+        MaintenanceOrder foreign = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.PLANNED);
+        foreign.setExecutionPackageId(9L);
+        CatenaryAsset profile = profile("12-2.27", "12847.990");
+
+        // El defecto y la inspeccion son del EP 6, el de quien escribe; la orden a la que se atan, del 9.
+        DefectFixture defects = new DefectFixture();
+        defects.scopeMocks.actAs(leader, mine, List.of());
+        when(defects.lookups.enabledAsset(profile.getId())).thenReturn(profile);
+        when(defects.lookups.order(foreign.getId())).thenReturn(foreign);
+        assertThrows(ScopeException.class, () -> defects.service.create(new CatenaryDefectRequest(profile.getId(), DefectSeverity.LOW, "Loose dropper",
+                null, null, null, foreign.getId(), null, null, null, null, null, null)));
+        CatenaryDefect defect = CatenaryDefect.builder().code("DEF-6").asset(profile).severity(DefectSeverity.LOW).status(DefectStatus.OPEN).build();
+        defect.locateAt(profile);
+        ReflectionTestUtils.setField(defect, "id", UUID.randomUUID());
+        when(defects.repository.findById(defect.getId())).thenReturn(Optional.of(defect));
+        assertThrows(ScopeException.class, () -> defects.service.linkOrder(defect.getId(), foreign.getId()));
+        assertNull(defect.getOrder());
+        verify(defects.repository, never()).save(any());
+
+        InspectionFixture inspections = new InspectionFixture();
+        inspections.scopeMocks.actAs(leader, mine, List.of());
+        when(inspections.lookups.enabledAsset(profile.getId())).thenReturn(profile);
+        when(inspections.lookups.order(foreign.getId())).thenReturn(foreign);
+        assertThrows(ScopeException.class, () -> inspections.service.create(new MaintenanceInspectionRequest(profile.getId(), LocalDate.now(), null,
+                null, InspectionResult.OK, null, null, null, null, foreign.getId(), null)));
+        // Y una inspeccion de otro EP no se escribe: ni su defecto.
+        MaintenanceInspection elsewhere = inspection(InspectionResult.MAJOR_DEFECT);
+        elsewhere.setExecutionPackageId(9L);
+        when(inspections.repository.findById(elsewhere.getId())).thenReturn(Optional.of(elsewhere));
+        assertThrows(ScopeException.class, () -> inspections.service.createDefect(elsewhere.getId(), new CreateDefectFromInspectionRequest(null, null, null, null)));
+        verify(inspections.repository, never()).save(any());
+
+        // Generar en una orden de otro EP tampoco, ni con la previsualizacion ya dentro de su transaccion.
+        TaskFixture tasks = new TaskFixture();
+        tasks.scopeMocks.actAs(leader, mine, List.of());
+        MaintenanceOrder preventive = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.DRAFT);
+        preventive.setExecutionPackageId(9L);
+        when(tasks.lookups.order(preventive.getId())).thenReturn(preventive);
+        assertThrows(ScopeException.class, () -> tasks.service.generatePreventiveTasks(preventive.getId(),
+                new GeneratePreventiveTasksRequest(null, null, null, null, null)));
+        verify(tasks.repository, never()).save(any());
+    }
+
+    @Test
     void aTaskTypeThatRequiresEquipmentIsOnlyWorkedInAShiftThatCarriesIt() {
         TaskFixture fixture = new TaskFixture();
         MaintenanceOrder order = order(MaintenanceOrderType.PREVENTIVE, MaintenanceOrderStatus.IN_PROGRESS);
