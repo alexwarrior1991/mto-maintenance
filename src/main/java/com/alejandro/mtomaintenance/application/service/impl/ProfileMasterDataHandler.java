@@ -37,6 +37,11 @@ class ProfileMasterDataHandler extends AbstractAssetMasterDataHandler {
     }
 
     @Override
+    protected CatenaryAssetType assetType() {
+        return CatenaryAssetType.PROFILE;
+    }
+
+    @Override
     protected AssetSnapshot snapshot(MasterDataPayload payload, String sourceEntityId) {
         MasterDataPayload track = payload.nested("track");
         // Un perfil esta en un punto, no en un tramo: el mismo kp abre y cierra su rango.

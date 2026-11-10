@@ -45,7 +45,12 @@ class SectionInsulatorMasterDataHandler extends AbstractAssetMasterDataHandler {
     /** Sin perfiles de su via aun, el paquete lo pone el primero que llegue. */
     @Override
     protected void afterSynchronized(String sourceEntityId) {
-        assets().inheritPackageOfTrack(SOURCE_SERVICE, sourceEntityId);
+        assets().inheritPackageOfTrack(SOURCE_SERVICE, assetType().name(), sourceEntityId);
+    }
+
+    @Override
+    protected CatenaryAssetType assetType() {
+        return CatenaryAssetType.SECTION_INSULATOR;
     }
 
     @Override

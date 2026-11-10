@@ -38,6 +38,11 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
     }
 
     @Override
+    protected CatenaryAssetType assetType() {
+        return CatenaryAssetType.DISCONNECTOR;
+    }
+
+    @Override
     protected AssetSnapshot snapshot(MasterDataPayload payload, String sourceEntityId) {
         MasterDataPayload profile = payload.nested("profile");
         boolean onAPole = profile.has("id");
@@ -112,6 +117,6 @@ class DisconnectorMasterDataHandler extends AbstractAssetMasterDataHandler {
     @Override
     protected void afterSynchronized(String sourceEntityId) {
         assets().inheritLocationOfDisconnector(SOURCE_SERVICE, sourceEntityId);
-        assets().inheritPackageOfTrack(SOURCE_SERVICE, sourceEntityId);
+        assets().inheritPackageOfTrack(SOURCE_SERVICE, assetType().name(), sourceEntityId);
     }
 }

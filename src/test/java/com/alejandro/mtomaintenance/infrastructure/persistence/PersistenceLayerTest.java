@@ -382,20 +382,20 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertEquals(1, upsert(sourceId, "12-2.27", 10L));
         assertEquals(1, upsert(sourceId, "12-2.27 renamed", 12L));
         assertEquals(0, upsert(sourceId, "12-2.27 stale", 11L));
-        CatenaryAsset asset = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+        CatenaryAsset asset = assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow();
         assertEquals("12-2.27 renamed", asset.getName());
         assertEquals(12L, asset.getSourceSequenceNumber());
 
-        assertEquals(0, assetRepository.deactivateFromMasterData("mto-configuration", sourceId, 5L));
-        assertEquals(1, assetRepository.deactivateFromMasterData("mto-configuration", sourceId, 13L));
+        assertEquals(0, assetRepository.deactivateFromMasterData("mto-configuration", "PROFILE", sourceId, 5L));
+        assertEquals(1, assetRepository.deactivateFromMasterData("mto-configuration", "PROFILE", sourceId, 13L));
         entityManager.clear();
-        CatenaryAsset disabled = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+        CatenaryAsset disabled = assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow();
         assertEquals(false, disabled.getEnabled());
         assertEquals(13L, disabled.getSourceSequenceNumber());
         // Sin numero de secuencia se aplica y conserva la marca.
         assertEquals(1, upsert(sourceId, "12-2.27 again", null));
         entityManager.clear();
-        assertEquals(13L, assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getSourceSequenceNumber());
+        assertEquals(13L, assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow().getSourceSequenceNumber());
     }
 
     @Test
@@ -445,7 +445,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
     void theEffectiveEnabledIsTheSourceAndTheLocalDecisionTogetherAndTheDatabaseKeepsItSo() {
         String sourceId = "prf-" + UUID.randomUUID();
         assertEquals(1, upsert(sourceId, "12-2.27", 1L));
-        CatenaryAsset asset = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+        CatenaryAsset asset = assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow();
         assertTrue(asset.getEnabledAtSource());
         assertFalse(asset.getDisabledLocally());
         assertTrue(asset.getEnabled());
@@ -453,7 +453,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         asset.disableLocally();
         assetRepository.saveAndFlush(asset);
         assertEquals(1, upsert(sourceId, "12-2.27", 2L));
-        CatenaryAsset afterEvent = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+        CatenaryAsset afterEvent = assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow();
         assertFalse(afterEvent.getEnabled(), "The upsert recomputes enabled without touching the local decision");
         assertTrue(afterEvent.getEnabledAtSource());
 
@@ -477,12 +477,12 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
 
         String sourceId = "prf-" + UUID.randomUUID();
         upsert(sourceId, "12-2.27", 1L);
-        CatenaryAsset synced = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+        CatenaryAsset synced = assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow();
         assertEquals(0L, synced.getVersion());
         upsert(sourceId, "12-2.27 renamed", 2L);
-        assetRepository.deactivateFromMasterData("mto-configuration", sourceId, 3L);
+        assetRepository.deactivateFromMasterData("mto-configuration", "PROFILE", sourceId, 3L);
         entityManager.clear();
-        assertEquals(2L, assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getVersion(),
+        assertEquals(2L, assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow().getVersion(),
                 "Native SQL bumps it by hand: a PUT that read before the event must not overwrite it unnoticed");
     }
 

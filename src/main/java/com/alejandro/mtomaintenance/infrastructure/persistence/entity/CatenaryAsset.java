@@ -35,7 +35,8 @@ import java.util.List;
 /**
  * Activo mantenible: referencia ligera a la infraestructura, nunca una copia de ella.
  *
- * <p>Los que vienen de mto-configuration llevan {@code sourceService} y {@code sourceEntityId}; su
+ * <p>Los que vienen de mto-configuration llevan {@code sourceService} y {@code sourceEntityId}, el id
+ * de su entidad alli, que con el {@code type} los identifica (un perfil y un seccionador repiten id); su
  * identidad y localizacion no se editan por API y se sincronizan con el upsert nativo de
  * {@code CatenaryAssetRepository} (que, por ser SQL nativo, no deja revision de Envers).</p>
  */
@@ -45,7 +46,8 @@ import java.util.List;
         name = "catenary_asset",
         uniqueConstraints = {
                 @UniqueConstraint(name = "uq_catenary_asset_code", columnNames = "code"),
-                @UniqueConstraint(name = "uq_catenary_asset_source", columnNames = {"source_service", "source_entity_id"})
+                // Con el tipo (V26): el id del origen solo es unico dentro de su entidad.
+                @UniqueConstraint(name = "uq_catenary_asset_source", columnNames = {"source_service", "type", "source_entity_id"})
         },
         indexes = {
                 @Index(name = "idx_catenary_asset_track_kp", columnList = "track_id, start_kp"),
