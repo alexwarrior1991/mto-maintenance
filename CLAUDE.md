@@ -183,7 +183,9 @@ assets checks it first: 403 `SCP-403`. A task can
 only be completed with the order and a shift covering its track both `IN_PROGRESS`, a task type that requires
 full possession cannot be done in a `PARTIAL` shift, and a `DIVERTED` section only accepts `FULL`
 shifts. Completing a task can record `CatenaryDefect`s inline (`RESOLVED` in the shift if the work
-was finished, `OPEN` with `repairPlannedDate` if not). A `MaintenanceInspection` copies the active
+was finished, `OPEN` with `repairPlannedDate` if not); one resolved afterwards may declare the shift
+where it was corrected (`resolvedInShiftId`, which lifts the "linked order `COMPLETED`" rule), under
+the rule of an inspection's shift and within the scope of whoever writes. A `MaintenanceInspection` copies the active
 `InspectionTemplate` of the asset type into its items (recorded in a shift, one `IN_PROGRESS` or
 `CLOSED` on its asset's track or the connected one, it appears in that shift's report), and can create a defect and a corrective
 order (both idempotent). Every material line (`MaintenanceMaterialUsage`) is reserved in

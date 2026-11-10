@@ -192,7 +192,8 @@ removing a track one of its open tasks is on, or making it `PARTIAL` under a tas
 possession or a `DIVERTED` section, is 409 `SHF-001` naming the task. The profiles reviewed in a shift are the `PROFILE` assets of its `COMPLETED`
 tasks (`GET /shifts/{id}/profiles`). An inspection can be recorded in a shift (`shiftId`): the shift
 must be `IN_PROGRESS` or `CLOSED` (one done after midnight is often written down at the end) and work
-on the asset's track or the one it connects with, or it is 409 `SHF-001`. The shift report lists those
+on the asset's track or the one it connects with, or it is 409 `SHF-001`, and be within the scope of
+whoever writes, like the shift of a task (403 `SCP-403`). The shift report lists those
 inspections (`inspectionsRecorded`, `inspections[]`) after its task rows, its crew, its vehicles with
 where each was left and its instruments with their calibration (the `Crew`, `Vehicles` and
 `Instruments` appendices of the .xlsx and the PDF; the JSON carries them in `shift`).
@@ -334,7 +335,7 @@ What is checked, at the start of every write of the services (create, `PUT`/`PAT
 | Resource | Its package |
 |---|---|
 | Order, and its tasks, check items and material lines | the order's `executionPackageId`; a change of package is checked on the old and on the new one |
-| Inspection, defect | the package of its asset (copied when created); the order it is linked to (a defect's `orderId` or `link-order`, an inspection's `originOrderId`) is checked too |
+| Inspection, defect | the package of its asset (copied when created); the order it is linked to (a defect's `orderId` or `link-order`, an inspection's `originOrderId`) is checked too, and so is the shift an inspection is recorded in (`shiftId`) or a defect is resolved in (`resolvedInShiftId`) |
 | Asset | its own; a change of package too |
 | Shift | its `executionPackageId`; without one, its team must be one of the person's teams. Assigning, unassigning, starting or completing a task checks the shift it is bound to and the task's order |
 
@@ -359,8 +360,12 @@ to the defect. Both are idempotent and return what already exists.
 Severity `LOW … CRITICAL`, status `OPEN → IN_PROGRESS → RESOLVED → CLOSED`, `DISCARDED` from
 `OPEN`. Fields from the daily report: `correctionType`, `partsReplaced`, `resolvedInShiftId`,
 `repairPlannedDate`, `foundInTaskId`, `photoRefs`. `link-order` moves it to `IN_PROGRESS`;
-`resolve` needs `resolutionNotes` and the linked order `COMPLETED`; `close` only from `RESOLVED`;
-`discard` needs a reason.
+`resolve` needs `resolutionNotes` and the linked order `COMPLETED`, or the shift where it was corrected
+on site (`resolvedInShiftId`); `close` only from `RESOLVED`; `discard` needs a reason. A declared shift
+is checked whether or not there is an order, because the defect goes into its report: it must be
+`IN_PROGRESS` or `CLOSED` and work on the track of the defect's asset or the one it connects with
+(409 `SHF-001`, the rule of an inspection recorded in a shift), and be within the scope of whoever
+writes (403 `SCP-403`).
 
 ## Materials (`MaintenanceMaterialUsage`)
 

@@ -3031,6 +3031,87 @@ class BusinessLayerTest {
         verify(fixture.repository, times(1)).save(any());
     }
 
+    @Test
+    void anInspectionIsRecordedOnlyInAShiftWithinTheScopeOfWhoWrites() {
+        // Como asignar o completar una tarea en un turno: el activo en su ambito no basta, el turno tambien.
+        InspectionFixture fixture = new InspectionFixture();
+        CatenaryAsset insulator = insulator("SI-W42", 3L, 2L, "12920.000", "12960.000");
+        when(fixture.lookups.enabledAsset(insulator.getId())).thenReturn(insulator);
+        when(fixture.codeGenerator.nextInspectionCode()).thenReturn("INS-000041");
+        MaintenanceShift foreign = shift(3L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        foreign.setExecutionPackageId(14L);
+        MaintenanceShift own = shift(2L, PossessionType.FULL, ShiftStatus.CLOSED);
+        own.setExecutionPackageId(6L);
+        Stream.of(foreign, own).forEach(shift -> when(fixture.lookups.shift(shift.getId())).thenReturn(shift));
+        fixture.scopeMocks.actAs(crewPerson("TEAM_LEADER"), List.of(6L), List.of());
+
+        ScopeException outside = assertThrows(ScopeException.class, () -> fixture.service.create(inspectionIn(insulator, foreign)));
+        assertTrue(outside.getMessage().contains("is in execution package 14"), outside.getMessage());
+        verify(fixture.repository, never()).save(any());
+        assertTrue(fixture.events.published.isEmpty());
+
+        fixture.service.create(inspectionIn(insulator, own));
+        verify(fixture.repository, times(1)).save(any());
+    }
+
+    @Test
+    void aDefectIsResolvedOnlyInAShiftThatWorkedOnItsTrackAndWithinTheScopeOfWhoWrites() {
+        // Declarar un turno es lo que deja resolver con la orden sin completar: no vale cualquiera.
+        DefectFixture fixture = new DefectFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        CatenaryDefect defect = defect(DefectStatus.IN_PROGRESS);
+        defect.setOrder(order);
+        defect.setExecutionPackageId(6L);
+        when(fixture.repository.findById(defect.getId())).thenReturn(Optional.of(defect));
+        MaintenanceShift planned = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        MaintenanceShift cancelled = shift(2L, PossessionType.FULL, ShiftStatus.CANCELLED);
+        MaintenanceShift otherTrack = shift(5L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        MaintenanceShift foreign = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        foreign.setExecutionPackageId(14L);
+        MaintenanceShift closed = shift(2L, PossessionType.PARTIAL, ShiftStatus.CLOSED);
+        closed.setExecutionPackageId(6L);
+        Stream.of(planned, cancelled, otherTrack, foreign, closed).forEach(shift -> when(fixture.lookups.shift(shift.getId())).thenReturn(shift));
+
+        ShiftException notWorked = assertThrows(ShiftException.class, () -> fixture.service.resolve(defect.getId(), resolvedIn(planned)));
+        assertTrue(notWorked.getMessage().contains("is PLANNED; a defect is resolved in a shift in progress or closed"), notWorked.getMessage());
+        assertThrows(ShiftException.class, () -> fixture.service.resolve(defect.getId(), resolvedIn(cancelled)));
+        ShiftException elsewhere = assertThrows(ShiftException.class, () -> fixture.service.resolve(defect.getId(), resolvedIn(otherTrack)));
+        assertTrue(elsewhere.getMessage().contains("works on tracks [5] but asset PRF-13-2.10 is on track 2"), elsewhere.getMessage());
+
+        // Tampoco sin orden, ni con ella completada: el defecto saldria en el parte de un turno que no lo corrigio.
+        CatenaryDefect loose = defect(DefectStatus.OPEN);
+        when(fixture.repository.findById(loose.getId())).thenReturn(Optional.of(loose));
+        assertThrows(ShiftException.class, () -> fixture.service.resolve(loose.getId(), resolvedIn(planned)));
+        assertEquals(DefectStatus.OPEN, loose.getStatus());
+
+        // El turno, ademas, en el ambito de quien escribe, como el de una tarea.
+        fixture.scopeMocks.actAs(crewPerson("TEAM_LEADER"), List.of(6L), List.of());
+        ScopeException outside = assertThrows(ScopeException.class, () -> fixture.service.resolve(defect.getId(), resolvedIn(foreign)));
+        assertTrue(outside.getMessage().contains("is in execution package 14"), outside.getMessage());
+
+        assertEquals(DefectStatus.IN_PROGRESS, defect.getStatus());
+        assertNull(defect.getResolvedInShift());
+        assertNull(defect.getResolvedAt());
+        verify(fixture.repository, never()).save(any());
+        verify(fixture.history, never()).recordDefectChange(any(), any(), any(), any());
+
+        fixture.service.resolve(defect.getId(), resolvedIn(closed));
+        assertEquals(DefectStatus.RESOLVED, defect.getStatus());
+        assertSame(closed, defect.getResolvedInShift(), "A closed shift on its track: the correction is often written down at the end");
+
+        // Un activo que une dos vias se corrige desde un turno de cualquiera de las dos.
+        CatenaryDefect onInsulator = defect(DefectStatus.OPEN);
+        onInsulator.setAsset(insulator("SI-W43", 3L, 2L, "12920.000", "12960.000"));
+        onInsulator.setExecutionPackageId(6L);
+        when(fixture.repository.findById(onInsulator.getId())).thenReturn(Optional.of(onInsulator));
+        fixture.service.resolve(onInsulator.getId(), resolvedIn(closed));
+        assertEquals(DefectStatus.RESOLVED, onInsulator.getStatus());
+    }
+
+    private static ResolveDefectRequest resolvedIn(MaintenanceShift shift) {
+        return new ResolveDefectRequest("fixed on site", shift.getId(), null, null);
+    }
+
     private static MaintenanceInspectionRequest inspectionIn(CatenaryAsset asset, MaintenanceShift shift) {
         return new MaintenanceInspectionRequest(asset.getId(), LocalDate.of(2026, 1, 28), "dana", null, InspectionResult.OK,
                 null, null, null, null, null, shift.getId());
