@@ -59,7 +59,9 @@ Sizing: Tomcat, the schedulers and the listeners run on virtual threads
 `DATABASE_POOL_CONNECTION_TIMEOUT` (`10000` ms, below the gateway's 15 s read timeout) and then gets a 503
 `APP-503`. The scheduled jobs (the outbox relay, the stock retry, the heartbeat of the background
 operations, the purges) run on a pool of `SPRING_TASK_SCHEDULING_POOL_SIZE` (`4`) threads, so one that
-waits does not stop the others. `APP_OPERATIONS_MAX_ACTIVE` (`4`), the background
+waits does not stop the others. The inbox forgets what was applied more than `APP_INBOX_RETENTION`
+(`30d`) ago and what failed more than `APP_INBOX_FAILED_RETENTION` (`90d`) ago, once a day
+(`APP_INBOX_PURGE_ENABLED`, `APP_INBOX_PURGE_CRON`). `APP_OPERATIONS_MAX_ACTIVE` (`4`), the background
 operations alive at once in the whole deployment, each holding a connection while it runs, is chosen
 with it in view, and `APP_STOCK_SYNC_PARALLELISM` (`4`) is how many material lines of one order talk
 to `mto-stock` at once.

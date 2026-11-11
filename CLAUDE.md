@@ -252,7 +252,12 @@ only, deactivates every asset on the track). The other five entity names (`execu
 disconnectors: each is its own asset, and the profile event's `disconnectors` (and `disconnector`) are
 not read here.
 The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before touching
-`application/dto/messaging`.
+`application/dto/messaging`. `inbox_message` is purged once a day (`InboxPurgeService`,
+`configuration/inbox`, `app.inbox.*`): `PROCESSED` rows after `retention` (30 days, from
+`processed_at`), `FAILED` ones after `failed-retention` (90 days), in batches with `skip locked`; off
+in the tests (`app.inbox.purge.enabled=false`), which call it. A purged message is a forgotten one:
+`InboxMessageServiceImpl.process` inserts again when its claim finds no row, and a late duplicate is
+stopped by the sequence watermark of each upsert, not by the inbox.
 
 Consumer of `mto-resources` too (`mto.resources.exchange`, own queue
 `mto.maintenance.resources.queue` bound to `mto.resources.{person,team,vehicle,instrument}.*`, with DLX/DLQ,
@@ -398,7 +403,7 @@ A background operation keeps its request's source, URI and correlation in its re
   slice only loads the controllers it names, so the export endpoints cannot live in the order one),
   `ReportExportLayerTest` (reopens the generated .xlsx with POI and the .pdf with OpenPDF),
   `PersistenceLayerTest` +
-  `InboxMessageRepositoryDataJpaTest` + `MasterDataAssetSyncDataJpaTest`, `EnversAuditDataJpaTest`
+  `InboxMessageRepositoryDataJpaTest` (the purge statements too) + `MasterDataAssetSyncDataJpaTest`, `EnversAuditDataJpaTest`
   (disables the test transaction on purpose), `MapperLayerTest`, `MessagingLayerTest`,
   `StockClientTest`, `DomainModelTest`, `JpaEntityModelTest`, `DtoValidationTest`,
   `GlobalExceptionHandlerTest`, `SecurityLayerTest`, `ApiAuthorizationRulesTest`,

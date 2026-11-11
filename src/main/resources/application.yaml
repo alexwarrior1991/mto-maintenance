@@ -356,6 +356,23 @@ app:
       max-batches-per-run: 20
       fixed-delay: 1h
 
+  # Inbox de lo que se consume (docs/06-messaging.md). Sin purga inbox_message solo crece: una fila
+  # por evento, con su JSON. La fila de un mensaje aplicado solo hace falta mientras pueda volver a
+  # llegar con el mismo identificador: una reentrega del broker (segundos, y despues la DLQ), un
+  # reintento del outbox del emisor (algo mas de una hora) o un mensaje que alguien reencola a mano,
+  # que es lo unico que tarda dias. Un republicado lleva identificador nuevo. Pasado el plazo, a un
+  # duplicado lo para la marca de agua de la secuencia de cada upsert.
+  inbox:
+    retention: ${APP_INBOX_RETENTION:30d}
+    # Una fallida no protege de nada (se reclama otra vez al reencolarla): dice por que acabo en la DLQ.
+    failed-retention: ${APP_INBOX_FAILED_RETENTION:90d}
+    purge:
+      enabled: ${APP_INBOX_PURGE_ENABLED:true}
+      # Una vez al dia, de madrugada, en la zona del servidor.
+      cron: ${APP_INBOX_PURGE_CRON:0 43 3 * * *}
+      # Por lotes, cada uno en su transaccion.
+      batch-size: 500
+
   # Eventos que no nacen de una peticion sino de un trabajo programado.
   events:
     # Un evento al dia, maintenance.preventive.due-soon, con los activos cuyo preventivo vence en

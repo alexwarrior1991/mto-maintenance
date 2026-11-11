@@ -558,6 +558,7 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
                 DomainEventPublisher.class,
                 EntityAuditService.class,
                 InboxMessageService.class,
+                com.alejandro.mtomaintenance.application.service.InboxPurgeService.class,
                 InspectionTemplateService.class,
                 MaintenanceCodeGenerator.class,
                 MaintenanceInspectionService.class,

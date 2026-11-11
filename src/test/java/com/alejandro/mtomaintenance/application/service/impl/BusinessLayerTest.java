@@ -5404,6 +5404,73 @@ class BusinessLayerTest {
         return entity;
     }
 
+    // ----------------------------------------------------------------- inbox
+
+    /**
+     * La purga corta los aplicados por {@code app.inbox.retention} y los fallidos por
+     * {@code app.inbox.failed-retention}, repite cada borrado mientras el lote salga lleno y cuenta lo
+     * que borro.
+     */
+    @Test
+    void theInboxPurgeDeletesInBatchesUntilAShortOneWithEachRetention() {
+        com.alejandro.mtomaintenance.infrastructure.persistence.repository.InboxMessageRepository repository =
+                mock(com.alejandro.mtomaintenance.infrastructure.persistence.repository.InboxMessageRepository.class);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry meters = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        com.alejandro.mtomaintenance.configuration.inbox.InboxProperties properties =
+                new com.alejandro.mtomaintenance.configuration.inbox.InboxProperties(Duration.ofDays(30), null,
+                        new com.alejandro.mtomaintenance.configuration.inbox.InboxProperties.Purge(2));
+        when(repository.purgeProcessedBefore(any(), eq(2))).thenReturn(2, 2, 1);
+        when(repository.purgeFailedBefore(any(), eq(2))).thenReturn(0);
+        Instant before = Instant.now();
+
+        com.alejandro.mtomaintenance.application.service.InboxPurgeService.Purged purged =
+                new InboxPurgeServiceImpl(repository, properties, meters).purge();
+
+        assertEquals(new com.alejandro.mtomaintenance.application.service.InboxPurgeService.Purged(5, 0), purged);
+        ArgumentCaptor<Instant> processedBefore = ArgumentCaptor.forClass(Instant.class);
+        verify(repository, times(3)).purgeProcessedBefore(processedBefore.capture(), eq(2));
+        assertFalse(processedBefore.getValue().isBefore(before.minus(Duration.ofDays(30))));
+        assertFalse(processedBefore.getValue().isAfter(Instant.now().minus(Duration.ofDays(30))));
+        ArgumentCaptor<Instant> failedBefore = ArgumentCaptor.forClass(Instant.class);
+        verify(repository, times(1)).purgeFailedBefore(failedBefore.capture(), eq(2));
+        assertFalse(failedBefore.getValue().isAfter(Instant.now().minus(Duration.ofDays(90))), "The default: 90 days for the failed ones");
+        assertEquals(5.0, meters.counter(InboxPurgeServiceImpl.PURGED_METER, "status", "PROCESSED").count());
+        assertEquals(0.0, meters.counter(InboxPurgeServiceImpl.PURGED_METER, "status", "FAILED").count());
+        assertEquals(Duration.ofDays(30), new com.alejandro.mtomaintenance.configuration.inbox.InboxProperties(Duration.ZERO, null, null).retention(),
+                "Never forgotten at once");
+    }
+
+    /**
+     * La purga borra la fila de un mensaje justo cuando vuelve a llegar: la reclamacion, que espero a su
+     * bloqueo, no encuentra nada. No es un duplicado ya aplicado sino un mensaje olvidado, asi que se
+     * inserta otra vez y se aplica. El duplicado de verdad (la fila sigue ahi) se salta como siempre.
+     */
+    @Test
+    void aMessagePurgedWhileItIsDeliveredAgainIsAppliedAndARealDuplicateIsStillSkipped() {
+        com.alejandro.mtomaintenance.infrastructure.persistence.repository.InboxMessageRepository repository =
+                mock(com.alejandro.mtomaintenance.infrastructure.persistence.repository.InboxMessageRepository.class);
+        InboxMessageServiceImpl inbox = new InboxMessageServiceImpl(repository);
+        com.alejandro.mtomaintenance.application.dto.messaging.InboxMessageCommand command =
+                new com.alejandro.mtomaintenance.application.dto.messaging.InboxMessageCommand("op-1", "mto-configuration",
+                        "MASTER_DATA_PROFILE_UPDATED", "profile", "7", "x", "rk", "q", "hash", "{}", 9L);
+        java.util.concurrent.atomic.AtomicInteger applied = new java.util.concurrent.atomic.AtomicInteger();
+
+        when(repository.insertIfMissing(eq("op-1"), eq("mto-configuration"), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(0, 1);
+        when(repository.claimForProcessing("op-1", "mto-configuration")).thenReturn(0, 1);
+        when(repository.markProcessed("op-1", "mto-configuration")).thenReturn(1);
+        assertEquals(com.alejandro.mtomaintenance.application.dto.messaging.InboxProcessingResult.PROCESSED,
+                inbox.process(command, applied::incrementAndGet));
+        assertEquals(1, applied.get());
+
+        when(repository.insertIfMissing(eq("op-1"), eq("mto-configuration"), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(0);
+        when(repository.claimForProcessing("op-1", "mto-configuration")).thenReturn(0);
+        assertEquals(com.alejandro.mtomaintenance.application.dto.messaging.InboxProcessingResult.DUPLICATE_SKIPPED,
+                inbox.process(command, applied::incrementAndGet));
+        assertEquals(1, applied.get());
+    }
+
     // -------------------------------------------------------------- fixtures
 
     /**

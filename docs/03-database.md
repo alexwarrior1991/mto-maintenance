@@ -56,7 +56,11 @@ Indexes follow the API filters: asset `(track_id, start_kp)`, `(type, enabled)`;
 as `json` (not `jsonb`, so the bytes keep matching `payload_hash`), statuses
 `RECEIVED`/`PROCESSING`/`PROCESSED`/`FAILED`, attempts and last error. One table for both consumed
 channels: `source_service` is `mto-configuration` for the master data and, since `V19`,
-`mto-resources` for its people, teams and vehicles.
+`mto-resources` for its people, teams and vehicles. Purged daily (`06-messaging.md`, Inbox):
+`PROCESSED` rows after `app.inbox.retention` (30 days) and `FAILED` ones after
+`app.inbox.failed-retention` (90 days). The delete walks `idx_inbox_message_status_received_at`
+(`status`, then `received_at < cutoff`; a message is never applied before it arrives) and filters by
+`processed_at` / `failed_at`, so it needed no new index.
 
 ## Seeds (`V3`)
 
