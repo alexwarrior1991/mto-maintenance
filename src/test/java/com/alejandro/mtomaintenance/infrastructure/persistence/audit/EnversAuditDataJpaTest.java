@@ -298,7 +298,7 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
                 6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, null, true, 10L));
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         UUID[] ids = inTransaction(em -> {
-            CatenaryAsset asset = assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow();
+            CatenaryAsset asset = assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow();
             MaintenanceOrder order = MaintenanceOrder.builder().code("MO-MD-" + suffix).title("On a profile").type(MaintenanceOrderType.CORRECTIVE)
                     .priority(MaintenancePriority.LOW).asset(asset).build();
             em.persist(order);
@@ -314,7 +314,7 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
             return new UUID[] {order.getId(), task.getId(), inspection.getId(), defect.getId()};
         });
         assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, inTransaction(em ->
-                assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getId()))).isEmpty());
+                assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow().getId()))).isEmpty());
 
         // Y el activo que se lee es el de ahora: el evento siguiente lo renombra.
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27 renamed", "PROFILE",
@@ -343,7 +343,7 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         String sourceId = "prf-" + UUID.randomUUID();
         inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "PRF-" + sourceId, "12-2.27", "PROFILE",
                 6L, 2L, false, null, null, new BigDecimal("12847.990"), new BigDecimal("12847.990"), null, "A/S", null, null, null, true, 10L));
-        UUID assetId = inTransaction(em -> assetRepository.findBySourceServiceAndSourceEntityId("mto-configuration", sourceId).orElseThrow().getId());
+        UUID assetId = inTransaction(em -> assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration", CatenaryAssetType.PROFILE, sourceId).orElseThrow().getId());
 
         assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, assetId)).isEmpty(), "Native SQL bypasses Envers on purpose");
 

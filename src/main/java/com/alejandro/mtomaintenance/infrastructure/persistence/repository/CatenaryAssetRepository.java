@@ -19,7 +19,13 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
 
     boolean existsByCode(String code);
 
-    Optional<CatenaryAsset> findBySourceServiceAndSourceEntityId(String sourceService, String sourceEntityId);
+    /**
+     * El activo sincronizado de una entidad del origen. El tipo es parte de la clave (V26): en
+     * mto-configuration cada entidad tiene su propia secuencia, y las tres empiezan en 1, asi que el
+     * perfil 5, el seccionador 5 y el aislador 5 existen a la vez y son tres activos.
+     */
+    Optional<CatenaryAsset> findBySourceServiceAndTypeAndSourceEntityId(
+            String sourceService, CatenaryAssetType type, String sourceEntityId);
 
     /** Perfiles habilitados de una via entre dos puntos kilometricos, en orden de kp: el preventivo perfil a perfil. */
     @Query("""
@@ -107,6 +113,9 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
      * concurrentes no pueden pisarse. Sin numero de secuencia se aplica y se conserva la marca.
      * Nunca leer-y-escribir. Al ser SQL nativo no deja revision de Envers.
      *
+     * <p>La fila es la de {@code (source_service, type, source_entity_id)} (V26): el id del origen
+     * solo es unico dentro de su entidad, y con el solo, el seccionador 5 escribia sobre el perfil 5.</p>
+     *
      * <p>{@code enabled} del evento va a {@code enabled_at_source}; el efectivo se recalcula sin tocar
      * {@code disabled_locally}, asi que una desactivacion hecha aqui sobrevive a cualquier evento.</p>
      *
@@ -133,7 +142,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                 cast(:installationType as section_insulator_installation),
                 cast(:driveType as disconnector_drive_type), :disconnectorFunction,
                 :sourceService, :sourceEntityId, :sourceSequenceNumber, :enabled, :enabled, now(), now(), 'system', 'system'
-            ) on conflict (source_service, source_entity_id) do update
+            ) on conflict (source_service, type, source_entity_id) do update
                set code = excluded.code,
                    name = excluded.name,
                    execution_package_id = excluded.execution_package_id,
@@ -180,7 +189,10 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             @Param("sourceSequenceNumber") Long sourceSequenceNumber
     );
 
-    /** Desactivacion desde un borrado en origen. Avanza la marca aunque la fila ya estuviera inactiva. */
+    /**
+     * Desactivacion desde un borrado en origen. Avanza la marca aunque la fila ya estuviera inactiva.
+     * Solo la del tipo de la entidad borrada: el borrado del perfil 5 no es el del seccionador 5.
+     */
     @Modifying
     @Query(value = """
             update catenary_asset
@@ -190,6 +202,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                    version = version + 1,
                    updated_at = now()
              where source_service = :sourceService
+               and type = cast(:type as catenary_asset_type)
                and source_entity_id = :sourceEntityId
                and (source_sequence_number is null
                     or cast(:sourceSequenceNumber as bigint) is null
@@ -197,6 +210,7 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
             """, nativeQuery = true)
     int deactivateFromMasterData(
             @Param("sourceService") String sourceService,
+            @Param("type") String type,
             @Param("sourceEntityId") String sourceEntityId,
             @Param("sourceSequenceNumber") Long sourceSequenceNumber
     );
@@ -234,6 +248,9 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
      * sin poste desde su V26). Todos los perfiles de una via traen el mismo (el de la via): se toma el
      * del ultimo que llego. Sin perfiles de su via aun, lo pone {@link #propagatePackageToAssetsOnTrack}.
      * Un seccionador en un poste no entra: lo suyo es {@link #inheritLocationOfDisconnector}.
+     *
+     * <p>{@code type} es el del activo que acaba de llegar ({@code SECTION_INSULATOR} o
+     * {@code DISCONNECTOR}): con el id solo, el aislador 5 tocaria tambien al seccionador 5.</p>
      */
     @Modifying
     @Query(value = """
@@ -251,11 +268,13 @@ public interface CatenaryAssetRepository extends JpaRepository<CatenaryAsset, UU
                    updated_at = now()
              where asset.source_service = :sourceService
                and asset.source_entity_id = :sourceEntityId
+               and asset.type = cast(:type as catenary_asset_type)
                and asset.type in ('SECTION_INSULATOR', 'DISCONNECTOR')
                and asset.profile_source_id is null
                and asset.track_id is not null
             """, nativeQuery = true)
-    int inheritPackageOfTrack(@Param("sourceService") String sourceService, @Param("sourceEntityId") String sourceEntityId);
+    int inheritPackageOfTrack(@Param("sourceService") String sourceService, @Param("type") String type,
+                              @Param("sourceEntityId") String sourceEntityId);
 
     /**
      * Tras el upsert de un perfil, sus seccionadores le siguen: da igual que evento llegue antes, y un

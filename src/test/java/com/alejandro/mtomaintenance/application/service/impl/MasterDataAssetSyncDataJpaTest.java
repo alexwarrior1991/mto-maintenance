@@ -117,7 +117,7 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
 
         assertEquals(InboxProcessingResult.PROCESSED, first);
         assertEquals(InboxProcessingResult.DUPLICATE_SKIPPED, second);
-        CatenaryAsset asset = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, profileId).orElseThrow();
+        CatenaryAsset asset = asset(profileId);
         assertEquals("PRF-" + profileId, asset.getCode());
         assertEquals("12-2.27", asset.getName());
         assertEquals(CatenaryAssetType.PROFILE, asset.getType());
@@ -137,11 +137,11 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         dispatcher.handle(profileMessage(UUID.randomUUID(), profileId, "13-2.01", "13007.29", MasterDataOperation.CREATED), new MasterDataEventContext(20L));
         dispatcher.handle(profileMessage(UUID.randomUUID(), profileId, "13-2.01 stale", "13007.29", MasterDataOperation.UPDATED), new MasterDataEventContext(19L));
         entityManager.clear();
-        assertEquals("13-2.01", assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, profileId).orElseThrow().getName());
+        assertEquals("13-2.01", asset(profileId).getName());
 
         dispatcher.handle(profileMessage(UUID.randomUUID(), profileId, "13-2.01", "13007.29", MasterDataOperation.DELETED), new MasterDataEventContext(21L));
         entityManager.clear();
-        CatenaryAsset disabled = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, profileId).orElseThrow();
+        CatenaryAsset disabled = asset(profileId);
         assertFalse(disabled.getEnabled());
         assertEquals(21L, disabled.getSourceSequenceNumber());
     }
@@ -163,20 +163,20 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                 Map.of("id", insulatorId, "name", "SI-12", "enabled", false, "station", Map.of("id", 9))), new MasterDataEventContext(1L));
         entityManager.clear();
 
-        CatenaryAsset disconnector = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, disconnectorId).orElseThrow();
+        CatenaryAsset disconnector = asset(disconnectorId);
         assertEquals(CatenaryAssetType.DISCONNECTOR, disconnector.getType());
         assertEquals("DSC-" + disconnectorId, disconnector.getCode());
         assertEquals(9L, disconnector.getStationId());
         assertEquals("77", disconnector.getProfileSourceId());
         assertEquals(0, new BigDecimal("80196.630").compareTo(disconnector.getStartKp()));
-        CatenaryAsset insulator = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, insulatorId).orElseThrow();
+        CatenaryAsset insulator = asset(insulatorId);
         assertEquals(CatenaryAssetType.SECTION_INSULATOR, insulator.getType());
         assertFalse(insulator.getEnabled());
 
         dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.TRACK, String.valueOf(trackId), MasterDataOperation.DELETED, Map.of("id", trackId)), new MasterDataEventContext(2L));
         entityManager.clear();
-        assertFalse(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, profileId).orElseThrow().getEnabled());
-        assertTrue(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, disconnectorId).orElseThrow().getEnabled(),
+        assertFalse(asset(profileId).getEnabled());
+        assertTrue(asset(disconnectorId).getEnabled(),
                 "Its profile (77) never arrived, so the disconnector has no track to go down with");
     }
 
@@ -193,7 +193,7 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                         switchPayload("W31", 110176.0, 9, 3)))), new MasterDataEventContext(1L));
         entityManager.clear();
 
-        CatenaryAsset insulator = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, insulatorId).orElseThrow();
+        CatenaryAsset insulator = asset(insulatorId);
         assertEquals(CatenaryAssetType.SECTION_INSULATOR, insulator.getType());
         assertEquals(SectionInsulatorInstallation.TRACK_CONNECTION, insulator.getInstallationType());
         assertEquals(3L, insulator.getTrackId());
@@ -221,7 +221,7 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                         switchPayload("W31", 110176.0, 9, 3)))), new MasterDataEventContext(2L));
         entityManager.clear();
 
-        UUID assetId = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, insulatorId).orElseThrow().getId();
+        UUID assetId = asset(insulatorId).getId();
         assertEquals(List.of("W31"), switchRepository.findByAssetIdOrderByKpAscCodeAsc(assetId).stream()
                 .map(CatenaryAssetSwitch::getCode).toList());
     }
@@ -245,7 +245,7 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                         switchPayload("W99", 110900.0, 8, 5)))), new MasterDataEventContext(5L));
         entityManager.clear();
 
-        UUID assetId = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, insulatorId).orElseThrow().getId();
+        UUID assetId = asset(insulatorId).getId();
         assertEquals(List.of("W31", "W41"), switchRepository.findByAssetIdOrderByKpAscCodeAsc(assetId).stream()
                 .map(CatenaryAssetSwitch::getCode).toList());
     }
@@ -261,7 +261,7 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                         "installationType", "IN_TRACK", "kp", 110176.0)), new MasterDataEventContext(1L));
         entityManager.clear();
 
-        CatenaryAsset insulator = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, insulatorId).orElseThrow();
+        CatenaryAsset insulator = asset(insulatorId);
         assertEquals(SectionInsulatorInstallation.IN_TRACK, insulator.getInstallationType());
         assertEquals(0, new BigDecimal("110176.000").compareTo(insulator.getStartKp()));
         assertEquals(0, new BigDecimal("110176.000").compareTo(insulator.getEndKp()));
@@ -282,8 +282,7 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                         "installationType", "SOMETHING_NEW")), new MasterDataEventContext(1L));
         entityManager.clear();
 
-        assertNull(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, insulatorId)
-                .orElseThrow().getInstallationType());
+        assertNull(asset(insulatorId).getInstallationType());
     }
 
     private static Map<String, Object> insulatorPayload(String insulatorId, List<Map<String, Object>> switches) {
@@ -325,7 +324,7 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                 new MasterDataEventContext(1L));
         entityManager.clear();
 
-        UUID assetId = assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, insulatorId).orElseThrow().getId();
+        UUID assetId = asset(insulatorId).getId();
         List<CatenaryAssetSwitch> switches = switchRepository.findByAssetIdOrderByKpAscCodeAsc(assetId);
 
         assertEquals(List.of("W31", "W41", "W51"), switches.stream().map(CatenaryAssetSwitch::getCode).toList());
@@ -346,8 +345,8 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
                 Map.of("id", disabledId, "name", "HSA-NS7", "enabled", false, "station", Map.of("id", 9))), new MasterDataEventContext(1L));
         entityManager.clear();
 
-        assertTrue(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, activeId).orElseThrow().getEnabled());
-        assertFalse(assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, disabledId).orElseThrow().getEnabled());
+        assertTrue(asset(activeId).getEnabled());
+        assertFalse(asset(disabledId).getEnabled());
     }
 
     @Test
@@ -847,8 +846,102 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         assertEquals(9, MasterDataEntityNames.PUBLISHED_TODAY.size(), "What mto-configuration publishes today");
     }
 
+    /**
+     * En mto-configuration cada entidad tiene su secuencia y las tres empiezan en 1: el perfil 5, el
+     * seccionador 5 y el aislador 5 existen a la vez. Son tres activos (V26: la clave lleva el tipo),
+     * cada uno con su codigo, su marca de agua y su borrado; antes, el segundo escribia sobre el primero.
+     */
+    @Test
+    void aProfileADisconnectorAndAnInsulatorWithTheSameIdAreThreeAssetsEachWithItsWatermarkAndItsDeletion() {
+        MasterDataEventHandler dispatcher = dispatcher();
+        long trackId = System.nanoTime();
+        long sharedId = trackId + 5;
+        String id = String.valueOf(sharedId);
+        String onThePole = "d-on-pole-" + trackId;
+
+        dispatcher.handle(trackProfileMessage(sharedId, trackId, 6L, MasterDataOperation.CREATED), new MasterDataEventContext(10L));
+        dispatcher.handle(poleLessDisconnectorMessage(id, trackId, "80200.5"), new MasterDataEventContext(20L));
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.SECTION_INSULATOR, id, MasterDataOperation.CREATED,
+                Map.of("id", id, "name", "B7", "enabled", true, "station", Map.of("id", 9), "installationType", "IN_TRACK",
+                        "track", Map.of("id", trackId, "name", "TRACK 1"),
+                        "switches", List.of(switchPayload("W31", 110176.0, 9, trackId)))), new MasterDataEventContext(30L));
+        // Un seccionador que cuelga del poste de ese id: su poste es el perfil, no el seccionador del mismo id.
+        dispatcher.handle(disconnectorMessage(onThePole, sharedId), new MasterDataEventContext(31L));
+        entityManager.flush();
+        entityManager.clear();
+
+        CatenaryAsset profile = asset(CatenaryAssetType.PROFILE, id);
+        CatenaryAsset disconnector = asset(CatenaryAssetType.DISCONNECTOR, id);
+        CatenaryAsset insulator = asset(CatenaryAssetType.SECTION_INSULATOR, id);
+        assertEquals(3, List.of(profile.getId(), disconnector.getId(), insulator.getId()).stream().distinct().count());
+        assertEquals("PRF-" + id, profile.getCode());
+        assertEquals("P-" + id, profile.getName());
+        assertEquals(CatenaryAssetType.PROFILE, profile.getType());
+        assertEquals(0, new BigDecimal("80196.630").compareTo(profile.getStartKp()));
+        assertEquals("DSC-" + id, disconnector.getCode());
+        assertEquals("HSA-FP1.1", disconnector.getName());
+        assertEquals(CatenaryAssetType.DISCONNECTOR, disconnector.getType());
+        assertEquals(0, new BigDecimal("80200.500").compareTo(disconnector.getStartKp()));
+        assertEquals("SIN-" + id, insulator.getCode());
+        assertEquals("B7", insulator.getName());
+        assertEquals(CatenaryAssetType.SECTION_INSULATOR, insulator.getType());
+        assertEquals(SectionInsulatorInstallation.IN_TRACK, insulator.getInstallationType());
+        assertEquals(List.of(10L, 20L, 30L),
+                List.of(profile.getSourceSequenceNumber(), disconnector.getSourceSequenceNumber(), insulator.getSourceSequenceNumber()));
+        assertEquals(6L, disconnector.getExecutionPackageId(), "The package of its track, each by its own key");
+        assertEquals(6L, insulator.getExecutionPackageId());
+        assertEquals(1, switchRepository.findByAssetIdOrderByKpAscCodeAsc(insulator.getId()).size());
+        assertTrue(switchRepository.findByAssetIdOrderByKpAscCodeAsc(profile.getId()).isEmpty());
+        assertTrue(switchRepository.findByAssetIdOrderByKpAscCodeAsc(disconnector.getId()).isEmpty());
+        assertEquals(trackId, asset(onThePole).getTrackId(), "The track of its pole, the profile of that id");
+        assertEquals(6L, asset(onThePole).getExecutionPackageId());
+
+        // La marca de agua es de cada (tipo, id): el 15 es viejo para el seccionador (20) y nuevo para el perfil (10).
+        dispatcher.handle(trackProfileMessage(sharedId, trackId, 7L, MasterDataOperation.UPDATED), new MasterDataEventContext(15L));
+        dispatcher.handle(withValue(poleLessDisconnectorMessage(id, trackId, "80200.5"), "name", "stale"), new MasterDataEventContext(15L));
+        entityManager.clear();
+        assertEquals(7L, asset(CatenaryAssetType.PROFILE, id).getExecutionPackageId());
+        assertEquals(15L, asset(CatenaryAssetType.PROFILE, id).getSourceSequenceNumber());
+        assertEquals("HSA-FP1.1", asset(CatenaryAssetType.DISCONNECTOR, id).getName(), "A late event is still discarded");
+        assertEquals(20L, asset(CatenaryAssetType.DISCONNECTOR, id).getSourceSequenceNumber());
+        assertEquals(30L, asset(CatenaryAssetType.SECTION_INSULATOR, id).getSourceSequenceNumber());
+
+        // El borrado de uno no toca a los otros dos, y uno tardio se descarta por la marca del suyo.
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.DISCONNECTOR, id, MasterDataOperation.DELETED, Map.of("id", id)),
+                new MasterDataEventContext(40L));
+        dispatcher.handle(message(UUID.randomUUID(), MasterDataEntityNames.SECTION_INSULATOR, id, MasterDataOperation.DELETED, Map.of("id", id)),
+                new MasterDataEventContext(25L));
+        entityManager.clear();
+        CatenaryAsset deleted = asset(CatenaryAssetType.DISCONNECTOR, id);
+        assertFalse(deleted.getEnabled());
+        assertFalse(deleted.getEnabledAtSource());
+        assertEquals(40L, deleted.getSourceSequenceNumber());
+        assertTrue(asset(CatenaryAssetType.PROFILE, id).getEnabled());
+        assertEquals(15L, asset(CatenaryAssetType.PROFILE, id).getSourceSequenceNumber());
+        assertTrue(asset(CatenaryAssetType.SECTION_INSULATOR, id).getEnabled(), "Its own watermark (30) discards a deletion at 25");
+        assertEquals(30L, asset(CatenaryAssetType.SECTION_INSULATOR, id).getSourceSequenceNumber());
+        assertTrue(asset(onThePole).getEnabled());
+
+        dispatcher.handle(trackProfileMessage(sharedId, trackId, 7L, MasterDataOperation.DELETED), new MasterDataEventContext(41L));
+        entityManager.clear();
+        assertFalse(asset(CatenaryAssetType.PROFILE, id).getEnabled());
+        assertTrue(asset(CatenaryAssetType.SECTION_INSULATOR, id).getEnabled());
+        assertEquals("SIN-" + id, asset(CatenaryAssetType.SECTION_INSULATOR, id).getCode());
+    }
+
+    /**
+     * El activo de un id del origen, cuando el test solo creo uno con ese id. Con el mismo id en
+     * varias entidades, {@link #asset(CatenaryAssetType, String)}: aqui fallaria por no ser unico.
+     */
     private CatenaryAsset asset(String sourceEntityId) {
-        return assetRepository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, sourceEntityId).orElseThrow();
+        return entityManager.createQuery(
+                        "select asset from CatenaryAsset asset where asset.sourceService = :service and asset.sourceEntityId = :id",
+                        CatenaryAsset.class)
+                .setParameter("service", SOURCE_SERVICE).setParameter("id", sourceEntityId).getSingleResult();
+    }
+
+    private CatenaryAsset asset(CatenaryAssetType type, String sourceEntityId) {
+        return assetRepository.findBySourceServiceAndTypeAndSourceEntityId(SOURCE_SERVICE, type, sourceEntityId).orElseThrow();
     }
 
     /** Un seccionador tal como lo publica mto-configuration: estacion y perfil, sin via ni paquete. */

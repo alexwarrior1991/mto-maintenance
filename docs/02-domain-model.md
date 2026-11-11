@@ -57,7 +57,7 @@ wins, and a local team (no leader) or a leader without a Keycloak user change no
 | `assign` | `PLANNED`, `ASSIGNED` → `ASSIGNED`; `IN_PROGRESS` keeps its status | `teamId` or `assignedUser`; without a user, the leader of a team of `mto-resources` |
 | `start` | `PLANNED`, `ASSIGNED`; `DRAFT` only for `URGENT` | sets `actualStartDate` |
 | `complete` | `IN_PROGRESS` | no task `PENDING`/`IN_PROGRESS`; at least one `COMPLETED` task or `closingNotes`; `INSPECTION` needs an inspection with `originOrderId`; a `FAILED` or `REJECTED` material line blocks unless `force` (supervise), and the other lines keep what stock did even when that rejects the completion; consumes reservations or registers direct outputs; `PREVENTIVE` updates `asset.lastPreventiveCompletedAt` |
-| `cancel` | any non-terminal | reason required; releases reservations; open tasks → `CANCELLED`; linked defect `IN_PROGRESS` → `OPEN` |
+| `cancel` | any non-terminal | reason required; what each material line already used leaves the warehouse and only the rest of its reservation is released; open tasks → `CANCELLED`; linked defect `IN_PROGRESS` → `OPEN` |
 | `PUT` | full in `DRAFT`/`PLANNED`; afterwards only `description`, `priority`, `closingNotes` | |
 
 `URGENT` means "emergency corrective without planning": born `CRITICAL`, it is the only type that
@@ -192,7 +192,8 @@ removing a track one of its open tasks is on, or making it `PARTIAL` under a tas
 possession or a `DIVERTED` section, is 409 `SHF-001` naming the task. The profiles reviewed in a shift are the `PROFILE` assets of its `COMPLETED`
 tasks (`GET /shifts/{id}/profiles`). An inspection can be recorded in a shift (`shiftId`): the shift
 must be `IN_PROGRESS` or `CLOSED` (one done after midnight is often written down at the end) and work
-on the asset's track or the one it connects with, or it is 409 `SHF-001`. The shift report lists those
+on the asset's track or the one it connects with, or it is 409 `SHF-001`, and be within the scope of
+whoever writes, like the shift of a task (403 `SCP-403`). The shift report lists those
 inspections (`inspectionsRecorded`, `inspections[]`) after its task rows, its crew, its vehicles with
 where each was left and its instruments with their calibration (the `Crew`, `Vehicles` and
 `Instruments` appendices of the .xlsx and the PDF; the JSON carries them in `shift`).
@@ -334,7 +335,7 @@ What is checked, at the start of every write of the services (create, `PUT`/`PAT
 | Resource | Its package |
 |---|---|
 | Order, and its tasks, check items and material lines | the order's `executionPackageId`; a change of package is checked on the old and on the new one |
-| Inspection, defect | the package of its asset (copied when created); the order it is linked to (a defect's `orderId` or `link-order`, an inspection's `originOrderId`) is checked too |
+| Inspection, defect | the package of its asset (copied when created); the order it is linked to (a defect's `orderId` or `link-order`, an inspection's `originOrderId`) is checked too, and so is the shift an inspection is recorded in (`shiftId`) or a defect is resolved in (`resolvedInShiftId`) |
 | Asset | its own; a change of package too |
 | Shift | its `executionPackageId`; without one, its team must be one of the person's teams. Assigning, unassigning, starting or completing a task checks the shift it is bound to and the task's order |
 
@@ -359,8 +360,12 @@ to the defect. Both are idempotent and return what already exists.
 Severity `LOW … CRITICAL`, status `OPEN → IN_PROGRESS → RESOLVED → CLOSED`, `DISCARDED` from
 `OPEN`. Fields from the daily report: `correctionType`, `partsReplaced`, `resolvedInShiftId`,
 `repairPlannedDate`, `foundInTaskId`, `photoRefs`. `link-order` moves it to `IN_PROGRESS`;
-`resolve` needs `resolutionNotes` and the linked order `COMPLETED`; `close` only from `RESOLVED`;
-`discard` needs a reason.
+`resolve` needs `resolutionNotes` and the linked order `COMPLETED`, or the shift where it was corrected
+on site (`resolvedInShiftId`); `close` only from `RESOLVED`; `discard` needs a reason. A declared shift
+is checked whether or not there is an order, because the defect goes into its report: it must be
+`IN_PROGRESS` or `CLOSED` and work on the track of the defect's asset or the one it connects with
+(409 `SHF-001`, the rule of an inspection recorded in a shift), and be within the scope of whoever
+writes (403 `SCP-403`).
 
 ## Materials (`MaintenanceMaterialUsage`)
 
@@ -368,8 +373,10 @@ A line per (order, optional task, material, warehouse) with `plannedQuantity`, `
 (≤ planned unless `allowOverConsumption`), `unit`, the stock reservation id and
 `stockSyncStatus` (`NOT_REQUESTED`, `RESERVED`, `CONSUMED`, `RELEASED`, `FAILED`, `REJECTED`) with
 the last error. Reservation happens at `plan` (or when the line is added to an order already
-planned), consumption at `complete`, release at `cancel`; without a stock project the consumption is a
-direct output. The project is the one of the order's execution package (`EP-<id>` in stock), looked
+planned), consumption at `complete`, and `cancel` settles the line the same way: what was already used
+(`consumedQuantity`, from the tasks completed before the cancellation) leaves the warehouse and only
+the rest is released, so a line that used nothing is released whole and one that used something ends
+`CONSUMED`, never `RELEASED`; without a stock project the consumption is a direct output. The project is the one of the order's execution package (`EP-<id>` in stock), looked
 up once per plan or start; if stock is down at that moment the lines are left `FAILED`.
 
 The materials sent with a task completion (`materials[]`) become lines of their own (with the task;
@@ -393,11 +400,25 @@ unless `force`:
 service reads it (`GET /reservations/{id}`). The reservation may have changed from the warehouse, or
 in an earlier attempt that failed halfway:
 
-| Reservation in stock | Completing (consume) | Cancelling (release) |
+| Reservation in stock | Completing or cancelling, the line used something | Completing or cancelling, the line used nothing |
 |---|---|---|
-| `ACTIVE` | consume if used = reserved; release and output what was used if less; consume and output the excess if more | release |
-| `CONSUMED` | output only the excess over what was reserved | stays `CONSUMED`: the material left the warehouse |
-| `RELEASED`, `CANCELLED`, or unknown to stock (404) | direct output of what was used, or `RELEASED` if nothing was | `RELEASED` |
+| `ACTIVE` | consume if used = reserved; release and output what was used if less; consume and output the excess if more → `CONSUMED` | release → `RELEASED` |
+| `CONSUMED` | output only the excess over what was reserved → `CONSUMED` | stays `CONSUMED`: the material left the warehouse |
+| `RELEASED`, `CANCELLED`, or unknown to stock (404) | direct output of what was used → `CONSUMED` | `RELEASED` |
+| the line never had one | direct output of what was used → `CONSUMED` | `NOT_REQUESTED` |
+
+Completing and cancelling settle a line through the same step (`MaterialStockSynchronizer.settle`):
+there is one conversation with stock, and the cancellation does not give back to the warehouse what is
+no longer in it. An order `IN_PROGRESS` with a task completed that used 3 of a line with 10 reserved,
+then cancelled: the reservation of 10 is released and an output of 3 is registered, with the keys and
+the notes of the completion, and the line ends `CONSUMED`. The cancellation takes the lines with
+something halfway in stock (`RESERVED`, `FAILED`, `REJECTED`) and those that never had a reservation
+but used something; like any other step it never fails the transition: a line stock does not answer
+for is left `FAILED` (or `REJECTED`), and its retry — the 5-minute round, the deferred one or a
+`sync`, all of them a `sync` of a line of a `CANCELLED` order — finishes settling it, never releases
+it whole. The `step` of what a cancellation leaves halfway is `release`, whatever it was doing. A
+line `RELEASED` with a consumed quantity belongs to an order cancelled before this rule (its
+reservation was released whole): nothing settles it on its own, and its `sync` does nothing.
 
 The reserved quantity is the one stock holds, which the warehouse may have changed. So repeating a
 step never consumes or releases the same thing twice. A line that never got a reservation and used
@@ -420,7 +441,8 @@ without an answer in `stockRequestInDoubt` (`RESERVATION` or `OUTPUT`) until sto
 - Whatever is done next with the line against stock starts by repeating the request in doubt, with
   the same key and the same body: `sync`, `start` (which reserves again), `complete` (the reservation
   in doubt is confirmed and then consumed, never replaced by a direct output), `cancel` (confirmed and
-  then released; an output in doubt is finished, and the line ends `CONSUMED` like in stock) and
+  then settled: released if the line used nothing; an output in doubt is finished, and the line ends
+  `CONSUMED` like in stock) and
   removing the line (a reservation in doubt is confirmed to release it; with an output in doubt the
   line cannot be removed, 409 `MAT-001`, because the material may have left already). If stock now
   answers no, the request never reached it — it would have handed it back without validating anything
@@ -454,7 +476,7 @@ refused with `IDEM-001` and the line says so. `FAILED` lines from before `V12` c
 doubt: nobody knows which request failed.
 
 An order transition talks to stock for all its lines at once: `plan` and `start` reserve
-(`reserveAll`), `complete` consumes (`consumeAll`), `cancel` releases (`releaseAll`). Each line's
+(`reserveAll`), `complete` consumes (`consumeAll`), `cancel` settles what was used and releases the rest (`releaseAll`). Each line's
 conversation runs on a virtual thread, at most `app.stock.sync.parallelism` (4) at a time, under one
 deadline for all of them, `app.stock.sync.deadline` (10 s): four slow lines take the time of one. The
 deadline starts before the order's stock project is resolved (`findProjectIdByCode` is a stock call of

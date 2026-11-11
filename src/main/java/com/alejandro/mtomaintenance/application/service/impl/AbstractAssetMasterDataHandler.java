@@ -96,6 +96,13 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
     protected abstract AssetSnapshot snapshot(MasterDataPayload payload, String sourceEntityId);
 
     /**
+     * El tipo de activo que sincroniza este manejador. Es parte de la clave del activo junto al id
+     * del origen (V26): mto-configuration numera cada entidad con su propia secuencia, asi que el
+     * perfil 5 y el seccionador 5 existen a la vez, y cada manejador solo ve y solo toca los suyos.
+     */
+    protected abstract CatenaryAssetType assetType();
+
+    /**
      * Si este manejador es duenno de las agujas del activo.
      *
      * <p>Falso por defecto, y eso es lo que importa: un manejador que no sabe nada de agujas no
@@ -131,9 +138,9 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
     @Override
     public void onDeleted(MasterDataChangedMessage message, MasterDataEventContext context) {
         String sourceEntityId = MasterDataPayload.sourceEntityId(message.data(), entityName());
-        int deactivated = repository.deactivateFromMasterData(SOURCE_SERVICE, sourceEntityId, context.sequenceNumber());
+        int deactivated = repository.deactivateFromMasterData(SOURCE_SERVICE, assetType().name(), sourceEntityId, context.sequenceNumber());
         if (deactivated == 0) {
-            boolean known = repository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, sourceEntityId).isPresent();
+            boolean known = repository.findBySourceServiceAndTypeAndSourceEntityId(SOURCE_SERVICE, assetType(), sourceEntityId).isPresent();
             logger.info(known
                             ? "{} deletion discarded, a newer change was already applied: sourceEntityId={}, sequenceNumber={}"
                             : "{} deleted but no asset came from it, nothing to do: sourceEntityId={}, sequenceNumber={}",
@@ -148,12 +155,16 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
         MasterDataChangedEvent event = message.data();
         String sourceEntityId = MasterDataPayload.sourceEntityId(event, entityName());
         AssetSnapshot snapshot = snapshot(MasterDataPayload.of(event), sourceEntityId);
+        if (snapshot.type() != assetType()) {
+            // La clave del activo lleva el tipo del manejador: un snapshot de otro tipo escribiria una fila ajena.
+            throw new IllegalStateException("%s handler built a %s snapshot".formatted(assetType(), snapshot.type()));
+        }
         String code = snapshot.codePrefix() + sourceEntityId;
         String name = truncate(snapshot.name() == null || snapshot.name().isBlank() ? code : snapshot.name());
         int applied;
         try {
             applied = repository.upsertFromMasterData(
-                    SOURCE_SERVICE, sourceEntityId, code, name, snapshot.type().name(),
+                    SOURCE_SERVICE, sourceEntityId, code, name, assetType().name(),
                     snapshot.executionPackageId(), snapshot.trackId(), snapshot.ownTrack(), snapshot.connectedTrackId(),
                     snapshot.stationId(), snapshot.startKp(), snapshot.endKp(),
                     snapshot.profileSourceId(), snapshot.sectioning(),
@@ -164,6 +175,7 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
         } catch (DataIntegrityViolationException exception) {
             // El choque realista es con uq_catenary_asset_code: alguien creo a mano un activo con ese
             // codigo. Sin este mensaje, en la DLQ solo se lee una violacion de restriccion sin contexto.
+            // Otra entidad con el mismo id ya no choca: la clave lleva el tipo (V26).
             throw new ValidationException(("Asset '%s' cannot be synchronized from %s %s: another asset already uses "
                     + "that code, or the source columns collide. Rename or remove the conflicting asset.")
                     .formatted(code, entityName(), sourceEntityId));
@@ -205,7 +217,7 @@ abstract class AbstractAssetMasterDataHandler implements MasterDataEntityHandler
             return;
         }
 
-        CatenaryAsset asset = repository.findBySourceServiceAndSourceEntityId(SOURCE_SERVICE, sourceEntityId)
+        CatenaryAsset asset = repository.findBySourceServiceAndTypeAndSourceEntityId(SOURCE_SERVICE, assetType(), sourceEntityId)
                 .orElse(null);
 
         if (asset == null) {

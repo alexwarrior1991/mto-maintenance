@@ -69,6 +69,19 @@ event passes its track and package on to all of them in one statement (`V25` ind
 `(source_service, profile_source_id)` for it). The `disconnectors` list that event gained, like the
 single `disconnector` before it, is not read here: each disconnector comes by its own event.
 
+A synchronized asset is identified by `(source_service, type, source_entity_id)` (`V26`), never by
+the id alone: `entityId` is the id of the entity in `mto-configuration`, where profiles,
+disconnectors and section insulators each have their own sequence starting at 1, so profile 5,
+disconnector 5 and insulator 5 are three assets (`PRF-5`, `DSC-5`, `SIN-5`), each with its own
+watermark and its own deletion. Every handler says its type (`assetType()`) in whatever it looks up
+or writes by source. Until `V26` the key had no type and the second of them to arrive wrote over the
+first, or disabled it with its `DELETED`. The migration cannot rebuild those rows
+(`docs/03-database.md` says how to recognise them and what it does clear): **after deploying it,
+republish `profile`, `disconnector` and `section-insulator` from `mto-configuration`**
+(`POST /api/v1/configuration/master-data/republish?entity=…`, one per entity, or everything). The
+order does not matter: each event writes the row of its own type, and the track and the package a
+disconnector or an insulator takes from the profiles arrive whichever comes first.
+
 Upserts and deactivations are native SQL in `CatenaryAssetRepository` with the `sequenceNumber`
 watermark compared inside the `WHERE`: an older event returns 0 rows and is discarded; a missing
 sequence applies and keeps the stored watermark; a deletion advances it even on an already
@@ -84,7 +97,8 @@ The contract leaves two holes that maintenance fills from its own rows, without 
 - a **disconnector** event carries its station and its profile (id, name, kp), but not the
   execution package, and usually not the track. Both are the profile's: `profile_source_id` of the
   disconnector is the `source_entity_id` of its `PROFILE` asset (the numeric id `mto-configuration`
-  publishes for both). On a pole, the event carries a `track` only when the disconnector switches
+  gives the profile; the join always asks for `type = 'PROFILE'`, because a disconnector may carry
+  the same number). On a pole, the event carries a `track` only when the disconnector switches
   another track than its pole's: in a bundle of tracks (workshops, depots) it sometimes hangs from
   the pole of one track and isolates another, or joins two that are not the pole's. That track is
   its own (`own_track`, `V14`): it is stored, its profile passes it only the package, and an event

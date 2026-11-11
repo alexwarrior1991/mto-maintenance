@@ -100,7 +100,8 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
 
 A `CatenaryAsset` is what maintenance is done on: a `TRACK_SECTION` (created through the API, a kp
 range on a track, `MAIN` or `DIVERTED`), or a `PROFILE`, `DISCONNECTOR` or `SECTION_INSULATOR`
-synchronized from `mto-configuration` (`source_service` + `source_entity_id`, never created through
+synchronized from `mto-configuration` (`source_service` + `type` + `source_entity_id`, `V26`: the id
+alone repeats between a profile, a disconnector and an insulator; never created through
 the API, only `description`/`enabled`/`preventiveIntervalDays` editable; the rest is accepted only with
 the value it already has). `enabled` is the sum of two
 voices: `enabledAtSource` (only the events write it) and `disabledLocally` (only `DELETE` and `PUT`
@@ -182,12 +183,15 @@ assets checks it first: 403 `SCP-403`. A task can
 only be completed with the order and a shift covering its track both `IN_PROGRESS`, a task type that requires
 full possession cannot be done in a `PARTIAL` shift, and a `DIVERTED` section only accepts `FULL`
 shifts. Completing a task can record `CatenaryDefect`s inline (`RESOLVED` in the shift if the work
-was finished, `OPEN` with `repairPlannedDate` if not). A `MaintenanceInspection` copies the active
+was finished, `OPEN` with `repairPlannedDate` if not); one resolved afterwards may declare the shift
+where it was corrected (`resolvedInShiftId`, which lifts the "linked order `COMPLETED`" rule), under
+the rule of an inspection's shift and within the scope of whoever writes. A `MaintenanceInspection` copies the active
 `InspectionTemplate` of the asset type into its items (recorded in a shift, one `IN_PROGRESS` or
 `CLOSED` on its asset's track or the connected one, it appears in that shift's report), and can create a defect and a corrective
 order (both idempotent). Every material line (`MaintenanceMaterialUsage`) is reserved in
-`mto-stock` when the order is planned, consumed when it is completed and released when it is
-cancelled, all the lines of the transition at once; a failure leaves the line `FAILED` (stock did not
+`mto-stock` when the order is planned, consumed when it is completed and, when it is cancelled,
+settled by the same step as the completion (what the line already used leaves the warehouse and only
+the rest is released; one that used nothing is released whole), all the lines of the transition at once; a failure leaves the line `FAILED` (stock did not
 answer) or `REJECTED` (it said no, with its reason) and `POST .../materials/{id}/sync` retries. A line
 registered by mistake is removed with `DELETE .../materials/{id}` (a physical delete that Envers keeps
 as a DELETED revision), releasing its reservation first; it is never cancelled.
@@ -205,7 +209,8 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
 - Codes come from sequences (`MO-000001`, `SH-`, `INS-`, `DEF-`), never from `MAX + 1`.
 - `CatenaryAssetRepository.upsertFromMasterData`/`deactivateFromMasterData` are native SQL with the
   sequence watermark inside the `WHERE` (never read-then-write), which is why master-data changes
-  leave no Envers revision. They write `enabled_at_source` and recompute `enabled`, never
+  leave no Envers revision. The row is that of `(source_service, type, source_entity_id)` (`V26`):
+  anything that looks an asset up by its source says its type. They write `enabled_at_source` and recompute `enabled`, never
   `disabled_locally`; `deactivateByTrack` advances the watermark of what it disables (the sequence of
   `mto-configuration` is global). The same goes for `crew_person`, `fleet_vehicle`,
   `maintenance_instrument` and the synchronized team (`upsertFromResources`, watermark = the

@@ -141,7 +141,8 @@ redrives what is stuck. The contract and one JSON example per event are in
 
 A material line references a material and a warehouse of `mto-stock` by id. Planning an order
 reserves every line, completing it consumes the reservations (or registers a direct output when
-the order has no stock project), cancelling releases them. The call goes out with the service
+the order has no stock project), cancelling takes out what each line already used and releases the
+rest. The call goes out with the service
 account `mto-maintenance-svc`, which needs `stock-read` and `stock-write` on `mto-stock-api`
 (`mto-platform/keycloak/apply-partials.sh` grants them locally). When `mto-stock` is down the line
 is left `FAILED`; when it answers no (not enough stock, a warehouse retired...) it is left `REJECTED`

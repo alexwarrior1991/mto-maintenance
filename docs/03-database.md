@@ -30,7 +30,7 @@ yearly reset.
 | `maintenance_team` (+ `maintenance_team_execution_package`) | Teams (local, like the seeded A/B, or synchronized from `mto-resources` since `V19`) and the EPs they cover | `uq code` |
 | `maintenance_task_type` | `RG`/`RP` catalogue | `uq code`, minutes ≥ 0 |
 | `inspection_template`, `inspection_template_item` | Checklists per asset type | `uq (asset_type, version)`, `uq (template_id, code)`, `min ≤ max` |
-| `catenary_asset` | Assets | `uq code`, `uq (source_service, source_entity_id)`, source columns together, `start_kp ≤ end_kp`, `track_kind` only and always on `TRACK_SECTION`, interval > 0 |
+| `catenary_asset` | Assets | `uq code`, `uq (source_service, type, source_entity_id)` (`V26`), source columns together, `start_kp ≤ end_kp`, `track_kind` only and always on `TRACK_SECTION`, interval > 0 |
 | `maintenance_shift` (+ `maintenance_shift_track`, `V5`; + `maintenance_shift_disconnector`, `V6`) | Shifts, the tracks they cover and the disconnectors opened to block the zone | `uq code`, planned/actual windows ordered, `CLOSED` needs actual times, net minutes ≥ 0; `pk (shift_id, track_id)`, `pk (shift_id, disconnector_id)` with `on delete restrict` on the asset |
 | `maintenance_order` | Orders | `uq code`, kp range, actual dates ordered, `COMPLETED` needs dates, `CANCELLED` needs reason; FKs to asset (restrict), team, shift-independent |
 | `maintenance_task` (+ `maintenance_task_task_type`) | Tasks and their types | `uq (order_id, sequence)`, times ordered, `COMPLETED` needs `completed_at` |
@@ -122,7 +122,7 @@ retried by `sync`, which now tells the two apart.
 No schema change. `mto-configuration` publishes neither the track nor the package of a
 disconnector, nor the package of a section insulator; since `V9` they are derived from the profiles
 (`docs/06-messaging.md`), and the migration filled what was stored: disconnectors from their profile
-(`profile_source_id` = the profile's `source_entity_id`), insulators from the profiles of their
+(`profile_source_id` = the `source_entity_id` of the `PROFILE` asset), insulators from the profiles of their
 track, and then the empty `execution_package_id`/`track_id` of the orders, defects and inspections
 created on them (only the empty ones: a value is never overwritten). Like every master-data write it
 is SQL outside Hibernate, so the `_aud` twins show the holes until the next change through the API.
@@ -378,6 +378,45 @@ disconnectors of a pole, which the profile event updates in one statement
 (`inheritLocationOfDisconnector`) and a track deletion takes down (`deactivateByTrack`). Since `V29` of
 `mto-configuration` a pole may carry several; `profile_source_id` was never unique here, so nothing else
 changes.
+
+## The source key of an asset carries its type (`V26`)
+
+`uq_catenary_asset_source` becomes `UNIQUE (source_service, type, source_entity_id)`; it was
+`(source_service, source_entity_id)`. `source_entity_id` is still the raw id of the entity in
+`mto-configuration`, and there each entity has its own sequence (`profile_seq`, `disconnector_seq`,
+`section_insulator_seq`), all three starting at 1: profile 5, disconnector 5 and section insulator 5
+exist at the same time. With the old key the second to arrive fell into the `ON CONFLICT` of the row
+of the first and wrote over it (its code, name, track and kp; not its `type`, which the upsert never
+sets), or went to the DLQ when a `CHECK` tied to the type refused it, and the `DELETED` of one
+disabled the other. Now each is its own row, and every statement that looks an asset up by its source
+names its type: the upsert's `ON CONFLICT`, `deactivateFromMasterData`, `inheritPackageOfTrack`,
+`findBySourceServiceAndTypeAndSourceEntityId`. The joins through `profile_source_id` already asked
+for `type = 'PROFILE'`. `catenary_asset_aud` has no constraints and does not change.
+
+The migration cannot rebuild what was overwritten: of the entities that shared a row only what the
+last one wrote is left, under the type of the first. Such a row is recognised by a code that is not
+the one of its type, before migrating:
+
+```sql
+SELECT id, code, type, source_entity_id, name, enabled
+  FROM catenary_asset
+ WHERE source_service = 'mto-configuration'
+   AND code <> CASE type WHEN 'PROFILE' THEN 'PRF-' WHEN 'DISCONNECTOR' THEN 'DSC-'
+                         WHEN 'SECTION_INSULATOR' THEN 'SIN-' END || source_entity_id;
+```
+
+(a row overwritten and then written again by its own entity has its code right and cannot be told
+apart, which is why everything is republished and not only what this returns). What the migration
+does is clear the way for the republication: such a row keeps its type (the one of the entity it was
+born for, and of the orders pointing at it) and gets back the code of its type, bumping `version` —
+otherwise the republished event of the other entity, which now inserts a row of its own, would hit
+`uq_catenary_asset_code` and end in the DLQ — and it says how many there were in a `NOTICE`; and the
+`catenary_asset_switch` rows hanging from an asset that is not a `SECTION_INSULATOR` (left there by an
+insulator with the id of a profile or a disconnector) are deleted. The rest of each row comes with
+the republication: **after deploying `V26`, republish `profile`, `disconnector` and
+`section-insulator` from `mto-configuration`** (`docs/06-messaging.md`). Orders, inspections and
+defects created on an overwritten row stay on it, that is, on the entity of its type: one that was
+meant for the other entity of the same id has to be moved by hand.
 
 ## Auditing (`V4`)
 

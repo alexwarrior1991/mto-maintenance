@@ -26,6 +26,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDe
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceShift;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryDefectRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository;
@@ -168,8 +169,15 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
         if (!DefectStateMachine.canResolve(defect.getStatus())) {
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is " + defect.getStatus() + " and cannot be resolved");
         }
+        // El turno declarado sale en su parte y, con una orden sin completar, es lo que deja resolver: tiene
+        // que ser de quien escribe y haberse trabajado sobre la via del activo, como el de una inspeccion.
+        MaintenanceShift resolvedInShift = request.resolvedInShiftId() == null ? null : lookups.shift(request.resolvedInShiftId());
+        if (resolvedInShift != null) {
+            scope.requireShift(resolvedInShift);
+            ShiftRules.requireResolvesDefectsOf(resolvedInShift, defect.getAsset());
+        }
         MaintenanceOrder order = defect.getOrder();
-        if (order != null && order.getStatus() != MaintenanceOrderStatus.COMPLETED && request.resolvedInShiftId() == null) {
+        if (order != null && order.getStatus() != MaintenanceOrderStatus.COMPLETED && resolvedInShift == null) {
             // Con orden enlazada la resolucion llega con el cierre de la orden; la excepcion es la
             // correccion in situ dentro de un turno, que se declara con resolvedInShiftId.
             throw new InvalidTransitionException("Defect " + defect.getCode() + " is linked to order " + order.getCode()
@@ -184,8 +192,8 @@ class CatenaryDefectServiceImpl implements CatenaryDefectService {
         }
         defect.setResolvedAt(now);
         defect.setResolutionNotes(request.resolutionNotes().trim());
-        if (request.resolvedInShiftId() != null) {
-            defect.setResolvedInShift(lookups.shift(request.resolvedInShiftId()));
+        if (resolvedInShift != null) {
+            defect.setResolvedInShift(resolvedInShift);
         }
         if (request.correctionType() != null) {
             defect.setCorrectionType(request.correctionType());

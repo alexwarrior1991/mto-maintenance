@@ -3031,6 +3031,87 @@ class BusinessLayerTest {
         verify(fixture.repository, times(1)).save(any());
     }
 
+    @Test
+    void anInspectionIsRecordedOnlyInAShiftWithinTheScopeOfWhoWrites() {
+        // Como asignar o completar una tarea en un turno: el activo en su ambito no basta, el turno tambien.
+        InspectionFixture fixture = new InspectionFixture();
+        CatenaryAsset insulator = insulator("SI-W42", 3L, 2L, "12920.000", "12960.000");
+        when(fixture.lookups.enabledAsset(insulator.getId())).thenReturn(insulator);
+        when(fixture.codeGenerator.nextInspectionCode()).thenReturn("INS-000041");
+        MaintenanceShift foreign = shift(3L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        foreign.setExecutionPackageId(14L);
+        MaintenanceShift own = shift(2L, PossessionType.FULL, ShiftStatus.CLOSED);
+        own.setExecutionPackageId(6L);
+        Stream.of(foreign, own).forEach(shift -> when(fixture.lookups.shift(shift.getId())).thenReturn(shift));
+        fixture.scopeMocks.actAs(crewPerson("TEAM_LEADER"), List.of(6L), List.of());
+
+        ScopeException outside = assertThrows(ScopeException.class, () -> fixture.service.create(inspectionIn(insulator, foreign)));
+        assertTrue(outside.getMessage().contains("is in execution package 14"), outside.getMessage());
+        verify(fixture.repository, never()).save(any());
+        assertTrue(fixture.events.published.isEmpty());
+
+        fixture.service.create(inspectionIn(insulator, own));
+        verify(fixture.repository, times(1)).save(any());
+    }
+
+    @Test
+    void aDefectIsResolvedOnlyInAShiftThatWorkedOnItsTrackAndWithinTheScopeOfWhoWrites() {
+        // Declarar un turno es lo que deja resolver con la orden sin completar: no vale cualquiera.
+        DefectFixture fixture = new DefectFixture();
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        CatenaryDefect defect = defect(DefectStatus.IN_PROGRESS);
+        defect.setOrder(order);
+        defect.setExecutionPackageId(6L);
+        when(fixture.repository.findById(defect.getId())).thenReturn(Optional.of(defect));
+        MaintenanceShift planned = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        MaintenanceShift cancelled = shift(2L, PossessionType.FULL, ShiftStatus.CANCELLED);
+        MaintenanceShift otherTrack = shift(5L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        MaintenanceShift foreign = shift(2L, PossessionType.FULL, ShiftStatus.IN_PROGRESS);
+        foreign.setExecutionPackageId(14L);
+        MaintenanceShift closed = shift(2L, PossessionType.PARTIAL, ShiftStatus.CLOSED);
+        closed.setExecutionPackageId(6L);
+        Stream.of(planned, cancelled, otherTrack, foreign, closed).forEach(shift -> when(fixture.lookups.shift(shift.getId())).thenReturn(shift));
+
+        ShiftException notWorked = assertThrows(ShiftException.class, () -> fixture.service.resolve(defect.getId(), resolvedIn(planned)));
+        assertTrue(notWorked.getMessage().contains("is PLANNED; a defect is resolved in a shift in progress or closed"), notWorked.getMessage());
+        assertThrows(ShiftException.class, () -> fixture.service.resolve(defect.getId(), resolvedIn(cancelled)));
+        ShiftException elsewhere = assertThrows(ShiftException.class, () -> fixture.service.resolve(defect.getId(), resolvedIn(otherTrack)));
+        assertTrue(elsewhere.getMessage().contains("works on tracks [5] but asset PRF-13-2.10 is on track 2"), elsewhere.getMessage());
+
+        // Tampoco sin orden, ni con ella completada: el defecto saldria en el parte de un turno que no lo corrigio.
+        CatenaryDefect loose = defect(DefectStatus.OPEN);
+        when(fixture.repository.findById(loose.getId())).thenReturn(Optional.of(loose));
+        assertThrows(ShiftException.class, () -> fixture.service.resolve(loose.getId(), resolvedIn(planned)));
+        assertEquals(DefectStatus.OPEN, loose.getStatus());
+
+        // El turno, ademas, en el ambito de quien escribe, como el de una tarea.
+        fixture.scopeMocks.actAs(crewPerson("TEAM_LEADER"), List.of(6L), List.of());
+        ScopeException outside = assertThrows(ScopeException.class, () -> fixture.service.resolve(defect.getId(), resolvedIn(foreign)));
+        assertTrue(outside.getMessage().contains("is in execution package 14"), outside.getMessage());
+
+        assertEquals(DefectStatus.IN_PROGRESS, defect.getStatus());
+        assertNull(defect.getResolvedInShift());
+        assertNull(defect.getResolvedAt());
+        verify(fixture.repository, never()).save(any());
+        verify(fixture.history, never()).recordDefectChange(any(), any(), any(), any());
+
+        fixture.service.resolve(defect.getId(), resolvedIn(closed));
+        assertEquals(DefectStatus.RESOLVED, defect.getStatus());
+        assertSame(closed, defect.getResolvedInShift(), "A closed shift on its track: the correction is often written down at the end");
+
+        // Un activo que une dos vias se corrige desde un turno de cualquiera de las dos.
+        CatenaryDefect onInsulator = defect(DefectStatus.OPEN);
+        onInsulator.setAsset(insulator("SI-W43", 3L, 2L, "12920.000", "12960.000"));
+        onInsulator.setExecutionPackageId(6L);
+        when(fixture.repository.findById(onInsulator.getId())).thenReturn(Optional.of(onInsulator));
+        fixture.service.resolve(onInsulator.getId(), resolvedIn(closed));
+        assertEquals(DefectStatus.RESOLVED, onInsulator.getStatus());
+    }
+
+    private static ResolveDefectRequest resolvedIn(MaintenanceShift shift) {
+        return new ResolveDefectRequest("fixed on site", shift.getId(), null, null);
+    }
+
     private static MaintenanceInspectionRequest inspectionIn(CatenaryAsset asset, MaintenanceShift shift) {
         return new MaintenanceInspectionRequest(asset.getId(), LocalDate.of(2026, 1, 28), "dana", null, InspectionResult.OK,
                 null, null, null, null, null, shift.getId());
@@ -4025,6 +4106,171 @@ class BusinessLayerTest {
         assertEquals(StockSyncStatus.NOT_REQUESTED, lost.getStockSyncStatus());
         assertNull(lost.getStockRequestInDoubt());
         verify(stockClient, times(1)).release(any());
+    }
+
+    /**
+     * Cancelar no devuelve al almacen lo que ya no esta en el: lo gastado de cada linea sale, por el
+     * camino con el que se liquida al completar, y solo se libera el resto. Todas a la vez, como en la
+     * transicion de verdad.
+     */
+    @Test
+    void cancellingAnOrderTakesOutWhatItsLinesAlreadyUsedAndReleasesOnlyTheRest() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        List<Object> deferred = new ArrayList<>();
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, events, virtualThreads(), 4,
+                Duration.ofSeconds(10), true, deferred::add);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        UUID project = UUID.randomUUID();
+        order.setStockProjectId(project);
+
+        // 10 reservadas y 3 gastadas en una tarea completada: salen 3 y vuelven 7.
+        MaintenanceMaterialUsage partial = reservedLine(order, "3");
+        partial.setPlannedQuantity(new BigDecimal("10"));
+        stockSays(stockClient, partial, "ACTIVE");
+        // Nada gastado: se libera entera, como siempre.
+        MaintenanceMaterialUsage untouched = reservedLine(order, "0");
+        stockSays(stockClient, untouched, "ACTIVE");
+        // Gastado todo lo reservado: la reserva se consume y no queda nada que liberar.
+        MaintenanceMaterialUsage whole = reservedLine(order, "2");
+        stockSays(stockClient, whole, "ACTIVE");
+        // Gastado de mas: la reserva se consume y sale el exceso.
+        MaintenanceMaterialUsage over = reservedLine(order, "3.5");
+        over.setAllowOverConsumption(true);
+        stockSays(stockClient, over, "ACTIVE");
+        // Nunca tuvo reserva (sin cantidad prevista) y se gasto: sale como salida directa.
+        MaintenanceMaterialUsage unreserved = line(order);
+        unreserved.setPlannedQuantity(BigDecimal.ZERO);
+        unreserved.setAllowOverConsumption(true);
+        unreserved.setConsumedQuantity(new BigDecimal("1"));
+        // Ni reserva ni gasto: no hay nada que decirle a stock.
+        MaintenanceMaterialUsage idle = line(order);
+
+        synchronizer.releaseAll(order);
+
+        assertEquals(StockSyncStatus.CONSUMED, partial.getStockSyncStatus());
+        verify(stockClient).release(partial.getStockReservationId());
+        verify(stockClient, never()).consume(partial.getStockReservationId());
+        verify(stockClient).output(partial.getMaterialId(), partial.getWarehouseId(), project, new BigDecimal("3"), order.getCode(),
+                "Maintenance order " + order.getCode() + ", reservation " + partial.getStockReservationId() + " not consumed",
+                "mto-maintenance:" + partial.getId() + ":output");
+
+        assertEquals(StockSyncStatus.RELEASED, untouched.getStockSyncStatus());
+        verify(stockClient).release(untouched.getStockReservationId());
+        verify(stockClient, never()).output(eq(untouched.getMaterialId()), any(), any(), any(), any(), any(), any());
+
+        assertEquals(StockSyncStatus.CONSUMED, whole.getStockSyncStatus());
+        verify(stockClient).consume(whole.getStockReservationId());
+        verify(stockClient, never()).release(whole.getStockReservationId());
+        verify(stockClient, never()).output(eq(whole.getMaterialId()), any(), any(), any(), any(), any(), any());
+
+        assertEquals(StockSyncStatus.CONSUMED, over.getStockSyncStatus());
+        verify(stockClient).consume(over.getStockReservationId());
+        verify(stockClient, never()).release(over.getStockReservationId());
+        verify(stockClient).output(over.getMaterialId(), over.getWarehouseId(), project, new BigDecimal("1.5"), order.getCode(),
+                "Over-consumption beyond reservation " + over.getStockReservationId(), "mto-maintenance:" + over.getId() + ":output");
+
+        assertEquals(StockSyncStatus.CONSUMED, unreserved.getStockSyncStatus());
+        assertNull(unreserved.getStockReservationId());
+        verify(stockClient).output(unreserved.getMaterialId(), unreserved.getWarehouseId(), project, new BigDecimal("1"), order.getCode(),
+                "Maintenance order " + order.getCode(), "mto-maintenance:" + unreserved.getId() + ":output");
+
+        assertEquals(StockSyncStatus.NOT_REQUESTED, idle.getStockSyncStatus());
+        verify(stockClient, never()).output(eq(idle.getMaterialId()), any(), any(), any(), any(), any(), any());
+
+        verify(stockClient, times(2)).release(any());
+        verify(stockClient, times(2)).consume(any());
+        verify(stockClient, times(3)).output(any(), any(), any(), any(), any(), any(), any());
+        verify(stockClient, never()).reserve(any(), any(), any(), any(), any());
+        List.of(partial, untouched, whole, over, unreserved, idle).forEach(line -> assertNull(line.getStockRequestInDoubt()));
+        assertTrue(events.names().isEmpty(), "Nothing was left halfway: no material event");
+        assertTrue(deferred.isEmpty());
+    }
+
+    /**
+     * Una cancelacion que stock dejo a medias la termina el reintento, que es un /sync de la linea con
+     * la orden ya cancelada: liquida, no libera entera. La salida en duda se repite con su clave, y la
+     * reserva que ya se libero no se libera otra vez.
+     */
+    @Test
+    void aCancellationStockLeftHalfwayIsSettledByTheRetryAndNeverReleasedWhole() {
+        StockClient stockClient = mock(StockClient.class);
+        when(stockClient.isEnabled()).thenReturn(true);
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        MaterialStockSynchronizer synchronizer = new MaterialStockSynchronizer(stockClient, events);
+        MaintenanceOrder order = order(MaintenanceOrderType.CORRECTIVE, MaintenanceOrderStatus.IN_PROGRESS);
+        UUID project = UUID.randomUUID();
+        order.setStockProjectId(project);
+
+        // La reserva se libera y la salida de lo gastado se queda sin respuesta.
+        MaintenanceMaterialUsage cut = reservedLine(order, "3");
+        cut.setPlannedQuantity(new BigDecimal("10"));
+        stockSays(stockClient, cut, "ACTIVE");
+        doThrow(new StockUnavailableException("Read timed out")).when(stockClient)
+                .output(eq(cut.getMaterialId()), any(), any(), any(), any(), any(), any());
+        // Stock ni siquiera dice como esta la reserva: no se ha hecho nada.
+        MaintenanceMaterialUsage unasked = reservedLine(order, "3");
+        unasked.setPlannedQuantity(new BigDecimal("10"));
+        when(stockClient.findReservation(unasked.getStockReservationId())).thenThrow(new StockUnavailableException("Connection refused"));
+        // Stock rechaza la salida de una linea sin reserva.
+        MaintenanceMaterialUsage refused = line(order);
+        refused.setPlannedQuantity(BigDecimal.ZERO);
+        refused.setAllowOverConsumption(true);
+        refused.setConsumedQuantity(new BigDecimal("1"));
+        doThrow(new StockRejectedException("Insufficient stock", 409, StockRejectedException.INSUFFICIENT_STOCK, null)).when(stockClient)
+                .output(eq(refused.getMaterialId()), any(), any(), any(), any(), any(), any());
+
+        // La cancelacion no falla por ello: las lineas lo cuentan.
+        assertDoesNotThrow(() -> synchronizer.releaseAll(order));
+        order.setStatus(MaintenanceOrderStatus.CANCELLED);
+
+        assertEquals(StockSyncStatus.FAILED, cut.getStockSyncStatus());
+        assertEquals(StockRequestType.OUTPUT, cut.getStockRequestInDoubt());
+        assertEquals(StockSyncStatus.FAILED, unasked.getStockSyncStatus());
+        assertNull(unasked.getStockRequestInDoubt());
+        assertEquals(StockSyncStatus.REJECTED, refused.getStockSyncStatus());
+        assertEquals(List.of("material.in-doubt", "material.failed", "material.rejected"), events.names());
+
+        // Stock sigue caido para lo demas (la reserva de la primera ya consta liberada): el reintento deja las
+        // lineas como estaban y no lo repite fuera.
+        stockSays(stockClient, cut, "RELEASED");
+        assertThrows(StockUnavailableException.class, () -> synchronizer.syncNow(cut));
+        assertThrows(StockUnavailableException.class, () -> synchronizer.syncNow(unasked));
+        assertEquals(3, events.names().size(), "Said once per line, not once per retry");
+
+        // Stock vuelve. La primera: su reserva ya esta liberada, queda la salida, con la misma clave y el mismo cuerpo.
+        doNothing().when(stockClient).output(eq(cut.getMaterialId()), any(), any(), any(), any(), any(), any());
+        synchronizer.syncNow(cut);
+        assertEquals(StockSyncStatus.CONSUMED, cut.getStockSyncStatus());
+        assertNull(cut.getStockRequestInDoubt());
+        verify(stockClient, times(1)).release(cut.getStockReservationId());
+        verify(stockClient, times(3)).output(cut.getMaterialId(), cut.getWarehouseId(), project, new BigDecimal("3"), order.getCode(),
+                "Maintenance order " + order.getCode() + ", reservation " + cut.getStockReservationId() + " not consumed",
+                "mto-maintenance:" + cut.getId() + ":output");
+
+        // La segunda: se libera y sale lo gastado, no se libera entera.
+        org.mockito.Mockito.doReturn(Optional.of(new StockReservation(unasked.getStockReservationId(), unasked.getMaterialId(),
+                unasked.getWarehouseId(), project, new BigDecimal("10"), "ACTIVE"))).when(stockClient).findReservation(unasked.getStockReservationId());
+        synchronizer.syncNow(unasked);
+        assertEquals(StockSyncStatus.CONSUMED, unasked.getStockSyncStatus());
+        verify(stockClient, times(1)).release(unasked.getStockReservationId());
+        verify(stockClient, times(1)).output(unasked.getMaterialId(), unasked.getWarehouseId(), project, new BigDecimal("3"), order.getCode(),
+                "Maintenance order " + order.getCode() + ", reservation " + unasked.getStockReservationId() + " not consumed",
+                "mto-maintenance:" + unasked.getId() + ":output");
+
+        // La rechazada: un /sync a mano, con existencias ya, la saca.
+        doNothing().when(stockClient).output(eq(refused.getMaterialId()), any(), any(), any(), any(), any(), any());
+        synchronizer.syncNow(refused);
+        assertEquals(StockSyncStatus.CONSUMED, refused.getStockSyncStatus());
+
+        // Una liberada con consumo es de una orden cancelada antes de esta regla: sincronizarla no saca nada.
+        MaintenanceMaterialUsage legacy = reservedLine(order, "1");
+        legacy.markReleased();
+        synchronizer.syncNow(legacy);
+        assertEquals(StockSyncStatus.RELEASED, legacy.getStockSyncStatus());
+        verify(stockClient, never()).output(eq(legacy.getMaterialId()), any(), any(), any(), any(), any(), any());
+        verify(stockClient, never()).findReservation(legacy.getStockReservationId());
     }
 
     /**

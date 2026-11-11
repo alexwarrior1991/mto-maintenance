@@ -42,8 +42,9 @@ import java.util.function.Consumer;
  *
  * <p>Reserva completa al planificar; al completar, la reserva se consume si lo consumido iguala lo
  * reservado, se libera y se da salida directa de lo consumido si es menor, y se consume mas una
- * salida del exceso si es mayor (mto-stock no admite consumo parcial de una reserva). Al cancelar,
- * se libera.</p>
+ * salida del exceso si es mayor (mto-stock no admite consumo parcial de una reserva). Al cancelar se
+ * liquida igual, por el mismo camino ({@link #settle}): lo que ya se gasto sale del almacen y solo se
+ * libera el resto; una linea de la que no se gasto nada se libera entera.</p>
  *
  * <p>Antes de consumir o liberar una linea con reserva se pregunta a stock como esta, porque stock no
  * avisa de nada y la reserva puede haber cambiado desde Almacen, o en un intento anterior que fallo a
@@ -146,17 +147,22 @@ class MaterialStockSynchronizer {
         }
     }
 
-    /** Cancelacion de la orden: lo que cada linea retiene vuelve a estar disponible en stock, todas a la vez y con plazo. */
+    /**
+     * Cancelacion de la orden, todas las lineas a la vez y con plazo: lo que ya se gasto de cada una sale
+     * del almacen y solo el resto de lo que retiene vuelve a estar disponible. Es la liquidacion del
+     * cierre ({@link #settle}); con nada gastado, liberar.
+     */
     void releaseAll(MaintenanceOrder order) {
         if (stockClient.isEnabled()) {
-            converse(order, order.getMaterials().stream().filter(MaterialStockSynchronizer::isPending).toList(), "release", this::free, true);
+            converse(order, order.getMaterials().stream().filter(MaterialStockSynchronizer::awaitsCancellation).toList(),
+                    "release", this::settle, true);
         }
     }
 
-    /** Cancelacion de una linea: lo que retiene vuelve a estar disponible en stock. */
+    /** Cancelacion de una linea: sale lo que se gasto de ella y lo demas que retiene vuelve a estar disponible. */
     void release(MaintenanceMaterialUsage usage) {
-        if (stockClient.isEnabled() && isPending(usage)) {
-            converse(usage.getOrder(), List.of(usage), "release", this::free, false);
+        if (stockClient.isEnabled() && awaitsCancellation(usage)) {
+            converse(usage.getOrder(), List.of(usage), "release", this::settle, false);
         }
     }
 
@@ -221,6 +227,9 @@ class MaterialStockSynchronizer {
      * <p>En una orden en curso tambien comprueba una linea RESERVED: si la reserva se libero desde
      * Almacen, pide otra. Y termina una salida que se quedo sin respuesta al intentar completarla, en
      * vez de reservar de nuevo lo que quiza ya salio del almacen.</p>
+     *
+     * <p>En una orden cancelada termina lo que su cancelacion dejo a medias, que es liquidar: lo
+     * gastado sale y el resto se libera. Nunca libera entera una linea de la que se gasto algo.</p>
      */
     void syncNow(MaintenanceMaterialUsage usage) {
         if (!stockClient.isEnabled()) {
@@ -231,7 +240,7 @@ class MaterialStockSynchronizer {
         RuntimeException failure = switch (order.getStatus()) {
             case DRAFT -> null;
             case COMPLETED -> status == StockSyncStatus.CONSUMED ? null : converse(order, List.of(usage), "consume", this::settle, false);
-            case CANCELLED -> isPending(usage) ? converse(order, List.of(usage), "release", this::free, false) : null;
+            case CANCELLED -> awaitsCancellation(usage) ? converse(order, List.of(usage), "release", this::settle, false) : null;
             default -> usage.getStockRequestInDoubt() == StockRequestType.OUTPUT
                     ? converse(order, List.of(usage), "consume", this::settle, false)
                     : usage.getPlannedQuantity().signum() == 0 || status == StockSyncStatus.CONSUMED ? null
@@ -478,6 +487,12 @@ class MaterialStockSynchronizer {
         }
     }
 
+    /**
+     * Liquida la linea: lo gastado sale del almacen y lo demas que retenga vuelve a estar disponible.
+     * Es el paso del cierre de la orden y tambien el de su cancelacion, sin distinguirlas: con nada
+     * gastado libera la reserva; con algo, lo saca -y por eso cancelar no devuelve al almacen lo que
+     * ya no esta en el-. Una salida que se quedo sin respuesta se repite aqui con su clave.
+     */
     private void settle(StockLine line) {
         if (line.inDoubt() == StockRequestType.RESERVATION) {
             // La reserva sin respuesta puede estar reteniendo material: primero se confirma, y luego se
@@ -536,31 +551,6 @@ class MaterialStockSynchronizer {
                     reservation.id(), line.consumedQuantity(), line.unit(), line.orderCode(), line.materialCode());
         }
         line.markConsumed();
-    }
-
-    private void free(StockLine line) {
-        if (line.inDoubt() == StockRequestType.OUTPUT) {
-            // Lo usado salio, o sale ahora: la salida que se quedo sin respuesta se termina, y la linea
-            // queda consumida como en stock. Liberar no la deshace.
-            settle(line);
-            return;
-        }
-        if (line.inDoubt() == StockRequestType.RESERVATION) {
-            confirmReservation(line);
-        }
-        Optional<StockReservation> reservation = currentReservation(line);
-        if (reservation.filter(StockReservation::isActive).isPresent()) {
-            line.checkOpen();
-            stockClient.release(reservation.get().id());
-            line.markReleased();
-        } else if (reservation.filter(StockReservation::isConsumed).isPresent()) {
-            // Se consumio antes de cancelar: el material ya salio del almacen, y la linea lo dice.
-            line.markConsumed();
-        } else if (line.reservationId() != null) {
-            line.markReleased();
-        } else {
-            line.markNotRequested();
-        }
     }
 
     /**
@@ -656,6 +646,17 @@ class MaterialStockSynchronizer {
         StockSyncStatus status = usage.getStockSyncStatus();
         return usage.getPlannedQuantity().signum() > 0 && status != StockSyncStatus.RESERVED && status != StockSyncStatus.CONSUMED
                 && usage.getStockRequestInDoubt() != StockRequestType.OUTPUT;
+    }
+
+    /**
+     * Lo que la cancelacion de la orden tiene que liquidar: algo a medias en stock, o una linea que
+     * nunca tuvo reserva (sin proyecto de stock, o sin cantidad prevista) y de la que se gasto algo, que
+     * sale como salida directa. Una linea RELEASED no: lo que liquida deja CONSUMED la que gasto algo,
+     * asi que una liberada con consumo es de una orden cancelada antes de esta regla, y no se toca sola.
+     */
+    private static boolean awaitsCancellation(MaintenanceMaterialUsage usage) {
+        return isPending(usage)
+                || usage.getStockSyncStatus() == StockSyncStatus.NOT_REQUESTED && usage.getConsumedQuantity().signum() > 0;
     }
 
     /** Algo a medias en stock: una reserva, o un intento que fallo o se rechazo. */

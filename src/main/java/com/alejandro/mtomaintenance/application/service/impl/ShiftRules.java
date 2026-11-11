@@ -50,9 +50,24 @@ final class ShiftRules {
      * ha trabajado, y uno de otra via pondria la inspeccion en el parte de quien no la hizo.
      */
     static void requireRecordsInspectionsOf(MaintenanceShift shift, CatenaryAsset asset) {
+        requireWorkedOn(shift, asset, "an inspection is recorded");
+    }
+
+    /**
+     * Un defecto corregido in situ se declara resuelto en un turno: sale en su parte (los defectos
+     * resueltos de la noche) y, con una orden enlazada sin completar, es lo que deja resolverlo. La
+     * misma regla que la inspeccion, por lo mismo: un turno que se ha trabajado (en curso o cerrado)
+     * y que recorre la via del activo del defecto, o la otra si une dos. Sin ella, cualquier turno
+     * —uno planificado, uno cancelado, el de otra via— valia para saltarse la orden.
+     */
+    static void requireResolvesDefectsOf(MaintenanceShift shift, CatenaryAsset asset) {
+        requireWorkedOn(shift, asset, "a defect is resolved");
+    }
+
+    private static void requireWorkedOn(MaintenanceShift shift, CatenaryAsset asset, String what) {
         if (shift.getStatus() != ShiftStatus.IN_PROGRESS && shift.getStatus() != ShiftStatus.CLOSED) {
             throw new ShiftException("Shift " + shift.getCode() + " is " + shift.getStatus()
-                    + "; an inspection is recorded in a shift in progress or closed");
+                    + "; " + what + " in a shift in progress or closed");
         }
         if (!covers(shift, asset.getTrackId(), asset.getConnectedTrackId())) {
             throw new ShiftException("Shift " + shift.getCode() + " works on tracks " + tracksOf(shift)

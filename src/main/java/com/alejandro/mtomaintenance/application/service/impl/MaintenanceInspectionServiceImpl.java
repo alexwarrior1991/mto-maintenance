@@ -94,6 +94,8 @@ class MaintenanceInspectionServiceImpl implements MaintenanceInspectionService {
         }
         MaintenanceShift shift = request.shiftId() == null ? null : lookups.shift(request.shiftId());
         if (shift != null) {
+            // Sale en el parte de ese turno: como una tarea, solo la apunta quien tiene el turno en su ambito.
+            scope.requireShift(shift);
             ShiftRules.requireRecordsInspectionsOf(shift, asset);
         }
 
