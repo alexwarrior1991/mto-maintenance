@@ -63,6 +63,8 @@ class BudgetedOperationsImpl implements BudgetedOperations {
     private static final long CAPACITY_LOCK = AdvisoryLockKeys.of("mto-maintenance:background-operation:capacity");
     private static final int MAX_MESSAGE_LENGTH = 4000;
     private static final int MAX_URI_LENGTH = 500;
+    /** Cuantas veces se intenta apuntar el resultado de un trabajo hecho si la base de datos no contesta. */
+    private static final int RECORD_ATTEMPTS = 3;
 
     private final BackgroundOperationRepository repository;
     private final AsyncTaskExecutor executor;
@@ -193,20 +195,91 @@ class BudgetedOperationsImpl implements BudgetedOperations {
     }
 
     private <T> void run(UUID id, int successStatus, Supplier<T> work, CompletableFuture<T> future) {
+        T result;
+        String body;
         try {
-            T result = work.get();
-            repository.markSucceeded(id, successStatus, jsonMapper.writeValueAsString(result), Instant.now());
-            future.complete(result);
+            result = work.get();
+            body = jsonMapper.writeValueAsString(result);
         } catch (Throwable failure) {
-            fail(id, failure, future);
+            fail(id, failure, future, true);
+            return;
+        }
+        // Desde aqui el trabajo esta hecho y confirmado: nada de lo que pase al apuntarlo lo convierte en un fallo.
+        try {
+            succeed(id, successStatus, body);
+        } finally {
+            future.complete(result);
+        }
+    }
+
+    /**
+     * Apunta el resultado mirando el recuento de filas. El trabajo ya esta hecho y confirmado en sus propias
+     * transacciones, asi que su resultado es la verdad: si entretanto otra replica (o esta, con el latido
+     * retrasado) la dio por abandonada, la operacion pasa a {@code SUCCEEDED} igualmente, y lo que queda del
+     * abandono es su {@code abandoned_at}, que la respuesta muestra, y este aviso. Dejarla {@code FAILED} haria
+     * que el cliente repitiera un trabajo hecho.
+     *
+     * <p>Si la base de datos no contesta al apuntarlo se reintenta unas pocas veces; nunca se apunta como
+     * fallida por eso. Si no hay manera, la fila se queda {@code RUNNING} sin latido y acabara en
+     * {@code OPS-410}: es lo unico que no se puede evitar sin base de datos, y queda dicho en el log.</p>
+     */
+    private void succeed(UUID id, int successStatus, String result) {
+        Duration pause = properties.pollInitial();
+        for (int attempt = 1; ; attempt++) {
+            try {
+                if (repository.markSucceeded(id, successStatus, result, Instant.now()) == 1) {
+                    return;
+                }
+                if (repository.markSucceededAfterAbandon(id, successStatus, result, Instant.now()) == 1) {
+                    LOGGER.warn("Background operation {} had been given up for abandoned (its heartbeat was late) but its "
+                            + "work finished: it is recorded as succeeded. Another one of its scope may have run meanwhile", id);
+                    return;
+                }
+                LOGGER.error("Background operation {} finished its work but its row could not be marked succeeded: "
+                        + "it is no longer running nor abandoned (purged?)", id);
+                return;
+            } catch (RuntimeException unrecorded) {
+                if (attempt == RECORD_ATTEMPTS) {
+                    LOGGER.error("Background operation {} finished its work but its result could not be recorded after {} "
+                            + "attempts: its row will end as abandoned (OPS-410) although the work is done", id, attempt, unrecorded);
+                    return;
+                }
+                LOGGER.warn("Background operation {} finished its work but recording it failed (attempt {}): {}", id, attempt,
+                        unrecorded.getMessage());
+                try {
+                    Thread.sleep(pause);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    LOGGER.error("Background operation {} finished its work but was interrupted before recording it", id);
+                    return;
+                }
+                pause = longer(pause);
+            }
         }
     }
 
     private void fail(UUID id, Throwable failure, CompletableFuture<?> future) {
-        OperationError error = errorTranslator.translate(failure);
-        LOGGER.warn("Background operation {} failed with {} {}: {}", id, error.status(), error.errorCode(), error.message());
-        repository.markFailed(id, error.status(), error.errorCode(), truncate(error.message(), MAX_MESSAGE_LENGTH), Instant.now());
-        future.completeExceptionally(failure);
+        fail(id, failure, future, false);
+    }
+
+    /**
+     * @param worked si el fallo es del trabajo: entonces su error sustituye al {@code OPS-410} de una que se dio
+     *               por abandonada mientras trabajaba. La que no llego a trabajar se queda como este.
+     */
+    private void fail(UUID id, Throwable failure, CompletableFuture<?> future, boolean worked) {
+        try {
+            OperationError error = errorTranslator.translate(failure);
+            LOGGER.warn("Background operation {} failed with {} {}: {}", id, error.status(), error.errorCode(), error.message());
+            String message = truncate(error.message(), MAX_MESSAGE_LENGTH);
+            if (repository.markFailed(id, error.status(), error.errorCode(), message, Instant.now()) == 0 && worked
+                    && repository.markFailedAfterAbandon(id, error.status(), error.errorCode(), message, Instant.now()) == 1) {
+                LOGGER.warn("Background operation {} had been given up for abandoned but its work went on and failed: "
+                        + "its own error replaces OPS-410", id);
+            }
+        } finally {
+            // Tambien si no se pudo apuntar: quien espera recibe el fallo del trabajo, no un 202 de algo que ya acabo.
+            future.completeExceptionally(failure);
+        }
     }
 
     /**
@@ -246,6 +319,9 @@ class BudgetedOperationsImpl implements BudgetedOperations {
 
     @Override
     public int failAbandoned() {
+        // Primero late por las suyas: si el latido se retraso (el planificador ocupado, una pausa larga) y esta
+        // revision llega antes que el, este proceso daria por abandonado lo que el mismo esta haciendo.
+        heartbeat();
         Instant now = Instant.now();
         int abandoned = repository.failAbandoned(now.minus(properties.staleAfter()), now);
         if (abandoned > 0) {
@@ -282,7 +358,7 @@ class BudgetedOperationsImpl implements BudgetedOperations {
         Object result = operation.getResult() == null ? null : jsonMapper.readValue(operation.getResult(), Object.class);
         return new OperationResponse(operation.getId(), operation.getKind(), operation.getScope(), operation.getStatus(),
                 operation.getRequestedBy(), operation.getCreatedAt(), operation.getStartedAt(), operation.getFinishedAt(),
-                operation.getResultStatus(), result, error);
+                operation.getResultStatus(), result, error, operation.getAbandonedAt());
     }
 
     private static BackgroundOperationContext.Context captureRequest(UUID id) {

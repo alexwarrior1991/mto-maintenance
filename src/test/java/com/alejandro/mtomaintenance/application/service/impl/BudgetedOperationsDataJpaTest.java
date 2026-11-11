@@ -84,13 +84,22 @@ class BudgetedOperationsDataJpaTest extends PostgreSQLTestContainer {
 
     private BudgetedOperations operations;
 
+    /** Otra replica del despliegue: la que mira los latidos de las demas. La propia late antes de mirar. */
+    private BudgetedOperations otherReplica;
+
     @BeforeEach
     void operations() {
         // Lo que dejo una pasada anterior no cuenta para el tope de esta.
         jdbc.update("delete from background_operation");
+        operations = replica(repository);
+        otherReplica = replica(repository);
+    }
+
+    /** Una replica: sus operaciones vivas son solo las que ella misma lleva. */
+    private BudgetedOperations replica(BackgroundOperationRepository operationRepository) {
         OperationsProperties properties = new OperationsProperties(Duration.ofSeconds(5), Duration.ofSeconds(10), MAX_ACTIVE, null,
                 Duration.ofMinutes(1), Duration.ofMillis(20), Duration.ofMillis(100), null, 0, false);
-        operations = new BudgetedOperationsImpl(repository, new AsyncConfiguration().applicationTaskExecutor(), transactionManager,
+        return new BudgetedOperationsImpl(operationRepository, new AsyncConfiguration().applicationTaskExecutor(), transactionManager,
                 failure -> failure instanceof ShiftException
                         ? new OperationError(409, "SHF-001", failure.getMessage())
                         : new OperationError(500, "APP-500", failure.getMessage()),
@@ -223,13 +232,114 @@ class BudgetedOperationsDataJpaTest extends PostgreSQLTestContainer {
         waitUntil(() -> operations.find(id).status() == OperationStatus.RUNNING);
         jdbc.update("update background_operation set heartbeat_at = now() - interval '1 hour' where id = ?", id);
 
-        assertTrue(operations.failAbandoned() >= 1);
+        assertEquals(0, operations.failAbandoned(), "Its own replica beats for it before looking: it is alive");
+        jdbc.update("update background_operation set heartbeat_at = now() - interval '1 hour' where id = ?", id);
+        assertTrue(otherReplica.failAbandoned() >= 1);
         OperationResponse failed = operations.find(id);
         assertEquals(OperationStatus.FAILED, failed.status());
         assertEquals("OPS-410", failed.error().errorCode());
         release.countDown();
         jdbc.update("update background_operation set finished_at = now() - interval '30 days' where id = ?", id);
         assertTrue(operations.purgeFinished() >= 1, "What finished long ago is purged");
+    }
+
+    /**
+     * El latido se para (el planificador ocupado, una pausa larga, la base de datos sin contestar un rato)
+     * y otra replica da la operacion por abandonada, pero su trabajo sigue y termina, confirmado. Lo que
+     * paso es lo que hizo el trabajo: la operacion acaba con su resultado, no con un {@code OPS-410} que
+     * haria repetir a quien la pidio algo ya hecho, y dice que se la dio por abandonada entre medias.
+     */
+    @Test
+    void anOperationGivenUpAsAbandonedWhoseWorkStillEndsSaysWhatItsWorkDid() {
+        authenticateAs("planner");
+        CountDownLatch release = new CountDownLatch(1);
+        UUID id = operations.run("GENERATE_TASKS", "EP-" + System.nanoTime(), 201, Duration.ZERO, () -> {
+            await(release);
+            return Map.of("createdTasks", 7);
+        }).operation().id();
+        waitUntil(() -> operations.find(id).status() == OperationStatus.RUNNING);
+        jdbc.update("update background_operation set heartbeat_at = now() - interval '1 hour' where id = ?", id);
+        assertEquals(1, otherReplica.failAbandoned());
+        OperationResponse abandoned = operations.find(id);
+        assertEquals("OPS-410", abandoned.error().errorCode());
+        assertNotNull(abandoned.abandonedAt());
+
+        release.countDown();
+        waitUntil(() -> operations.find(id).status() == OperationStatus.SUCCEEDED);
+        OperationResponse finished = operations.find(id);
+        assertEquals(201, finished.resultStatus());
+        assertEquals(Map.of("createdTasks", 7), finished.result());
+        assertEquals(null, finished.error(), "The work ended: no trace of the error it never had");
+        assertEquals(abandoned.abandonedAt(), finished.abandonedAt(), "But it says it was given up for a while");
+        assertFalse(finished.finishedAt().isBefore(abandoned.finishedAt()));
+
+        // Y al reves: terminada antes de que nadie mire su latido, ya no es de las vivas y se queda como esta.
+        jdbc.update("update background_operation set heartbeat_at = now() - interval '1 hour' where id = ?", id);
+        assertEquals(0, otherReplica.failAbandoned());
+        assertEquals(OperationStatus.SUCCEEDED, operations.find(id).status());
+    }
+
+    /**
+     * Lo mismo con un trabajo que falla: su error (un 409 que no se arregla repitiendo) es mas cierto que
+     * el {@code OPS-410}. La que se abandono en cola y nunca llego a trabajar se queda en {@code OPS-410}.
+     */
+    @Test
+    void anOperationGivenUpAsAbandonedWhoseWorkFailsSaysItsErrorAndOneThatNeverWorkedStaysAbandoned() throws Exception {
+        authenticateAs("planner");
+        String scope = "EP-" + System.nanoTime();
+        CountDownLatch release = new CountDownLatch(1);
+        UUID working = operations.run("GENERATE_TASKS", scope, 200, Duration.ZERO, () -> {
+            await(release);
+            throw new ShiftException("Shift SH-000003 cannot take it");
+        }).operation().id();
+        AtomicBoolean ran = new AtomicBoolean();
+        UUID queued = operations.run("GENERATE_TASKS", scope, 200, Duration.ZERO, () -> {
+            ran.set(true);
+            return "never";
+        }).operation().id();
+        waitUntil(() -> operations.find(working).status() == OperationStatus.RUNNING);
+        jdbc.update("update background_operation set heartbeat_at = now() - interval '1 hour' where id in (?, ?)", working, queued);
+        assertEquals(2, otherReplica.failAbandoned());
+
+        release.countDown();
+        waitUntil(() -> !"OPS-410".equals(operations.find(working).error().errorCode()));
+        OperationResponse failed = operations.find(working);
+        assertEquals(OperationStatus.FAILED, failed.status());
+        assertEquals(new OperationError(409, "SHF-001", "Shift SH-000003 cannot take it"), failed.error());
+        assertNotNull(failed.abandonedAt());
+
+        Thread.sleep(500);
+        assertFalse(ran.get(), "Abandoned in the queue: it never starts");
+        assertEquals("OPS-410", operations.find(queued).error().errorCode());
+    }
+
+    /**
+     * El trabajo termino y no se pudo apuntar a la primera (la base de datos no contesto): se reintenta, y
+     * la operacion no queda fallida con el error de apuntarla, que no es del trabajo.
+     */
+    @Test
+    void aSuccessThatCouldNotBeRecordedAtFirstIsRecordedAndNeverTurnedIntoAFailure() {
+        authenticateAs("planner");
+        AtomicInteger attempts = new AtomicInteger();
+        BackgroundOperationRepository flaky = (BackgroundOperationRepository) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{BackgroundOperationRepository.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("markSucceeded") && attempts.getAndIncrement() == 0) {
+                        throw new org.springframework.dao.TransientDataAccessResourceException("connection lost");
+                    }
+                    try {
+                        return method.invoke(repository, args);
+                    } catch (java.lang.reflect.InvocationTargetException thrown) {
+                        throw thrown.getCause();
+                    }
+                });
+        BudgetedOperations withFlakyDatabase = replica(flaky);
+
+        BudgetedOperations.Outcome<String> outcome = withFlakyDatabase.run("GENERATE_TASKS", null, 200, Duration.ofSeconds(5), () -> "done");
+
+        assertTrue(outcome.completed());
+        assertEquals("done", outcome.result());
+        assertEquals(OperationStatus.SUCCEEDED, outcome.operation().status());
+        assertEquals(2, attempts.get());
     }
 
     @Test

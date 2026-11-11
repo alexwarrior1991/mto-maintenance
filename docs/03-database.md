@@ -309,7 +309,8 @@ constraint, keep two shifts saved at once apart.
 `SUCCEEDED`, `FAILED`), `requested_by`, the request's `correlation_id`, `request_method` and
 `request_uri`; on success `result_status` and `result` (`json`: the body the synchronous call would
 have given); on failure `error_status`, `error_code` and `error_message`; `created_at`, `started_at`,
-`finished_at` and `heartbeat_at`. `chk_background_operation_finished` (`finished_at` exactly when
+`finished_at`, `heartbeat_at` and `abandoned_at` (`V27`: when its heartbeat was found stopped, `NULL`
+if never; kept when the work ended afterwards and its outcome replaced the `OPS-410`). `chk_background_operation_finished` (`finished_at` exactly when
 `SUCCEEDED`/`FAILED`) and `chk_background_operation_failed_has_error`. Partial indexes for the cap
 (`(status, heartbeat_at)` of the live ones), the turn of a scope (`(scope, created_at)` of the live
 ones with a scope) and the purge (`finished_at` of the finished ones).

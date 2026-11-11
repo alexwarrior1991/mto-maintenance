@@ -222,7 +222,11 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
   documents of `V23` and the `unavailable` periods and capabilities of `V24` go in the same statement,
   and an event without the key keeps the stored ones),
   and for `background_operation` (`V21`), whose cap and turn per scope are decided by row count inside
-  the writing statement.
+  the writing statement. **The outcome of the work wins over an abandon**: the row count of
+  `markSucceeded`/`markFailed` is read, and an operation given up for abandoned (`OPS-410`,
+  `abandoned_at`, `V27`) while it worked ends with what its work did (`markSucceededAfterAbandon`,
+  `markFailedAfterAbandon`, a WARN; `abandonedAt` stays in the answer); a result that cannot be recorded
+  is retried, never turned into a failure, and the abandon check beats first for its own process.
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
   `CHECK` that exactly one is set.
 - Every entity edited through the API extends `VersionedEntity` (`@Version`, `V11`): its response

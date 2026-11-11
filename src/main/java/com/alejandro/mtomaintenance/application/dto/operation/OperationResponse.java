@@ -17,6 +17,9 @@ import java.util.UUID;
  * @param resultStatus el estado HTTP que habria dado la llamada sincrona (200, 201) al terminar bien
  * @param result       el cuerpo que habria dado la llamada sincrona, tal cual
  * @param error        al terminar mal, el estado, codigo y mensaje de esa misma llamada
+ * @param abandonedAt  cuando se la dio por abandonada ({@code OPS-410}) porque su latido se paro, si paso.
+ *                     Si su trabajo termino despues, la operacion dice lo que hizo ese trabajo y conserva
+ *                     esta fecha: explica a quien la vio fallida que haya cambiado
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record OperationResponse(
@@ -30,6 +33,7 @@ public record OperationResponse(
         Instant finishedAt,
         Integer resultStatus,
         Object result,
-        OperationError error
+        OperationError error,
+        Instant abandonedAt
 ) {
 }

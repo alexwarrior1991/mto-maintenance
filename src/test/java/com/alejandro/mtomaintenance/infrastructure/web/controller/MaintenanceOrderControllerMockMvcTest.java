@@ -498,7 +498,7 @@ class MaintenanceOrderControllerMockMvcTest {
         GeneratePreventiveTasksResponse generated = new GeneratePreventiveTasksResponse(3, 0, 3, java.math.BigDecimal.TEN, 1, 0,
                 java.util.Map.of(), 0, java.util.List.of(), 0, 0, false, java.util.List.of());
         OperationResponse running = new OperationResponse(operationId, "GENERATE_TASKS", "EP-14", OperationStatus.RUNNING, "planner",
-                java.time.Instant.parse("2026-10-16T21:00:00Z"), java.time.Instant.parse("2026-10-16T21:00:00Z"), null, null, null, null);
+                java.time.Instant.parse("2026-10-16T21:00:00Z"), java.time.Instant.parse("2026-10-16T21:00:00Z"), null, null, null, null, null);
         when(taskService.generationScope(orderId)).thenReturn("EP-14");
         doReturn(new BudgetedOperations.Outcome<>(running, null, false))
                 .when(operations).run(eq("GENERATE_TASKS"), eq("EP-14"), eq(200), eq(java.time.Duration.ofSeconds(2)), any());
