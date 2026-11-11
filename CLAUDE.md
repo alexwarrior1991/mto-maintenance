@@ -189,8 +189,9 @@ the rule of an inspection's shift and within the scope of whoever writes. A `Mai
 `InspectionTemplate` of the asset type into its items (recorded in a shift, one `IN_PROGRESS` or
 `CLOSED` on its asset's track or the connected one, it appears in that shift's report), and can create a defect and a corrective
 order (both idempotent). Every material line (`MaintenanceMaterialUsage`) is reserved in
-`mto-stock` when the order is planned, consumed when it is completed and released when it is
-cancelled, all the lines of the transition at once; a failure leaves the line `FAILED` (stock did not
+`mto-stock` when the order is planned, consumed when it is completed and, when it is cancelled,
+settled by the same step as the completion (what the line already used leaves the warehouse and only
+the rest is released; one that used nothing is released whole), all the lines of the transition at once; a failure leaves the line `FAILED` (stock did not
 answer) or `REJECTED` (it said no, with its reason) and `POST .../materials/{id}/sync` retries. A line
 registered by mistake is removed with `DELETE .../materials/{id}` (a physical delete that Envers keeps
 as a DELETED revision), releasing its reservation first; it is never cancelled.

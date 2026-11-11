@@ -171,7 +171,8 @@ public class MaintenanceOrderController {
         return ResponseEntity.ok(orderService.complete(id, request));
     }
 
-    @Operation(summary = "Cancel order", description = "Any non-terminal state -> CANCELLED. Releases stock reservations and reopens linked defects. Requires the supervise role.")
+    @Operation(summary = "Cancel order", description = "Any non-terminal state -> CANCELLED. What each material line already used leaves the warehouse and the rest of its "
+            + "reservation is released; reopens linked defects. Requires the supervise role.")
     @PreAuthorize("hasRole('" + SecurityRoles.MAINTENANCE_SUPERVISE + "')")
     @PostMapping("/{id}/cancel")
     public ResponseEntity<MaintenanceOrderResponse> cancel(@PathVariable UUID id, @Valid @RequestBody CancelOrderRequest request) {
