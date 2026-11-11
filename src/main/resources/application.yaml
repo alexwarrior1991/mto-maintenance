@@ -15,6 +15,17 @@ spring:
     virtual:
       enabled: ${SPRING_THREADS_VIRTUAL_ENABLED:true}
 
+  # Los @Scheduled no se esperan unos a otros: el relay del outbox habla con el broker y el reintento de
+  # stock con mto-stock, y mientras esperaban no corria el latido de las operaciones de fondo, que otra
+  # replica daba entonces por abandonadas. SchedulingConfiguration planifica en un pool de este tamano,
+  # de hilos virtuales con los hilos virtuales activos y de plataforma sin ellos. El planificador de Boot
+  # con hilos virtuales corre todas las tareas fixedDelay en un mismo hilo, y el de plataforma, sin este
+  # tamano, tiene uno solo.
+  task:
+    scheduling:
+      pool:
+        size: ${SPRING_TASK_SCHEDULING_POOL_SIZE:4}
+
   # El limite real de concurrencia: sin el tope de 200 hilos de Tomcat, lo que espera es la conexion.
   # El PostgreSQL de mto-platform es uno para todos los servicios (max_connections 100 por defecto),
   # asi que la suma de los pools de todas las instancias tiene que quedar por debajo. Cada operacion de

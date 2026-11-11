@@ -111,6 +111,15 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import javax.sql.DataSource;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import com.alejandro.mtomaintenance.configuration.scheduling.SchedulingConfiguration;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.task.TaskSchedulingAutoConfiguration;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -284,6 +293,65 @@ class MtoMaintenanceApplicationTests extends PostgreSQLTestContainer {
         assertEquals(10_000L, context.getBean(DataSource.class).unwrap(HikariDataSource.class).getConnectionTimeout());
         assertEquals(10_000L, defaults.getProperty("spring.datasource.hikari.connection-timeout", Long.class),
                 "the default of DATABASE_POOL_CONNECTION_TIMEOUT");
+        assertEquals(4, defaults.getProperty("spring.task.scheduling.pool.size", Integer.class),
+                "el pool de los @Scheduled, el de SchedulingConfiguration, con hilos virtuales y sin ellos");
+    }
+
+    /**
+     * Dos pasadas {@code fixedDelay} corren a la vez en el planificador de {@link SchedulingConfiguration},
+     * con hilos virtuales y sin ellos: cada una espera a que la otra haya empezado, asi que con un solo
+     * hilo la segunda no empezaria nunca mientras la primera espera. Es lo que no hacia el planificador de
+     * Boot (con hilos virtuales corre todas las tareas {@code fixedDelay} en su unico hilo, y sin ellos su
+     * pool es de uno): el relay del outbox esperando los confirms del broker, o el reintento de stock
+     * esperando a mto-stock, paraban el latido de las operaciones de fondo, y otra replica las daba por
+     * abandonadas mientras seguian trabajando.
+     */
+    @Test
+    void theScheduledPassesRunAtTheSameTimeWithVirtualThreadsAndWithout() {
+        for (boolean virtual : List.of(true, false)) {
+            new ApplicationContextRunner()
+                    .withConfiguration(AutoConfigurations.of(TaskSchedulingAutoConfiguration.class))
+                    .withUserConfiguration(SchedulingConfiguration.class, TwoWaitingPasses.class)
+                    .withPropertyValues("spring.threads.virtual.enabled=" + virtual, "spring.task.scheduling.pool.size=4")
+                    .run(started -> {
+                        TwoWaitingPasses passes = started.getBean(TwoWaitingPasses.class);
+                        try {
+                            assertTrue(passes.bothStarted.await(10, TimeUnit.SECONDS),
+                                    "las dos pasadas a la vez, con spring.threads.virtual.enabled=" + virtual);
+                            assertEquals(Set.of(virtual), passes.onVirtualThreads, "hilos virtuales solo con la bandera");
+                        } finally {
+                            passes.release.countDown();
+                        }
+                    });
+        }
+    }
+
+    /**
+     * Sin {@code @Configuration} a proposito: una clase anidada con ella sustituiria la configuracion
+     * de este {@code @SpringBootTest}. {@code @EnableScheduling} basta para que el runner la procese.
+     */
+    @EnableScheduling
+    static class TwoWaitingPasses {
+
+        final CountDownLatch bothStarted = new CountDownLatch(2);
+        final CountDownLatch release = new CountDownLatch(1);
+        final Set<Boolean> onVirtualThreads = ConcurrentHashMap.newKeySet();
+
+        @Scheduled(fixedDelay = 60_000)
+        void first() throws InterruptedException {
+            pass();
+        }
+
+        @Scheduled(fixedDelay = 60_000)
+        void second() throws InterruptedException {
+            pass();
+        }
+
+        private void pass() throws InterruptedException {
+            onVirtualThreads.add(Thread.currentThread().isVirtual());
+            bothStarted.countDown();
+            release.await(30, TimeUnit.SECONDS);
+        }
     }
 
     /**

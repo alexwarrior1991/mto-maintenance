@@ -52,7 +52,10 @@ cd ../mto-platform && docker compose --profile all up -d && ./keycloak/apply-par
 - Swagger UI: `http://localhost:8083/swagger-ui.html` (`dev` profile); OpenAPI JSON: `/v3/api-docs`.
 - Virtual threads are on (`SPRING_THREADS_VIRTUAL_ENABLED`, see `docs/01-architecture.md`, Threads):
   the limit is the connection pool (`DATABASE_POOL_MAX_SIZE`, 10), not the threads; `outbox-dispatch`
-  stays one platform thread on purpose. A request waits at most `DATABASE_POOL_CONNECTION_TIMEOUT` (10000 ms,
+  stays one platform thread on purpose. The `@Scheduled` jobs run on a pool of 4 (`SchedulingConfiguration`,
+  `SPRING_TASK_SCHEDULING_POOL_SIZE`), virtual threads or not, because Boot's scheduler runs every
+  `fixedDelay` on a single thread and a relay or a stock retry that waited stopped the heartbeat of the
+  background operations. A request waits at most `DATABASE_POOL_CONNECTION_TIMEOUT` (10000 ms,
   below the gateway's 15 s) for a connection, and then it is 503 `APP-503`.
 - Profiles: `dev`, `test`, `prod`, selected via `SPRING_PROFILES_ACTIVE`. Local port is **8083**
   (`dev`); the container listens on 8080 and `mto-platform` publishes it on 8083.
@@ -93,6 +96,7 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
   scheduler), `async` (`AsyncConfiguration`: the `applicationTaskExecutor`, a virtual thread per task
   with the caller's `SecurityContext` and MDC through `MdcTaskDecorator`; `OperationsProperties`,
   `app.operations.*`; `OperationsSchedulingConfiguration`, the heartbeat, abandon check and purge),
+  `scheduling` (`SchedulingConfiguration`, the pool the `@Scheduled` jobs run in),
   `reports` (`ReportProperties`, the report time zone), `stock` (`StockProperties`,
   `StockClientConfiguration`, `StockSyncProperties` for `app.stock.sync.*`), JPA auditing, OpenAPI.
 
@@ -382,8 +386,9 @@ A background operation keeps its request's source, URI and correlation in its re
   It caps the Hikari pool at 5 connections: every context Spring caches keeps its pool open, and with
   the production 10 a dozen contexts pass PostgreSQL's 100 `max_connections`.
 - `MtoMaintenanceApplicationTests` boots the whole context against a real PostgreSQL and asserts
-  every business service bean is present, `spring.threads.virtual.enabled` and that the background
-  executor runs on virtual threads with the caller's identity.
+  every business service bean is present, `spring.threads.virtual.enabled`, that the background
+  executor runs on virtual threads with the caller's identity and that two `@Scheduled` jobs run at the
+  same time with virtual threads and without.
 - One class per layer: `BusinessLayerTest`, `RestControllerLayerTest` +
   `MaintenanceOrderControllerMockMvcTest` + `ReportExportControllerMockMvcTest` (a `@WebMvcTest`
   slice only loads the controllers it names, so the export endpoints cannot live in the order one),
