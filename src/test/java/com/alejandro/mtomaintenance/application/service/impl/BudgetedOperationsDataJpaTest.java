@@ -239,6 +239,9 @@ class BudgetedOperationsDataJpaTest extends PostgreSQLTestContainer {
         assertEquals(OperationStatus.FAILED, failed.status());
         assertEquals("OPS-410", failed.error().errorCode());
         release.countDown();
+        // El trabajo liberado termina y su resultado gana al abandono, con su finished_at de ahora: hasta
+        // que lo escriba no se envejece la fila, o lo pisaria y la purga no encontraria nada.
+        waitUntil(() -> operations.find(id).status() == OperationStatus.SUCCEEDED);
         jdbc.update("update background_operation set finished_at = now() - interval '30 days' where id = ?", id);
         assertTrue(operations.purgeFinished() >= 1, "What finished long ago is purged");
     }
