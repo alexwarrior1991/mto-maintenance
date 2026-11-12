@@ -43,7 +43,11 @@ public interface BudgetedOperations {
     /** El latido de las operaciones vivas de este proceso: sin el, otra replica las daria por abandonadas. */
     void heartbeat();
 
-    /** Las vivas sin latido en {@code app.operations.stale-after} pasan a {@code FAILED}: su replica murio. */
+    /**
+     * Las vivas sin latido en {@code app.operations.stale-after} pasan a {@code FAILED} ({@code OPS-410}): su
+     * replica murio, o eso parece. Antes late por las de este proceso, para no abandonar lo que el mismo
+     * hace. Si el trabajo de una abandonada termina despues, la operacion dice lo que hizo ese trabajo.
+     */
     int failAbandoned();
 
     /** Borra las terminadas hace mas de {@code app.operations.retention}. */

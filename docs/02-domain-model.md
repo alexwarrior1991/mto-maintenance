@@ -541,8 +541,17 @@ and `GET /operations/{id}` gives the same body when it ends.
   replicas) does it let the lock go and look again with growing backoff (`poll-initial` to `poll-max`).
 - **Abandoned ones.** A live operation beats (`heartbeat_at`, every `app.operations.heartbeat`, 5 s);
   one silent for `app.operations.stale-after` (1 min), because its replica died, is failed by any
-  replica (`app.operations.abandon-check`, 30 s) with the error `OPS-410`, and stops counting for the
-  cap and its scope. Finished ones are purged after `app.operations.retention` (7 days). The three
+  replica (`app.operations.abandon-check`, 30 s) with the error `OPS-410` and its `abandoned_at`, and
+  stops counting for the cap and its scope. A replica beats for its own operations before it looks, so
+  it never gives up what it is itself doing. **The outcome of the work wins over an abandon**: a
+  heartbeat also stops when the replica is only slow, and then the work goes on and commits. When it
+  ends, the row count of the mark is read, and an operation that was given up meanwhile takes what its
+  work did: `SUCCEEDED` with its result, or `FAILED` with the work's own error instead of `OPS-410`
+  (one abandoned in the queue never worked and stays `OPS-410`). `abandonedAt` stays in the answer, so
+  whoever read `OPS-410` in between can tell why it changed; the other way round was worse, a client
+  told "failed" who repeats work already done. Another operation of its scope may have run in that
+  gap, which the work's own locks already allow for. A result that cannot be recorded because the
+  database does not answer is retried, never recorded as a failure. Finished ones are purged after `app.operations.retention` (7 days). The three
   schedules are off in the tests (`app.operations.scheduling-enabled=false`), which call them.
 - **The request stays the author.** The work runs with the caller's `SecurityContext` and MDC, and
   what the request can no longer give once it has answered (its `X-Correlation-Id`, method, URI,

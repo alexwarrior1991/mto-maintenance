@@ -165,7 +165,10 @@ background operation (`02-domain-model.md`):
 
 Absent fields are not sent. An operation whose instance stopped beating for
 `app.operations.stale-after` (1 min) is `FAILED` with `error.errorCode` `OPS-410` (abandoned; its
-`status` is 500). `GET /operations/{id}` needs `maintenance-read` like any read, and shows the
+`status` is 500), with `abandonedAt`. If that instance was only slow and its work ends afterwards, the
+operation takes the outcome of the work (`SUCCEEDED` with its result, or `FAILED` with the work's own
+error) and keeps `abandonedAt`: an `OPS-410` is the one terminal answer that may still change, so a
+client that reads it should look at the operation again before repeating the request. `GET /operations/{id}` needs `maintenance-read` like any read, and shows the
 operation only to whoever asked for it, to `maintenance-supervise` and to `ops-write`; to anyone else,
 and once purged (`app.operations.retention`, 7 days), it is 404 `APP-404`.
 

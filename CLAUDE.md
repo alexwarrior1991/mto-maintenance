@@ -52,7 +52,10 @@ cd ../mto-platform && docker compose --profile all up -d && ./keycloak/apply-par
 - Swagger UI: `http://localhost:8083/swagger-ui.html` (`dev` profile); OpenAPI JSON: `/v3/api-docs`.
 - Virtual threads are on (`SPRING_THREADS_VIRTUAL_ENABLED`, see `docs/01-architecture.md`, Threads):
   the limit is the connection pool (`DATABASE_POOL_MAX_SIZE`, 10), not the threads; `outbox-dispatch`
-  stays one platform thread on purpose. A request waits at most `DATABASE_POOL_CONNECTION_TIMEOUT` (10000 ms,
+  stays one platform thread on purpose. The `@Scheduled` jobs run on a pool of 4 (`SchedulingConfiguration`,
+  `SPRING_TASK_SCHEDULING_POOL_SIZE`), virtual threads or not, because Boot's scheduler runs every
+  `fixedDelay` on a single thread and a relay or a stock retry that waited stopped the heartbeat of the
+  background operations. A request waits at most `DATABASE_POOL_CONNECTION_TIMEOUT` (10000 ms,
   below the gateway's 15 s) for a connection, and then it is 503 `APP-503`.
 - Profiles: `dev`, `test`, `prod`, selected via `SPRING_PROFILES_ACTIVE`. Local port is **8083**
   (`dev`); the container listens on 8080 and `mto-platform` publishes it on 8083.
@@ -93,6 +96,7 @@ Three layers under `com.alejandro.mtomaintenance`, the same split as `mto-stock`
   scheduler), `async` (`AsyncConfiguration`: the `applicationTaskExecutor`, a virtual thread per task
   with the caller's `SecurityContext` and MDC through `MdcTaskDecorator`; `OperationsProperties`,
   `app.operations.*`; `OperationsSchedulingConfiguration`, the heartbeat, abandon check and purge),
+  `scheduling` (`SchedulingConfiguration`, the pool the `@Scheduled` jobs run in),
   `reports` (`ReportProperties`, the report time zone), `stock` (`StockProperties`,
   `StockClientConfiguration`, `StockSyncProperties` for `app.stock.sync.*`), JPA auditing, OpenAPI.
 
@@ -218,7 +222,11 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
   documents of `V23` and the `unavailable` periods and capabilities of `V24` go in the same statement,
   and an event without the key keeps the stored ones),
   and for `background_operation` (`V21`), whose cap and turn per scope are decided by row count inside
-  the writing statement.
+  the writing statement. **The outcome of the work wins over an abandon**: the row count of
+  `markSucceeded`/`markFailed` is read, and an operation given up for abandoned (`OPS-410`,
+  `abandoned_at`, `V27`) while it worked ends with what its work did (`markSucceededAfterAbandon`,
+  `markFailedAfterAbandon`, a WARN; `abandonedAt` stays in the answer); a result that cannot be recorded
+  is retried, never turned into a failure, and the abandon check beats first for its own process.
 - `maintenance_status_history` is append-only and not audited; `order_id`/`defect_id` with a
   `CHECK` that exactly one is set.
 - Every entity edited through the API extends `VersionedEntity` (`@Version`, `V11`): its response
@@ -244,7 +252,12 @@ only, deactivates every asset on the track). The other five entity names (`execu
 disconnectors: each is its own asset, and the profile event's `disconnectors` (and `disconnector`) are
 not read here.
 The contract is owned by `mto-configuration`; see `docs/06-messaging.md` before touching
-`application/dto/messaging`.
+`application/dto/messaging`. `inbox_message` is purged once a day (`InboxPurgeService`,
+`configuration/inbox`, `app.inbox.*`): `PROCESSED` rows after `retention` (30 days, from
+`processed_at`), `FAILED` ones after `failed-retention` (90 days), in batches with `skip locked`; off
+in the tests (`app.inbox.purge.enabled=false`), which call it. A purged message is a forgotten one:
+`InboxMessageServiceImpl.process` inserts again when its claim finds no row, and a late duplicate is
+stopped by the sequence watermark of each upsert, not by the inbox.
 
 Consumer of `mto-resources` too (`mto.resources.exchange`, own queue
 `mto.maintenance.resources.queue` bound to `mto.resources.{person,team,vehicle,instrument}.*`, with DLX/DLQ,
@@ -263,7 +276,11 @@ Producer of its own events for `mto-notification` (`mto.maintenance.exchange`, r
 `mto.maintenance.<entity>.<event>`, no queue here). **`DomainEventPublisher.publish` is the only
 door, and it is called inside the business transaction**: the event goes to `outbox_message`
 (`V13`) with the change and the relay publishes it afterwards with publisher confirms
-(`OutboxRabbitPublisher` refuses to start without them). The hooks: `StatusHistoryServiceImpl`
+(`OutboxRabbitPublisher` refuses to start without them). The relay renews the claim of each message
+before publishing it and does not publish one that is no longer its own, counts the attempt at claim
+time (a message that kills it also ends `FAILED`) and drains what there is within
+`app.outbox.pass-time-budget` (30 s); timeouts that contradict each other stop the startup
+(`OutboxProperties.validate()`, `docs/06-messaging.md`, *The outbox*). The hooks: `StatusHistoryServiceImpl`
 (`order.created`/`status-changed`/`reassigned`, `defect.created`/`status-changed`: every order and
 defect transition passes through it), `MaintenanceShiftServiceImpl.start/close/cancel`
 (`shift.started`/`closed`/`cancelled`, with the crew, the vehicles and where each was left, and at the
@@ -382,14 +399,15 @@ A background operation keeps its request's source, URI and correlation in its re
   It caps the Hikari pool at 5 connections: every context Spring caches keeps its pool open, and with
   the production 10 a dozen contexts pass PostgreSQL's 100 `max_connections`.
 - `MtoMaintenanceApplicationTests` boots the whole context against a real PostgreSQL and asserts
-  every business service bean is present, `spring.threads.virtual.enabled` and that the background
-  executor runs on virtual threads with the caller's identity.
+  every business service bean is present, `spring.threads.virtual.enabled`, that the background
+  executor runs on virtual threads with the caller's identity and that two `@Scheduled` jobs run at the
+  same time with virtual threads and without.
 - One class per layer: `BusinessLayerTest`, `RestControllerLayerTest` +
   `MaintenanceOrderControllerMockMvcTest` + `ReportExportControllerMockMvcTest` (a `@WebMvcTest`
   slice only loads the controllers it names, so the export endpoints cannot live in the order one),
   `ReportExportLayerTest` (reopens the generated .xlsx with POI and the .pdf with OpenPDF),
   `PersistenceLayerTest` +
-  `InboxMessageRepositoryDataJpaTest` + `MasterDataAssetSyncDataJpaTest`, `EnversAuditDataJpaTest`
+  `InboxMessageRepositoryDataJpaTest` (the purge statements too) + `MasterDataAssetSyncDataJpaTest`, `EnversAuditDataJpaTest`
   (disables the test transaction on purpose), `MapperLayerTest`, `MessagingLayerTest`,
   `StockClientTest`, `DomainModelTest`, `JpaEntityModelTest`, `DtoValidationTest`,
   `GlobalExceptionHandlerTest`, `SecurityLayerTest`, `ApiAuthorizationRulesTest`,

@@ -15,6 +15,17 @@ spring:
     virtual:
       enabled: ${SPRING_THREADS_VIRTUAL_ENABLED:true}
 
+  # Los @Scheduled no se esperan unos a otros: el relay del outbox habla con el broker y el reintento de
+  # stock con mto-stock, y mientras esperaban no corria el latido de las operaciones de fondo, que otra
+  # replica daba entonces por abandonadas. SchedulingConfiguration planifica en un pool de este tamano,
+  # de hilos virtuales con los hilos virtuales activos y de plataforma sin ellos. El planificador de Boot
+  # con hilos virtuales corre todas las tareas fixedDelay en un mismo hilo, y el de plataforma, sin este
+  # tamano, tiene uno solo.
+  task:
+    scheduling:
+      pool:
+        size: ${SPRING_TASK_SCHEDULING_POOL_SIZE:4}
+
   # El limite real de concurrencia: sin el tope de 200 hilos de Tomcat, lo que espera es la conexion.
   # El PostgreSQL de mto-platform es uno para todos los servicios (max_connections 100 por defecto),
   # asi que la suma de los pools de todas las instancias tiene que quedar por debajo. Cada operacion de
@@ -306,6 +317,7 @@ app:
     enabled: ${APP_OUTBOX_ENABLED:true}
     # Intentos antes de dar el mensaje por perdido (FAILED). Con backoff exponencial acotado, 20
     # intentos cubren mas de una hora de broker caido; un FAILED se reencola desde /actuator/outbox.
+    # El intento se cuenta al reclamar el mensaje: tambien lo gasta el que tumba al relay.
     max-attempts: ${APP_OUTBOX_MAX_ATTEMPTS:20}
     # Retardo del primer reintento; se duplica en cada intento hasta max-retry-delay.
     initial-retry-delay: ${APP_OUTBOX_INITIAL_RETRY_DELAY:5s}
@@ -316,13 +328,19 @@ app:
     # Sondeo de la tabla; es la red de seguridad, porque normalmente se publica al confirmar
     # (immediate-dispatch).
     publisher-fixed-delay: ${APP_OUTBOX_PUBLISHER_FIXED_DELAY:5s}
-    # Mensajes que reclama cada pasada del relay.
+    # Mensajes que reclama cada lote; una pasada reclama lotes mientras haya trabajo.
     batch-size: 50
     # Tiempo que un mensaje reclamado queda invisible para el resto de replicas: la red de seguridad
-    # si el proceso muere entre reclamar y publicar.
+    # si el proceso muere entre reclamar y publicar. El relay renueva el reclamo de cada mensaje antes
+    # de publicarlo, asi que no tiene que cubrir el lote entero, pero al arrancar se exige que sea al
+    # menos el doble de confirm-timeout y al menos pass-time-budget + confirm-timeout.
     claim-visibility-timeout: 5m
     # Espera maxima por el publisher confirm antes de dar el envio por fallido.
     confirm-timeout: 10s
+    # Tiempo que una pasada sigue reclamando lotes mientras haya trabajo. Con el orden por agregado un
+    # lote lleva un mensaje por agregado: sin vaciar, N eventos de una orden salian uno cada
+    # publisher-fixed-delay. Cumplido el plazo, lo reclamado sin empezar se suelta.
+    pass-time-budget: ${APP_OUTBOX_PASS_TIME_BUDGET:30s}
     # Cada cuanto se refresca la foto del outbox que publican las metricas (los gauges no consultan
     # la base de datos en cada scrape).
     metrics-refresh-delay: 30s
@@ -344,6 +362,23 @@ app:
       # convierta en un borrado de horas.
       max-batches-per-run: 20
       fixed-delay: 1h
+
+  # Inbox de lo que se consume (docs/06-messaging.md). Sin purga inbox_message solo crece: una fila
+  # por evento, con su JSON. La fila de un mensaje aplicado solo hace falta mientras pueda volver a
+  # llegar con el mismo identificador: una reentrega del broker (segundos, y despues la DLQ), un
+  # reintento del outbox del emisor (algo mas de una hora) o un mensaje que alguien reencola a mano,
+  # que es lo unico que tarda dias. Un republicado lleva identificador nuevo. Pasado el plazo, a un
+  # duplicado lo para la marca de agua de la secuencia de cada upsert.
+  inbox:
+    retention: ${APP_INBOX_RETENTION:30d}
+    # Una fallida no protege de nada (se reclama otra vez al reencolarla): dice por que acabo en la DLQ.
+    failed-retention: ${APP_INBOX_FAILED_RETENTION:90d}
+    purge:
+      enabled: ${APP_INBOX_PURGE_ENABLED:true}
+      # Una vez al dia, de madrugada, en la zona del servidor.
+      cron: ${APP_INBOX_PURGE_CRON:0 43 3 * * *}
+      # Por lotes, cada uno en su transaccion.
+      batch-size: 500
 
   # Eventos que no nacen de una peticion sino de un trabajo programado.
   events:

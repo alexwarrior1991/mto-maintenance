@@ -48,6 +48,11 @@ app:
     preventive-due-soon:
       enabled: ${APP_EVENTS_PREVENTIVE_DUE_SOON_ENABLED:false}
 
+  # La purga del inbox tampoco corre sola: InboxMessageRepositoryDataJpaTest y BusinessLayerTest la llaman.
+  inbox:
+    purge:
+      enabled: ${APP_INBOX_PURGE_ENABLED:false}
+
   # El latido, el abandono y la purga de las operaciones de fondo no corren solos: los tests los llaman.
   operations:
     scheduling-enabled: ${APP_OPERATIONS_SCHEDULING_ENABLED:false}

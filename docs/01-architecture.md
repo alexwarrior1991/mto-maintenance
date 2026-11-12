@@ -69,9 +69,13 @@ Rules that keep the layers honest:
 - **Observability**: Actuator health/info public; metrics and prometheus behind `ops-metrics`;
   traces exported by OTLP, including the trace propagated in the RabbitMQ headers.
 - **Threads**: virtual threads (`spring.threads.virtual.enabled`, `SPRING_THREADS_VIRTUAL_ENABLED`,
-  `true` by default) for Tomcat's requests (`tomcat-handler-N`), the `@Scheduled` jobs (Boot's
-  `SimpleAsyncTaskScheduler`: the fixed-delay ones still run one after another on its thread, the
-  daily `preventive.due-soon` cron on its own), the RabbitMQ consumer (`rabbit-simple-N`) and the
+  `true` by default) for Tomcat's requests (`tomcat-handler-N`), the `@Scheduled` jobs (`SchedulingConfiguration`,
+  `scheduling-N`: a pool of `spring.task.scheduling.pool.size`, `SPRING_TASK_SCHEDULING_POOL_SIZE`, 4,
+  virtual or platform threads by the same flag, so no job waits for another. Boot's own scheduler runs
+  every fixed-delay job on one thread, with virtual threads and without: the outbox relay waiting for the
+  broker's confirms, or the stock retry waiting for `mto-stock`, stopped the heartbeat of the background
+  operations, which another replica then declared abandoned while they were still working. A job still
+  never overlaps itself), the RabbitMQ consumer (`rabbit-simple-N`) and the
   `stock` circuit breaker (`StockCircuitBreakerExecutorConfiguration`, `stock-circuit-N`: Spring Cloud
   CircuitBreaker runs each call on its own executor, a platform pool the flag does not reach). The
   `outbox-dispatch` thread stays a single platform thread on purpose: `OutboxDispatchTrigger`
