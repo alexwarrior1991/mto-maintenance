@@ -417,9 +417,34 @@ A copy of `core/outbox` of `mto-configuration`, wired as `@Bean`s in `configurat
   broker outage), then the row is `FAILED` and stays for someone to look at; `POST /actuator/outbox`
   (`ops-write`) redrives them, `GET /actuator/outbox` (`ops-metrics`) shows the counts.
   `app.outbox.enabled=false` stops the relay only (the outbox keeps writing).
+- **The relay publishes only what is still its own.** A batch is claimed at once (`IN_PROGRESS`
+  with `next_attempt_at = now + claim-visibility-timeout`, which is the claim's token: every claim
+  writes a strictly later instant), but each message the broker does not confirm costs
+  `confirm-timeout`, so a batch could outlast its visibility and its tail was claimed again and
+  published twice, out of order within an aggregate. Before each publish the relay renews the claim
+  with a conditional `UPDATE` on that token (`renewClaim`) and does not publish on 0 rows
+  (`outbox.claim.lost.total`); rescheduling, failing and releasing carry the same condition, while
+  marking as published stays unconditional (a confirmed message is published whoever holds it).
+- **The attempt is counted at claim time**, not at failure: a message that kills the relay, or whose
+  failure cannot be recorded, also runs out of `max-attempts` and goes `FAILED` in the claim
+  transaction, where the metric and `/actuator/outbox` see it and from where the redrive takes it. It
+  used to be recovered for ever, holding its aggregate. A `FAILED` row does not hold the next ones.
+- **A pass drains.** With the order per aggregate a batch carries one message per aggregate, and one
+  batch per pass let N events of an order out one every `publisher-fixed-delay`. A pass now claims
+  batches until there is no work, until `app.outbox.pass-time-budget` (`APP_OUTBOX_PASS_TIME_BUDGET`,
+  30 s) is spent, or until a batch publishes nothing (the broker is away); at the deadline what was
+  claimed and not started is released (`PENDING`, due now, without the attempt it did not make). A pass
+  lasts at most `pass-time-budget + confirm-timeout`, on one thread of the scheduling pool.
+- **Timeouts that contradict each other stop the startup** (`OutboxProperties.validate()`), naming
+  the property: `claim-visibility-timeout` must be at least twice `confirm-timeout` and at least
+  `pass-time-budget + confirm-timeout`, and `max-attempts`, `batch-size` and the three durations
+  positive. The defaults (5 min, 10 s, 30 s) pass. Not covered, by design: a publish that takes longer
+  than the whole visibility after renewing can still be duplicated (delivery is at-least-once and the
+  consumers discard by `sequenceNumber`), and expiry is judged with each replica's clock.
 - Metrics `outbox.messages.pending`, `outbox.messages.in.progress`, `outbox.messages.failed`,
   `outbox.pending.oldest.age.seconds` (the useful alarm: if it ages, the relay is broken) and
-  `outbox.publish.total{result=success|failure}`.
+  `outbox.publish.total{result=success|failure}` and `outbox.claim.lost.total` (a claim another relay
+  took before this one published: skipped, not duplicated).
 - Published rows are purged after `app.outbox.purge.retention` (7 days), in batches.
 - The trace context of the operation is stored in the row and restored when publishing, so the
   publication span hangs from the request that caused it and not from the scheduler.

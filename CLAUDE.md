@@ -276,7 +276,11 @@ Producer of its own events for `mto-notification` (`mto.maintenance.exchange`, r
 `mto.maintenance.<entity>.<event>`, no queue here). **`DomainEventPublisher.publish` is the only
 door, and it is called inside the business transaction**: the event goes to `outbox_message`
 (`V13`) with the change and the relay publishes it afterwards with publisher confirms
-(`OutboxRabbitPublisher` refuses to start without them). The hooks: `StatusHistoryServiceImpl`
+(`OutboxRabbitPublisher` refuses to start without them). The relay renews the claim of each message
+before publishing it and does not publish one that is no longer its own, counts the attempt at claim
+time (a message that kills it also ends `FAILED`) and drains what there is within
+`app.outbox.pass-time-budget` (30 s); timeouts that contradict each other stop the startup
+(`OutboxProperties.validate()`, `docs/06-messaging.md`, *The outbox*). The hooks: `StatusHistoryServiceImpl`
 (`order.created`/`status-changed`/`reassigned`, `defect.created`/`status-changed`: every order and
 defect transition passes through it), `MaintenanceShiftServiceImpl.start/close/cancel`
 (`shift.started`/`closed`/`cancelled`, with the crew, the vehicles and where each was left, and at the
