@@ -222,6 +222,29 @@ class MaintenanceOrderControllerMockMvcTest {
         verify(assetService).patch(eq(assetId), argThat(patch -> patch.clears("preventiveIntervalDays")));
     }
 
+    /**
+     * Una cantidad es {@code numeric(19,6)}: 19 cifras, y un {@code double} guarda 15. El merge-patch se lee
+     * primero como arbol, y un arbol con los decimales como {@code double} entregaba otra cantidad.
+     */
+    @Test
+    void aQuantityInAMergePatchArrivesDigitByDigit() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID usageId = UUID.randomUUID();
+        BigDecimal exact = new BigDecimal("1234567890123.123456");
+
+        mockMvc.perform(patch(ORDERS + "/{id}/materials/{usageId}", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"plannedQuantity\":1234567890123.123456,\"version\":1}"))
+                .andExpect(status().isOk());
+        verify(materialService).patch(eq(orderId), eq(usageId),
+                argThat(patch -> patch.values().plannedQuantity() != null && exact.compareTo(patch.values().plannedQuantity()) == 0));
+
+        mockMvc.perform(patch(ORDERS + "/{id}/materials/{usageId}", orderId, usageId).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"consumedQuantity\":\"1234567890123.123456\",\"version\":1}"))
+                .andExpect(status().isOk());
+        verify(materialService).patch(eq(orderId), eq(usageId),
+                argThat(patch -> patch.values().consumedQuantity() != null && exact.compareTo(patch.values().consumedQuantity()) == 0));
+    }
+
     @Test
     void createReturnsCreatedLocationAndJsonBody() throws Exception {
         UUID orderId = UUID.randomUUID();

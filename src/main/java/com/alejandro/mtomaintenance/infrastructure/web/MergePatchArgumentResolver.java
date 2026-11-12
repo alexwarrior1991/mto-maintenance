@@ -16,6 +16,7 @@ import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -62,7 +63,9 @@ public class MergePatchArgumentResolver implements HandlerMethodArgumentResolver
 
         JsonNode body;
         try {
-            body = jsonMapper.readTree(request.getInputStream());
+            // Con los decimales como BigDecimal: por defecto el arbol los guarda como double, y una
+            // cantidad numeric(19,6) llegaba al record con otras cifras.
+            body = jsonMapper.reader().with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(request.getInputStream());
         } catch (JacksonException exception) {
             throw new HttpMessageNotReadableException("Malformed merge patch: " + exception.getOriginalMessage(), exception, message);
         }
