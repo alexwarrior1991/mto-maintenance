@@ -52,11 +52,15 @@
     needs an `INSULATED_PLATFORM` or `EARTHING`, and such a task is assigned, started and completed only
     in a shift that carries it (`fleet_vehicle.capabilities`, an earthing pole of the shift;
     `ShiftRules.requireEquipment`, 409 `SHF-001`). None is seeded.
+- Inspection templates through the API (`V28`): `POST /inspection-templates` creates the next version
+  of an asset type's checklist with its whole item list, born active and replacing the active one;
+  `PATCH /inspection-templates/{id}` renames a version, goes back to it or deactivates it. A version
+  never changes its items, at most one is active per asset type (a partial unique index), and it is a
+  supervisor's job (`maintenance-supervise` on top of `maintenance-write`).
 
 ## Next
 
 - Photo storage (`photoRefs` are references today; an object store and upload endpoint are missing).
-- Inspection template management through the API (today: Flyway seeds, new version per change).
 - Automatic preventive planning: create the preventive order of a section when
   `nextPreventiveDueAt` approaches (today the daily `preventive.due-soon` event only tells it).
 - Revisions of `mto-configuration` snapshots: the `sectioning` and kp of a profile are refreshed on

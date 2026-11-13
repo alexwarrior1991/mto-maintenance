@@ -190,7 +190,8 @@ shifts. Completing a task can record `CatenaryDefect`s inline (`RESOLVED` in the
 was finished, `OPEN` with `repairPlannedDate` if not); one resolved afterwards may declare the shift
 where it was corrected (`resolvedInShiftId`, which lifts the "linked order `COMPLETED`" rule), under
 the rule of an inspection's shift and within the scope of whoever writes. A `MaintenanceInspection` copies the active
-`InspectionTemplate` of the asset type into its items (recorded in a shift, one `IN_PROGRESS` or
+`InspectionTemplate` of the asset type into its items (its own rows, plus the id of the version copied; a type without an active
+template gives an inspection without items; recorded in a shift, one `IN_PROGRESS` or
 `CLOSED` on its asset's track or the connected one, it appears in that shift's report), and can create a defect and a corrective
 order (both idempotent). Every material line (`MaintenanceMaterialUsage`) is reserved in
 `mto-stock` when the order is planned, consumed when it is completed and, when it is cancelled,
@@ -236,6 +237,18 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
   `application/merge-patch+json` does (`MergePatch`, read by `MergePatchArgumentResolver`), and each
   service lists what it may empty (`PatchRules.requireClearable`). `update` is `patch` with
   `MergePatch.of(request)`: there is one code path per resource.
+- An `InspectionTemplate` is versioned per asset type and written through the API since `V28`
+  (`InspectionTemplateServiceImpl`, `maintenance-supervise` on top of `maintenance-write`). **A version
+  never changes what an inspection copies from it** (asset type, number, items: `updatable = false`, the
+  items `@Immutable`): changing a checklist is `POST /inspection-templates` with the whole item list, the
+  next version of its type, born active, replacing the active one. In place only `name` and `active`
+  change (`PATCH`). At most one active per asset type, kept by `uq_inspection_template_active_asset_type`
+  (a partial unique index); every write takes the advisory lock of its asset type first and deactivates
+  and flushes the active one before activating another, never the other way round. Nothing is deleted
+  (inspections reference their version). Its optimistic lock is the column `lock_version` and the key
+  `lockVersion`, **not** `version`, which here is the number of the template version and stays so in
+  the response (both web apps read it): `InspectionTemplate.getVersion()` is the lock,
+  `getTemplateVersion()` the number.
 
 ### Messaging
 
@@ -381,7 +394,8 @@ Not audited on purpose: `MaintenanceStatusHistory`
 (append-only), `InboxMessage` and `CatenaryAssetSwitch` (written only from master data), `CrewPerson`,
 `FleetVehicle` and `MaintenanceInstrument` (snapshots of `mto-resources`, native SQL only), `BackgroundOperation` and
 `OutboxMessage` (their own history), `MaintenanceTeam`, `MaintenanceTaskType`,
-`InspectionTemplate`/`Item` (catalogues). `JpaEntityModelTest` guards the split. History at
+`InspectionTemplate`/`Item` (catalogues; a template is written through the API, but its history is its versions, which never
+change their items and say who created each). `JpaEntityModelTest` guards the split. History at
 `GET /<resource>/{id}/revisions`. The `asset` of an order, a task, an inspection and a defect is
 `@Audited(targetAuditMode = NOT_AUDITED)`, like a shift's disconnectors: an asset that only arrived
 by master data has no revision (native SQL), so a revision reads it as it is now instead of looking
@@ -427,4 +441,8 @@ A background operation keeps its request's source, URI and correlation in its re
   packages of a person's teams) of `MasterDataAssetSyncDataJpaTest`; the resources
   topology of `MessagingLayerTest`; the shift report's appendices in the real .xlsx and .pdf of
   `ReportExportLayerTest`;
-the 202 of `Prefer: respond-async` of `MaintenanceOrderControllerMockMvcTest`.
+the 202 of `Prefer: respond-async` of `MaintenanceOrderControllerMockMvcTest`. The inspection templates: the
+rules of a new version and of its `PATCH` in `BusinessLayerTest`; against PostgreSQL, a version replacing the
+active one with an inspection that keeps its items, and eight versions created at once, in
+`MasterDataAssetSyncDataJpaTest` (the DataJpa class that can build the package-private services), and the partial
+index in `PersistenceLayerTest`; the real routes with their two roles in `MaintenanceOrderControllerMockMvcTest`.

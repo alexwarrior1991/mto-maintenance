@@ -25,8 +25,12 @@ Not audited, on purpose: `MaintenanceStatusHistory` (append-only, a twin would d
 `InboxMessage` and `CatenaryAssetSwitch` (written only from master data, the twin would sit empty
 and read as "never changed"; the switches' history lives in `mto-configuration`), `OutboxMessage`
 (written only by the outbox; its history is itself), `MaintenanceTeam`,
-`MaintenanceTaskType`, `InspectionTemplate`/`Item` (catalogues managed by migrations; a team
-synchronized from `mto-resources` is written by native SQL anyway), `CrewPerson`, `FleetVehicle` and
+`MaintenanceTaskType` (catalogues; a team synchronized from `mto-resources` is written by native SQL
+anyway), `InspectionTemplate`/`Item` (a catalogue too, written through the API since `V28`: its
+history is its versions — the items of a version never change, changing a checklist creates the next
+version, and each version says who created it and when in its audit columns, returned as `audit`; a
+twin would only add who renamed, activated or deactivated a version before the last time, which
+`updated_by`/`updated_at` say for the last one), `CrewPerson`, `FleetVehicle` and
 `MaintenanceInstrument` (`V23`) (snapshots of `mto-resources` written only with native SQL, like
 `CatenaryAssetSwitch`: a twin would sit empty; their history, their qualifications, documents and
 calibrations included, lives in `mto-resources`) and `BackgroundOperation` (`V21`: written only by

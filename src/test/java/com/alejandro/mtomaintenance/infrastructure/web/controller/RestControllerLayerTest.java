@@ -1,5 +1,9 @@
 package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateResponse;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateItemRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateUpdateRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetSummaryResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageMetadataResponse;
 import com.alejandro.mtomaintenance.application.dto.common.PageResponse;
@@ -180,6 +184,32 @@ class RestControllerLayerTest {
         // La regla de la ruta pide maintenance-write para un PATCH; el equipo de un tipo, ademas, supervise.
         PreAuthorize rule = MaintenanceTaskTypeController.class.getMethod("patch", String.class, MergePatch.class).getAnnotation(PreAuthorize.class);
         assertEquals("hasRole('" + SecurityRoles.MAINTENANCE_SUPERVISE + "')", rule.value());
+    }
+
+    @Test
+    void anInspectionTemplateIsWrittenOnlyByWhoeverSupervises() throws NoSuchMethodException {
+        InspectionTemplateService templateService = mock(InspectionTemplateService.class);
+        InspectionTemplateController controller = new InspectionTemplateController(templateService);
+        UUID id = UUID.randomUUID();
+        InspectionTemplateRequest request = new InspectionTemplateRequest(CatenaryAssetType.DISCONNECTOR, "Disconnector",
+                List.of(new InspectionTemplateItemRequest("CONTACTS", "Main contacts", null, null, null, null)), 1);
+        InspectionTemplateResponse created = new InspectionTemplateResponse(id, CatenaryAssetType.DISCONNECTOR, 2, "Disconnector", true, List.of(), 0L, null);
+        when(templateService.create(request)).thenReturn(created);
+        MergePatch<InspectionTemplateUpdateRequest> patch = MergePatch.of(new InspectionTemplateUpdateRequest(null, false, 0L));
+        when(templateService.patch(id, patch)).thenReturn(created);
+
+        var response = controller.create(request);
+        assertEquals(201, response.getStatusCode().value());
+        assertEquals("/api/v1/maintenance/inspection-templates/" + id, response.getHeaders().getLocation().toString());
+        assertSame(created, response.getBody());
+        assertSame(created, controller.patch(id, patch).getBody());
+
+        // La regla de la ruta pide maintenance-write para un POST y un PATCH; las plantillas, ademas, supervise.
+        String supervise = "hasRole('" + SecurityRoles.MAINTENANCE_SUPERVISE + "')";
+        assertEquals(supervise, InspectionTemplateController.class.getMethod("create", InspectionTemplateRequest.class)
+                .getAnnotation(PreAuthorize.class).value());
+        assertEquals(supervise, InspectionTemplateController.class.getMethod("patch", UUID.class, MergePatch.class)
+                .getAnnotation(PreAuthorize.class).value());
     }
 
     private static void assertController(Class<?> controller, String basePath, String tag) {

@@ -29,7 +29,7 @@ yearly reset.
 |---|---|---|
 | `maintenance_team` (+ `maintenance_team_execution_package`) | Teams (local, like the seeded A/B, or synchronized from `mto-resources` since `V19`) and the EPs they cover | `uq code` |
 | `maintenance_task_type` | `RG`/`RP` catalogue | `uq code`, minutes ≥ 0 |
-| `inspection_template`, `inspection_template_item` | Checklists per asset type | `uq (asset_type, version)`, `uq (template_id, code)`, `min ≤ max` |
+| `inspection_template`, `inspection_template_item` | Checklists per asset type, versioned; written through the API since `V28` | `uq (asset_type, version)`, `uq (asset_type) where active` (`V28`), `uq (template_id, code)`, `min ≤ max` |
 | `catenary_asset` | Assets | `uq code`, `uq (source_service, type, source_entity_id)` (`V26`), source columns together, `start_kp ≤ end_kp`, `track_kind` only and always on `TRACK_SECTION`, interval > 0 |
 | `maintenance_shift` (+ `maintenance_shift_track`, `V5`; + `maintenance_shift_disconnector`, `V6`) | Shifts, the tracks they cover and the disconnectors opened to block the zone | `uq code`, planned/actual windows ordered, `CLOSED` needs actual times, net minutes ≥ 0; `pk (shift_id, track_id)`, `pk (shift_id, disconnector_id)` with `on delete restrict` on the asset |
 | `maintenance_order` | Orders | `uq code`, kp range, actual dates ordered, `COMPLETED` needs dates, `CANCELLED` needs reason; FKs to asset (restrict), team, shift-independent |
@@ -74,8 +74,8 @@ channels: `source_service` is `mto-configuration` for the master data and, since
   `is_diagnostic`.
 - `inspection_template` v1 for `PROFILE` (14 items: pole, foundation, cantilever, insulators,
   steady arm, height, stagger, droppers, wear, …), `DISCONNECTOR` and `SECTION_INSULATOR`.
-  Thresholds are indicative; engineering fixes them by inserting a new version and deactivating
-  the previous one.
+  Thresholds are indicative; engineering fixes them by creating a new version, which deactivates
+  the previous one (through the API since `V28`).
 
 ## Shift tracks (`V5`)
 
@@ -422,6 +422,23 @@ the republication: **after deploying `V26`, republish `profile`, `disconnector` 
 `section-insulator` from `mto-configuration`** (`docs/06-messaging.md`). Orders, inspections and
 defects created on an overwritten row stay on it, that is, on the entity of its type: one that was
 meant for the other entity of the same id has to be moved by hand.
+
+## Inspection templates through the API (`V28`)
+
+- `uq_inspection_template_active_asset_type`: a partial unique index on `inspection_template
+  (asset_type) WHERE active`. "The active template of an asset type" was a convention (the active one
+  of highest version); now the database keeps it to one. Before creating it the migration deactivates,
+  for each asset type, every active version but the highest, which is the one that was being copied;
+  the three seeded rows are untouched and keep their ids.
+- `inspection_template.lock_version bigint NOT NULL DEFAULT 0`: the optimistic lock of its `PATCH`
+  (`@Version` through `VersionedEntity`, with the column overridden). It is not called `version` like
+  on every other table because `version` is already the number of the template version, published
+  with that name. The API returns it as `lockVersion`.
+- No `_aud` twins: `inspection_template` and `inspection_template_item` stay out of Envers
+  (`07-auditing.md`). The items of a version are never updated nor deleted (`@Immutable`).
+- A new version takes `max(version) + 1` of its asset type under the advisory lock of that type
+  (`mto-maintenance:inspection-template:<TYPE>`); `uq (asset_type, version)` and the partial index are
+  what would stop a write that skipped the lock (409 `APP-409`).
 
 ## Auditing (`V4`)
 
