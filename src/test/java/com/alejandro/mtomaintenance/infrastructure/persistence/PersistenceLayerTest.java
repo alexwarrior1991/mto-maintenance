@@ -152,7 +152,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertTrue(taskTypeRepository.findByCode("RP-12").orElseThrow().getRequiresFullPossession());
         assertTrue(taskTypeRepository.findByCode("RP-10").orElseThrow().getDiagnostic());
         assertEquals(3, templateRepository.findAll().size());
-        assertEquals(14, templateRepository.findFirstByAssetTypeAndActiveTrueOrderByVersionDesc(CatenaryAssetType.PROFILE).orElseThrow().getItems().size());
+        assertEquals(14, templateRepository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE).orElseThrow().getItems().size());
     }
 
     @Test
@@ -703,7 +703,7 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         CatenaryAsset profile = assetRepository.save(profile("13-2.10-" + suffix, trackId, "13499.290"));
         CatenaryAsset disconnector = assetRepository.save(CatenaryAsset.builder().code("DSC-" + suffix).name("HSA-NS5").type(CatenaryAssetType.DISCONNECTOR)
                 .trackId(trackId).build());
-        InspectionTemplate template = templateRepository.findFirstByAssetTypeAndActiveTrueOrderByVersionDesc(CatenaryAssetType.PROFILE).orElseThrow();
+        InspectionTemplate template = templateRepository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE).orElseThrow();
         MaintenanceInspection withChecklist = inspection("INS-A-" + suffix, profile, LocalDate.of(2026, 1, 10), "Yossi", InspectionResult.OK);
         withChecklist.setTemplate(template);
         template.getItems().forEach(item -> withChecklist.getItems().add(MaintenanceInspectionItem.fromTemplate(withChecklist, item)));
@@ -996,5 +996,29 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
                 .actualStart(date.atTime(21, 0).atOffset(java.time.ZoneOffset.UTC).toInstant())
                 .actualEnd(date.plusDays(1).atTime(5, 0).atOffset(java.time.ZoneOffset.UTC).toInstant())
                 .netWorkMinutes(290).build();
+    }
+
+    /**
+     * V28: como mucho una plantilla activa por tipo de activo, y lo dice la base. Las tres sembradas siguen
+     * siendo las que eran, con su id, su version 1 y activas.
+     */
+    @Test
+    void anAssetTypeHasAtMostOneActiveTemplateAndTheSeededOnesKeepTheirIds() {
+        InspectionTemplate seeded = templateRepository.findById(UUID.fromString("0195a000-0000-7000-8000-00000000a002")).orElseThrow();
+        assertEquals(CatenaryAssetType.DISCONNECTOR, seeded.getAssetType());
+        assertEquals(1, seeded.getTemplateVersion());
+        assertTrue(seeded.getActive());
+        assertEquals(0L, seeded.getVersion(), "lock_version starts at 0");
+        assertEquals(1, templateRepository.findLastVersion(CatenaryAssetType.DISCONNECTOR));
+        assertEquals(0, templateRepository.findLastVersion(CatenaryAssetType.TRACK_SECTION), "A type without templates");
+        assertEquals(CatenaryAssetType.DISCONNECTOR, templateRepository.findAssetTypeById(seeded.getId()).orElseThrow());
+
+        // Una anterior, inactiva, cabe; una segunda activa, no.
+        templateRepository.saveAndFlush(InspectionTemplate.builder().assetType(CatenaryAssetType.DISCONNECTOR).templateVersion(2)
+                .name("Previous").active(false).build());
+        InspectionTemplate secondActive = InspectionTemplate.builder().assetType(CatenaryAssetType.DISCONNECTOR).templateVersion(3)
+                .name("Second active").build();
+        assertThrows(org.springframework.dao.DataIntegrityViolationException.class, () -> templateRepository.saveAndFlush(secondActive),
+                "uq_inspection_template_active_asset_type");
     }
 }

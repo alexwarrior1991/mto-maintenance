@@ -104,7 +104,7 @@ Flyway, `src/main/resources/db/migration`. Hibernate validates the schema on boo
 is a new `V<n>__*.sql`. `V1` creates the schema, `V2` the inbox, `V3` seeds the catalogues (task
 types `RG-01…RP-12`, teams A/B, inspection templates), `V4` the Envers tables; `V18` the minutes of
 the task sheet; `V19` and `V20` the snapshots of `mto-resources` and the crew and vehicles of a
-shift, `V21` the background operations.
+shift, `V21` the background operations, `V28` the inspection templates written through the API.
 Details in [`docs/03-database.md`](docs/03-database.md).
 
 ## Master data from `mto-configuration`

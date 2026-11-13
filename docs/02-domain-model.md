@@ -350,6 +350,33 @@ disconnector, section insulator): each item has `code`, `label`, `unit`, `[minVa
 `requiresMeasure`, and records `measuredValue`, `adjusted`, `valueAfterAdjustment`, `itemResult`
 (`OK`, `DEFECT`, `NOT_APPLICABLE`), `notes`. Results `OK`, `MINOR_DEFECT`, `MAJOR_DEFECT`, `UNSAFE`.
 
+A template is **versioned per asset type**, and since `V28` it is maintained through the API by whoever
+supervises (`maintenance-supervise` on top of `maintenance-write`), without a migration:
+
+- **A version never changes in what an inspection copies from it**: its asset type, its number and its
+  items are those of its creation. Changing the checklist is `POST /inspection-templates` with the
+  whole item list, in order: the next version of that asset type, born active, which replaces the
+  active one (that one stays as a previous version). Editing a version in place was the other choice
+  and was discarded: an inspection keeps, besides its own copy of the items, the id of the version it
+  copied (`template_id`), and with immutable versions that id always points at exactly what was
+  copied, and the previous versions are the history, each with who created it and when, with no twin
+  tables.
+- **At most one active version per asset type**, kept by the database (the partial unique index
+  `uq_inspection_template_active_asset_type`). Every write takes the PostgreSQL advisory lock of its
+  asset type first, so two at once queue; the active one is deactivated and flushed before the new one
+  is activated, inside one transaction, so whoever creates an inspection meanwhile sees one or the
+  other, never none and never two.
+- In place, a version only changes its `name` and whether it is the active one (`PATCH`, merge-patch
+  with the `lockVersion` read): `active: true` on a previous version goes back to it (the active one
+  stops being it); `active: false` on the active one leaves the type **without a template**.
+- **A type without an active template is allowed, as it always was**: an inspection of that type is
+  created with no items and no `templateId` (`TRACK_SECTION` has never had one), and a preventive
+  task generated `withChecklist` gets no check items. Nothing fails.
+- Nothing is deleted: inspections reference their version (`on delete restrict`); there is no
+  `DELETE`.
+- An inspection or a task already created never changes because its template did: its items are its
+  own rows.
+
 Rules: `OK` is inconsistent with an item in `DEFECT`; a measure out of range that was not adjusted
 cannot be `OK`; `create-defect` needs `MAJOR_DEFECT`/`UNSAFE` (or `MINOR_DEFECT` + `force`);
 `create-corrective-order` creates a `CORRECTIVE` order in `DRAFT` (`URGENT` when `UNSAFE`) linked

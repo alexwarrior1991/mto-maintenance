@@ -1,5 +1,8 @@
 package com.alejandro.mtomaintenance.application.service.impl;
 
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateUpdateRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateItemRequest;
 import com.alejandro.mtomaintenance.application.dto.tasktype.MaintenanceTaskTypeUpdateRequest;
 import com.alejandro.mtomaintenance.application.exception.ScopeException;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.UnavailablePeriod;
@@ -3206,7 +3209,7 @@ class BusinessLayerTest {
         InspectionTemplateServiceImpl service = new InspectionTemplateServiceImpl(repository, mapper);
         InspectionTemplate template = template("CW_HEIGHT");
         InspectionTemplateResponse response = mock(InspectionTemplateResponse.class);
-        when(repository.findAllByOrderByAssetTypeAscVersionDesc()).thenReturn(List.of(template));
+        when(repository.findAllByOrderByAssetTypeAscTemplateVersionDesc()).thenReturn(List.of(template));
         when(mapper.toResponse(template)).thenReturn(response);
 
         assertEquals(List.of(response), service.findAll());
@@ -6108,5 +6111,138 @@ class BusinessLayerTest {
     private static MaintenanceShiftUpdateRequest shiftUpdate(Set<Long> trackIds, PossessionType possession) {
         return new MaintenanceShiftUpdateRequest(null, null, null, null, possession, null, null, null, null, null, null, trackIds, null, null,
                 null, null, null, null);
+    }
+
+    /** Un doble del repositorio de plantillas: la activa de un tipo, su ultima version y lo que se guarda, en su orden. */
+    private static InspectionTemplateRepository templateRepository(InspectionTemplate active, int lastVersion) {
+        InspectionTemplateRepository repository = mock(InspectionTemplateRepository.class);
+        when(repository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE)).thenReturn(Optional.ofNullable(active));
+        when(repository.findLastVersion(CatenaryAssetType.PROFILE)).thenReturn(lastVersion);
+        when(repository.saveAndFlush(any(InspectionTemplate.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        return repository;
+    }
+
+    private static InspectionTemplateItemRequest point(String code, String min, String max) {
+        return new InspectionTemplateItemRequest(code, " " + code + " label ", min == null && max == null ? " " : " mm ",
+                min == null ? null : new BigDecimal(min), max == null ? null : new BigDecimal(max), min != null || max != null ? true : null);
+    }
+
+    @Test
+    void aNewTemplateVersionIsBornActiveWithItsItemsInListOrderAndReplacesTheActiveOneOfItsType() {
+        InspectionTemplate active = template("CW_HEIGHT");
+        active.setTemplateVersion(3);
+        InspectionTemplateRepository repository = templateRepository(active, 4);
+        InspectionTemplateServiceImpl service = new InspectionTemplateServiceImpl(repository, mock(InspectionTemplateMapper.class));
+
+        service.create(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, " Profile v5 ",
+                List.of(point("DROPPERS", null, null), point("CW_HEIGHT", "5000", "5500")), 3));
+
+        ArgumentCaptor<InspectionTemplate> saved = ArgumentCaptor.forClass(InspectionTemplate.class);
+        InOrder order = inOrder(repository);
+        order.verify(repository).lockAssetType(AdvisoryLockKeys.of("mto-maintenance:inspection-template:PROFILE"));
+        order.verify(repository).findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE);
+        order.verify(repository, times(2)).saveAndFlush(saved.capture());
+        assertSame(active, saved.getAllValues().get(0), "The active one is deactivated and flushed before the new one is inserted");
+        assertFalse(active.getActive());
+        InspectionTemplate created = saved.getAllValues().get(1);
+        assertEquals(5, created.getTemplateVersion(), "The number after the last one of the type, active or not");
+        assertTrue(created.getActive());
+        assertEquals("Profile v5", created.getName());
+        assertEquals(List.of("DROPPERS", "CW_HEIGHT"), created.getItems().stream().map(InspectionTemplateItem::getCode).toList());
+        assertEquals(List.of(1, 2), created.getItems().stream().map(InspectionTemplateItem::getOrderIndex).toList(), "The order is the position in the list");
+        InspectionTemplateItem state = created.getItems().get(0);
+        InspectionTemplateItem measure = created.getItems().get(1);
+        assertEquals("DROPPERS label", state.getLabel());
+        assertNull(state.getUnit(), "A blank unit is none");
+        assertFalse(state.getRequiresMeasure(), "Not said is false");
+        assertEquals("mm", measure.getUnit());
+        assertTrue(measure.getRequiresMeasure());
+        assertEquals(0, new BigDecimal("5000").compareTo(measure.getMinValue()));
+        assertSame(created, measure.getTemplate());
+        assertEquals(List.of("CW_HEIGHT"), active.getItems().stream().map(InspectionTemplateItem::getCode).toList(), "The previous version keeps its items");
+
+        // Un tipo sin plantilla estrena la version 1 sin desactivar nada.
+        InspectionTemplateRepository empty = templateRepository(null, 0);
+        new InspectionTemplateServiceImpl(empty, mock(InspectionTemplateMapper.class))
+                .create(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "First", List.of(point("A", null, null)), null));
+        ArgumentCaptor<InspectionTemplate> first = ArgumentCaptor.forClass(InspectionTemplate.class);
+        verify(empty).saveAndFlush(first.capture());
+        assertEquals(1, first.getValue().getTemplateVersion());
+    }
+
+    @Test
+    void aTemplateVersionIsRefusedBeforeWritingWhenItsItemsRepeatACodeARangeIsBackwardsOrItReplacesAnotherVersion() {
+        InspectionTemplate active = template("CW_HEIGHT");
+        active.setTemplateVersion(3);
+        InspectionTemplateRepository repository = templateRepository(active, 3);
+        InspectionTemplateServiceImpl service = new InspectionTemplateServiceImpl(repository, mock(InspectionTemplateMapper.class));
+
+        ValidationException repeated = assertThrows(ValidationException.class, () -> service.create(new InspectionTemplateRequest(
+                CatenaryAssetType.PROFILE, "Profile", List.of(point("A", null, null), point("B", null, null), point("A", null, null)), null)));
+        assertTrue(repeated.getMessage().startsWith("items[2].code"), repeated.getMessage());
+        ValidationException backwards = assertThrows(ValidationException.class, () -> service.create(new InspectionTemplateRequest(
+                CatenaryAssetType.PROFILE, "Profile", List.of(point("A", "10", "9.999")), null)));
+        assertTrue(backwards.getMessage().startsWith("items[0].minValue"), backwards.getMessage());
+        verify(repository, never()).lockAssetType(anyLong());
+
+        // Quien escribe leyo la version 2 como activa y ya es la 3: nada se escribe.
+        assertThrows(StaleVersionException.class, () -> service.create(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "Profile",
+                List.of(point("A", null, null)), 2)));
+        // Y quien dice sustituir una cuando el tipo no tiene ninguna activa.
+        InspectionTemplateServiceImpl withoutActive = new InspectionTemplateServiceImpl(templateRepository(null, 3), mock(InspectionTemplateMapper.class));
+        assertThrows(StaleVersionException.class, () -> withoutActive.create(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "Profile",
+                List.of(point("A", null, null)), 3)));
+        verify(repository, never()).saveAndFlush(any(InspectionTemplate.class));
+        assertTrue(active.getActive());
+    }
+
+    @Test
+    void aTemplateVersionIsRenamedActivatedAndDeactivatedInPlaceWithTheLockVersionReadAndItsItemsNeverChange() {
+        InspectionTemplate active = template("CW_HEIGHT");
+        active.setTemplateVersion(2);
+        ReflectionTestUtils.setField(active, "id", UUID.randomUUID());
+        InspectionTemplate previous = template("CW_HEIGHT", "DROPPERS");
+        previous.setActive(false);
+        ReflectionTestUtils.setField(previous, "id", UUID.randomUUID());
+        ReflectionTestUtils.setField(previous, "version", 4L);
+        InspectionTemplateRepository repository = templateRepository(active, 2);
+        for (InspectionTemplate template : List.of(active, previous)) {
+            when(repository.findAssetTypeById(template.getId())).thenReturn(Optional.of(CatenaryAssetType.PROFILE));
+            when(repository.findById(template.getId())).thenReturn(Optional.of(template));
+        }
+        InspectionTemplateServiceImpl service = new InspectionTemplateServiceImpl(repository, mock(InspectionTemplateMapper.class));
+
+        // Una version vieja no escribe nada, y el nombre no se vacia.
+        assertThrows(StaleVersionException.class, () -> service.patch(previous.getId(),
+                MergePatch.of(new InspectionTemplateUpdateRequest(null, true, 3L))));
+        assertThrows(ValidationException.class, () -> service.patch(previous.getId(),
+                new MergePatch<>(new InspectionTemplateUpdateRequest(null, null, 4L), Set.of("name"))));
+        assertThrows(ValidationException.class, () -> service.patch(previous.getId(),
+                MergePatch.of(new InspectionTemplateUpdateRequest("  ", null, 4L))));
+        assertFalse(previous.getActive());
+        assertTrue(active.getActive());
+
+        // Volver a la anterior: la activa deja de serlo antes, en la misma transaccion y bajo el cerrojo del tipo.
+        service.patch(previous.getId(), new MergePatch<>(new InspectionTemplateUpdateRequest(" Back to v1 ", true, null), Set.of("lockVersion")));
+        InOrder order = inOrder(repository);
+        order.verify(repository).findAssetTypeById(previous.getId());
+        order.verify(repository).lockAssetType(AdvisoryLockKeys.of("mto-maintenance:inspection-template:PROFILE"));
+        order.verify(repository).findById(previous.getId());
+        order.verify(repository).saveAndFlush(active);
+        order.verify(repository).saveAndFlush(previous);
+        assertTrue(previous.getActive());
+        assertFalse(active.getActive());
+        assertEquals("Back to v1", previous.getName());
+        assertEquals(2, previous.getItems().size());
+
+        // Desactivar la activa deja el tipo sin plantilla; repetirlo no hace nada.
+        service.patch(previous.getId(), MergePatch.of(new InspectionTemplateUpdateRequest(null, false, 4L)));
+        service.patch(previous.getId(), MergePatch.of(new InspectionTemplateUpdateRequest(null, false, 4L)));
+        assertFalse(previous.getActive());
+        assertFalse(active.getActive());
+
+        UUID unknown = UUID.randomUUID();
+        when(repository.findAssetTypeById(unknown)).thenReturn(Optional.empty());
+        assertThrows(NotFoundException.class, () -> service.patch(unknown, MergePatch.of(new InspectionTemplateUpdateRequest(null, true, null))));
     }
 }

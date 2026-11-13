@@ -1,5 +1,9 @@
 package com.alejandro.mtomaintenance.infrastructure.web.controller;
 
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateItemResponse;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateResponse;
+import com.alejandro.mtomaintenance.application.service.InspectionTemplateService;
 import com.alejandro.mtomaintenance.application.dto.operation.OperationResponse;
 import com.alejandro.mtomaintenance.application.dto.operation.OperationStatus;
 import com.alejandro.mtomaintenance.application.dto.order.CancelOrderRequest;
@@ -92,7 +96,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * los codigos de error estables. Carga tambien el de activos, por la otra regla de metodo: desactivar
  * con un PUT pide el rol de borrado, como el DELETE.
  */
-@WebMvcTest({MaintenanceOrderController.class, CatenaryAssetController.class})
+@WebMvcTest({MaintenanceOrderController.class, CatenaryAssetController.class, InspectionTemplateController.class})
 @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class, GlobalExceptionHandler.class})
 class MaintenanceOrderControllerMockMvcTest {
 
@@ -118,6 +122,9 @@ class MaintenanceOrderControllerMockMvcTest {
 
     @MockitoBean
     private BudgetedOperations operations;
+
+    @MockitoBean
+    private InspectionTemplateService templateService;
 
     @Test
     void disablingAnAssetWithAPutNeedsTheDeleteRoleLikeTheDeleteAndTheRestOfThePutDoesNot() throws Exception {
@@ -582,5 +589,82 @@ class MaintenanceOrderControllerMockMvcTest {
     private static MaintenanceTaskResponse taskResponse(UUID id, UUID orderId) {
         return new MaintenanceTaskResponse(id, orderId, 1, "Profile 12-2.27", MaintenanceTaskStatus.PENDING, null, null, null, null, null, null, null,
                 List.of(), List.of("RG-01"), List.of(), null, null);
+    }
+
+    /**
+     * Las plantillas las mantiene quien supervisa: maintenance-supervise ademas de maintenance-write, las dos
+     * mitades, en el alta de una version y en su PATCH. La lectura sigue con maintenance-read.
+     */
+    @Test
+    void anInspectionTemplateIsWrittenWithSuperviseOnTopOfWriteAndItsBodyIsValidated() throws Exception {
+        String templates = "/api/v1/maintenance/inspection-templates";
+        UUID id = UUID.randomUUID();
+        InspectionTemplateResponse version = new InspectionTemplateResponse(id, CatenaryAssetType.DISCONNECTOR, 2, "Disconnector inspection", true,
+                List.of(new InspectionTemplateItemResponse(UUID.randomUUID(), "CONTINUITY", "Electrical continuity", "uOhm", null, new BigDecimal("100.000"), true, 1)),
+                0L, null);
+        when(templateService.create(any(InspectionTemplateRequest.class))).thenReturn(version);
+        when(templateService.patch(eq(id), any())).thenReturn(version);
+        String body = """
+                {"assetType": "DISCONNECTOR", "name": "Disconnector inspection", "replacesVersion": 1,
+                 "items": [{"code": "CONTINUITY", "label": "Electrical continuity", "unit": "uOhm", "maxValue": 100, "requiresMeasure": true}]}
+                """;
+
+        mockMvc.perform(post(templates).with(role(SecurityRoles.MAINTENANCE_WRITE)).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.errorCode").value("AUTH-403"));
+        mockMvc.perform(post(templates).with(role(SecurityRoles.MAINTENANCE_SUPERVISE)).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(patch(templates + "/{id}", id).with(role(SecurityRoles.MAINTENANCE_WRITE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"active\":false}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(patch(templates + "/{id}", id).with(role(SecurityRoles.MAINTENANCE_SUPERVISE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"active\":false}"))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(templateService);
+
+        mockMvc.perform(post(templates).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", templates + "/" + id))
+                .andExpect(jsonPath("$.version").value(2))
+                .andExpect(jsonPath("$.lockVersion").value(0))
+                .andExpect(jsonPath("$.active").value(true))
+                .andExpect(jsonPath("$.items[0].code").value("CONTINUITY"))
+                .andExpect(jsonPath("$.items[0].orderIndex").value(1));
+        verify(templateService).create(argThat(request -> request.replacesVersion() == 1 && request.items().size() == 1
+                && new BigDecimal("100").compareTo(request.items().getFirst().maxValue()) == 0));
+
+        // Lo que no cabe en las columnas o no es un punto, 400 en su campo, sin llegar al servicio.
+        mockMvc.perform(post(templates).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"assetType\":\"PROFILE\",\"name\":\"Profile\",\"items\":[{\"code\":\"cw height\",\"label\":\"\"}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("REQ-VALIDATION"))
+                .andExpect(jsonPath("$.validationErrors[*].field", org.hamcrest.Matchers.containsInAnyOrder("items[0].code", "items[0].label")));
+        mockMvc.perform(post(templates).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"assetType\":\"PROFILE\",\"name\":\"Profile\",\"items\":[]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors[0].field").value("items"));
+
+        // El PATCH: lockVersion a null es no mandarlo; los puntos no son un campo suyo; una version vieja es 409.
+        mockMvc.perform(patch(templates + "/{id}", id).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"active\":true,\"name\":\"Back\",\"lockVersion\":3}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id.toString()));
+        verify(templateService).patch(eq(id), argThat(patch -> Boolean.TRUE.equals(patch.values().active()) && "Back".equals(patch.values().name())
+                && patch.values().lockVersion() == 3L && patch.cleared().isEmpty()));
+        mockMvc.perform(patch(templates + "/{id}", id).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"items\":[]}"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errorCode").value("VAL-001"));
+        mockMvc.perform(patch(templates + "/{id}", id).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"active\":true}"))
+                .andExpect(status().isUnsupportedMediaType());
+        when(templateService.patch(eq(id), any())).thenThrow(new StaleVersionException("Inspection template was changed by someone else"));
+        mockMvc.perform(patch(templates + "/{id}", id).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE))
+                        .contentType(MergePatch.MEDIA_TYPE).content("{\"active\":true,\"lockVersion\":1}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("CON-001"));
+
+        // Nada se borra, y leer sigue siendo de quien lee.
+        mockMvc.perform(delete(templates + "/{id}", id).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE, SecurityRoles.MAINTENANCE_DELETE)))
+                .andExpect(status().isMethodNotAllowed());
+        mockMvc.perform(get(templates).with(role(SecurityRoles.MAINTENANCE_READ))).andExpect(status().isOk());
     }
 }

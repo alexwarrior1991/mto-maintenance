@@ -268,7 +268,9 @@ class MapperLayerTest {
             usage.markFailed("reserve: stock down");
             MaintenanceStatusHistory history = MaintenanceStatusHistory.builder().order(order).previousStatus("DRAFT").newStatus("PLANNED")
                     .changedBy("alejandro").comment("week 4").build();
-            InspectionTemplate template = InspectionTemplate.builder().assetType(CatenaryAssetType.PROFILE).name("Profile").version(2).build();
+            InspectionTemplate template = InspectionTemplate.builder().assetType(CatenaryAssetType.PROFILE).name("Profile").templateVersion(2).build();
+            ReflectionTestUtils.setField(template, "version", 5L);
+            ReflectionTestUtils.setField(template, "createdBy", "supervisor");
             template.getItems().add(InspectionTemplateItem.builder().template(template).code("CW_HEIGHT").label("Height").unit("mm").orderIndex(1).build());
             template.getItems().add(InspectionTemplateItem.builder().template(template).code("DROPPERS").label("Droppers").orderIndex(8).build());
             MaintenanceTaskType messenger = MaintenanceTaskType.builder().code("RG-08").description("Messenger wire").functionalGroup(FunctionalGroup.OVERHEAD_CONDUCTORS)
@@ -292,7 +294,9 @@ class MapperLayerTest {
             assertEquals("PLANNED", historyResponse.newStatus());
             assertEquals("alejandro", historyResponse.changedBy());
             assertNotNull(historyResponse.changedAt());
-            assertEquals(2, templateResponse.version());
+            assertEquals(2, templateResponse.version(), "version is still the number of the template version");
+            assertEquals(5L, templateResponse.lockVersion(), "The optimistic lock has its own key");
+            assertEquals("supervisor", templateResponse.audit().createdBy());
             assertEquals(List.of("CW_HEIGHT", "DROPPERS"), templateResponse.items().stream().map(item -> item.code()).toList());
             assertEquals(TaskUnit.KM, typeResponse.unit());
             assertEquals(new BigDecimal("60"), typeResponse.fixedMinutes());

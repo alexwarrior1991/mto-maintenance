@@ -19,10 +19,18 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import lombok.ToString;
 
+import org.hibernate.annotations.Immutable;
+
 import java.math.BigDecimal;
 
-/** Punto de una plantilla. Con min/max es de medida; sin ellos es de estado (OK / DEFECT). */
+/**
+ * Punto de una plantilla. Con min/max es de medida; sin ellos es de estado (OK / DEFECT).
+ *
+ * <p>Inmutable: nace con su version de la plantilla y no cambia ni se quita. Cambiar un punto es crear
+ * la version siguiente de la plantilla.</p>
+ */
 @Entity
+@Immutable
 @Table(name = "inspection_template_item", uniqueConstraints = @UniqueConstraint(name = "uq_inspection_template_item_code", columnNames = {"template_id", "code"}))
 @Getter
 @Setter

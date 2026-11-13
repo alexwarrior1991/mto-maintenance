@@ -83,6 +83,15 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
     private InboxMessageRepository inboxMessageRepository;
 
     @Autowired
+    private com.alejandro.mtomaintenance.infrastructure.persistence.repository.InspectionTemplateRepository templateRepository;
+
+    @Autowired
+    private com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInspectionRepository inspectionRepository;
+
+    @Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    @Autowired
     private CatenaryAssetRepository assetRepository;
 
     @Autowired
@@ -1407,5 +1416,111 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         return new InboxMessageCommand(messageId.toString(), SOURCE_SERVICE, "MASTER_DATA_" + entity.toUpperCase() + "_CREATED", entity,
                 entityId, "mto.master-data.exchange", "mto.master-data." + entity + ".created",
                 "mto.maintenance.master-data.queue", "9f2c1b0d", "{\"operationId\":\"" + messageId + "\"}", 10L);
+    }
+
+    private InspectionTemplateServiceImpl templateService() {
+        return new InspectionTemplateServiceImpl(templateRepository,
+                org.mockito.Mockito.mock(com.alejandro.mtomaintenance.application.mapper.InspectionTemplateMapper.class));
+    }
+
+    private static com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateRequest templateRequest(
+            CatenaryAssetType assetType, Integer replacesVersion, String... codes) {
+        return new com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateRequest(assetType, "Checklist " + List.of(codes),
+                java.util.Arrays.stream(codes).map(code -> new com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateItemRequest(
+                        code, "Point " + code, null, null, null, null)).toList(), replacesVersion);
+    }
+
+    /**
+     * Las plantillas por la API contra el esquema real (V28): la version nueva sustituye a la activa sin que
+     * el indice unico parcial vea dos activas, y la inspeccion que ya existia sigue con sus puntos y con el id
+     * de la version de la que los copio.
+     */
+    @Test
+    void aNewTemplateVersionReplacesTheActiveOneAndAnInspectionAlreadyCreatedKeepsItsOwnItems() {
+        InspectionTemplateServiceImpl service = templateService();
+        var seeded = templateRepository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE).orElseThrow();
+        UUID seededId = seeded.getId();
+        CatenaryAsset profile = assetRepository.save(CatenaryAsset.builder().code("TPL-" + UUID.randomUUID().toString().substring(0, 8))
+                .name("13-2.10").type(CatenaryAssetType.PROFILE).trackId(System.nanoTime()).build());
+        var inspection = com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspection.builder()
+                .code("INS-TPL-" + UUID.randomUUID().toString().substring(0, 8)).asset(profile).inspectionDate(java.time.LocalDate.of(2026, 1, 10))
+                .result(com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionResult.OK).build();
+        inspection.setTemplate(seeded);
+        seeded.getItems().forEach(item -> inspection.getItems().add(
+                com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspectionItem.fromTemplate(inspection, item)));
+        UUID inspectionId = inspectionRepository.saveAndFlush(inspection).getId();
+
+        service.create(templateRequest(CatenaryAssetType.PROFILE, 1, "CW_HEIGHT", "NEW_POINT"));
+        entityManager.flush();
+        entityManager.clear();
+
+        var active = templateRepository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE).orElseThrow();
+        assertEquals(2, active.getTemplateVersion());
+        assertEquals(List.of("CW_HEIGHT", "NEW_POINT"), active.getItems().stream().map(item -> item.getCode()).toList());
+        assertEquals(List.of(1, 2), active.getItems().stream().map(item -> item.getOrderIndex()).toList());
+        var previous = templateRepository.findById(seededId).orElseThrow();
+        assertFalse(previous.getActive());
+        assertEquals(14, previous.getItems().size(), "The previous version keeps its items");
+        assertEquals(1L, previous.getVersion(), "Deactivating it bumped its lock_version");
+        var kept = inspectionRepository.findById(inspectionId).orElseThrow();
+        assertEquals(14, kept.getItems().size(), "The inspection keeps its own copy");
+        assertEquals(seededId, kept.getTemplate().getId(), "And points at the version it copied");
+
+        // Quien leyo la 1 como activa llega tarde.
+        assertThrows(com.alejandro.mtomaintenance.application.exception.StaleVersionException.class,
+                () -> service.create(templateRequest(CatenaryAssetType.PROFILE, 1, "LATE")));
+
+        // Volver a la anterior, y luego dejar el tipo sin plantilla: una inspeccion nueva naceria sin checklist.
+        service.patch(seededId, com.alejandro.mtomaintenance.application.dto.common.MergePatch.of(
+                new com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateUpdateRequest(null, true, 1L)));
+        entityManager.flush();
+        entityManager.clear();
+        assertEquals(seededId, templateRepository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE).orElseThrow().getId());
+        assertFalse(templateRepository.findById(active.getId()).orElseThrow().getActive());
+        service.patch(seededId, com.alejandro.mtomaintenance.application.dto.common.MergePatch.of(
+                new com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateUpdateRequest("Retired", false, 2L)));
+        entityManager.flush();
+        entityManager.clear();
+        assertTrue(templateRepository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE).isEmpty());
+        assertEquals("Retired", templateRepository.findById(seededId).orElseThrow().getName());
+        assertEquals(3, templateRepository.findLastVersion(CatenaryAssetType.PROFILE) + 1, "The next one is 3, whoever is active");
+    }
+
+    /**
+     * Ocho altas a la vez de la plantilla de un tipo, cada una en su transaccion: se ponen en fila en el
+     * cerrojo del tipo, salen las versiones 1 a 8 sin hueco ni repetida, y queda activa una sola, la ultima.
+     */
+    @Test
+    void eightTemplateVersionsOfOneTypeCreatedAtOnceQueueAndLeaveOneActive() throws Exception {
+        InspectionTemplateServiceImpl service = templateService();
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        int writers = 8;
+        var start = new java.util.concurrent.CountDownLatch(1);
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(writers)) {
+            List<java.util.concurrent.Future<?>> results = new java.util.ArrayList<>();
+            for (int writer = 0; writer < writers; writer++) {
+                String code = "POINT_" + writer;
+                results.add(pool.submit(() -> {
+                    start.await();
+                    transaction.executeWithoutResult(status -> service.create(templateRequest(CatenaryAssetType.TRACK_SECTION, null, code)));
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (var result : results) {
+                result.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            }
+
+            List<Object[]> rows = transaction.execute(status -> entityManager.createNativeQuery(
+                    "select version, active from inspection_template where asset_type = 'TRACK_SECTION' order by version", Object[].class).getResultList());
+            assertEquals(List.of(1, 2, 3, 4, 5, 6, 7, 8), rows.stream().map(row -> ((Number) row[0]).intValue()).toList());
+            assertEquals(List.of(8), rows.stream().filter(row -> (Boolean) row[1]).map(row -> ((Number) row[0]).intValue()).toList(),
+                    "Only the last version is active");
+        } finally {
+            // Se confirmaron de verdad: fuera, que otros tests cuentan las tres plantillas sembradas.
+            transaction.executeWithoutResult(status -> entityManager.createNativeQuery(
+                    "delete from inspection_template where asset_type = 'TRACK_SECTION'").executeUpdate());
+        }
     }
 }

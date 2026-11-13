@@ -1,5 +1,8 @@
 package com.alejandro.mtomaintenance.application.dto;
 
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateUpdateRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateRequest;
+import com.alejandro.mtomaintenance.application.dto.inspection.InspectionTemplateItemRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetRequest;
 import com.alejandro.mtomaintenance.application.dto.asset.CatenaryAssetUpdateRequest;
 import com.alejandro.mtomaintenance.application.dto.material.MaterialUsageRequest;
@@ -221,6 +224,34 @@ class DtoValidationTest {
                 Instant.now().plus(Duration.ofHours(2)), null, null, null, null, null, null, null, null))));
         assertTrue(validator.validate(new CatenaryDefectRequest(UUID.randomUUID(), DefectSeverity.HIGH, "kink", null,
                 Instant.now().minus(Duration.ofMinutes(5)), null, null, null, null, null, null, null, null)).isEmpty());
+    }
+
+    @Test
+    void aTemplateVersionNeedsItsTypeItsNameAndAWholeListOfWellFormedItems() {
+        InspectionTemplateItemRequest height = new InspectionTemplateItemRequest("CW_HEIGHT", "Contact wire height", "mm",
+                new BigDecimal("5000"), new BigDecimal("5500.125"), true);
+        assertTrue(validator.validate(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "Profile", List.of(height), 1)).isEmpty());
+        assertTrue(validator.validate(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "Profile",
+                List.of(new InspectionTemplateItemRequest("A.1-b".toUpperCase(), "State", null, null, null, null)), null)).isEmpty());
+
+        assertEquals(Set.of("assetType", "name", "items", "replacesVersion"),
+                fields(validator.validate(new InspectionTemplateRequest(null, " ", List.of(), 0))));
+        assertEquals(Set.of("name", "items"), fields(validator.validate(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "n".repeat(121), null, null))));
+        assertEquals(Set.of("items"), lists(validator.validate(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "Profile",
+                Arrays.asList(height, null), null))));
+
+        InspectionTemplateItemRequest wrong = new InspectionTemplateItemRequest("cw height", " ", "u".repeat(33),
+                new BigDecimal("1234567890.1"), new BigDecimal("1.1234"), null);
+        assertEquals(Set.of("items[0].code", "items[0].label", "items[0].unit", "items[0].minValue", "items[0].maxValue"),
+                fields(validator.validate(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "Profile", List.of(wrong), null))));
+        assertEquals(Set.of("items[0].code", "items[0].label"), fields(validator.validate(new InspectionTemplateRequest(CatenaryAssetType.PROFILE,
+                "Profile", List.of(new InspectionTemplateItemRequest("C".repeat(33), "l".repeat(256), null, null, null, null)), null))));
+        List<InspectionTemplateItemRequest> tooMany = java.util.stream.IntStream.rangeClosed(1, InspectionTemplateRequest.MAX_ITEMS + 1)
+                .mapToObj(index -> new InspectionTemplateItemRequest("P" + index, "Point " + index, null, null, null, null)).toList();
+        assertEquals(Set.of("items"), fields(validator.validate(new InspectionTemplateRequest(CatenaryAssetType.PROFILE, "Profile", tooMany, null))));
+
+        assertTrue(validator.validate(new InspectionTemplateUpdateRequest(null, null, null)).isEmpty());
+        assertEquals(Set.of("name"), fields(validator.validate(new InspectionTemplateUpdateRequest("n".repeat(121), true, 0L))));
     }
 
     private static Set<String> fields(Set<? extends ConstraintViolation<?>> violations) {

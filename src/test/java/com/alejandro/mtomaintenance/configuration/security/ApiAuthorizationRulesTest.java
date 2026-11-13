@@ -65,6 +65,7 @@ class ApiAuthorizationRulesTest {
 
     private static final String PROBES = SecurityConfiguration.API + "/probes";
     private static final String SUPERVISED = SecurityConfiguration.API + "/probe-orders/cancel";
+    private static final String SUPERVISED_CATALOGUE = SecurityConfiguration.API + "/probe-orders/templates/1";
 
     /**
      * Se deja el {@code JwtDecoder} real, sin sustituir por un doble: así el contexto ejercita el
@@ -212,6 +213,17 @@ class ApiAuthorizationRulesTest {
             mockMvc.perform(post(SUPERVISED).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE)))
                     .andExpect(status().isOk());
         }
+
+        /** Lo mismo en un PATCH: el equipo de un tipo de tarea y las plantillas de inspeccion los cambia quien supervisa. */
+        @Test
+        void aSupervisedPatchNeedsBothTheWriteAndTheSuperviseRole() throws Exception {
+            mockMvc.perform(patch(SUPERVISED_CATALOGUE).with(role(SecurityRoles.MAINTENANCE_WRITE))).andExpect(status().isForbidden());
+            mockMvc.perform(patch(SUPERVISED_CATALOGUE).with(role(SecurityRoles.MAINTENANCE_SUPERVISE))).andExpect(status().isForbidden());
+            mockMvc.perform(patch(SUPERVISED_CATALOGUE).with(role(SecurityRoles.MAINTENANCE_READ, SecurityRoles.MAINTENANCE_SUPERVISE)))
+                    .andExpect(status().isForbidden());
+            mockMvc.perform(patch(SUPERVISED_CATALOGUE).with(role(SecurityRoles.MAINTENANCE_WRITE, SecurityRoles.MAINTENANCE_SUPERVISE)))
+                    .andExpect(status().isOk());
+        }
     }
 
     @Nested
@@ -281,6 +293,13 @@ class ApiAuthorizationRulesTest {
         @PostMapping("/cancel")
         String cancel() {
             return "cancelled";
+        }
+
+        /** Replica de la guarda de {@code InspectionTemplateController.patch} y de {@code MaintenanceTaskTypeController.patch}. */
+        @PreAuthorize("hasRole('" + SecurityRoles.MAINTENANCE_SUPERVISE + "')")
+        @PatchMapping("/templates/{id}")
+        String patchTemplate(@PathVariable String id) {
+            return id;
         }
     }
 }

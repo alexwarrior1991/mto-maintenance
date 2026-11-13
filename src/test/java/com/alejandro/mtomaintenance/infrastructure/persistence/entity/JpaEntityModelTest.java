@@ -35,6 +35,9 @@ class JpaEntityModelTest {
         // leeria como "nunca cambio". El historial del aislador vive en mto-configuration.
         // OutboxMessage tampoco: la escribe solo el relay y su historia es ella misma (V13). Ni
         // BackgroundOperation (V21): la escriben sus sentencias nativas y es su propio historico.
+        // InspectionTemplate e InspectionTemplateItem se escriben por la API desde V28 y siguen sin auditarse,
+        // como MaintenanceTaskType y MaintenanceTeam: son catalogos, y la historia de una plantilla son sus
+        // versiones (una version no cambia sus puntos; cada una dice quien la creo y cuando).
         List<Class<?>> notAudited = List.of(MaintenanceStatusHistory.class, InboxMessage.class, MaintenanceTeam.class,
                 MaintenanceTaskType.class, InspectionTemplate.class, InspectionTemplateItem.class,
                 CatenaryAssetSwitch.class, CrewPerson.class, FleetVehicle.class, MaintenanceInstrument.class, BackgroundOperation.class,
@@ -112,5 +115,22 @@ class JpaEntityModelTest {
         assertEquals(StockSyncStatus.RESERVED, usage.getStockSyncStatus());
         assertEquals(reservation, usage.getStockReservationId());
         assertEquals(null, usage.getStockSyncError());
+    }
+
+    /**
+     * Una plantilla se edita por la API (su nombre y si es la activa), asi que lleva bloqueo optimista; pero
+     * en {@code lock_version}, porque {@code version} es ya su numero de version. Sus puntos no cambian nunca.
+     */
+    @Test
+    void anInspectionTemplateIsVersionedOnItsOwnColumnAndItsItemsAreImmutable() throws NoSuchFieldException {
+        assertTrue(VersionedEntity.class.isAssignableFrom(InspectionTemplate.class));
+        jakarta.persistence.AttributeOverride lock = InspectionTemplate.class.getAnnotation(jakarta.persistence.AttributeOverride.class);
+        assertEquals("version", lock.name());
+        assertEquals("lock_version", lock.column().name());
+        jakarta.persistence.Column number = InspectionTemplate.class.getDeclaredField("templateVersion").getAnnotation(jakarta.persistence.Column.class);
+        assertEquals("version", number.name());
+        assertFalse(number.updatable(), "The number of a version never changes");
+        assertFalse(InspectionTemplate.class.getDeclaredField("assetType").getAnnotation(jakarta.persistence.Column.class).updatable());
+        assertTrue(InspectionTemplateItem.class.isAnnotationPresent(org.hibernate.annotations.Immutable.class));
     }
 }

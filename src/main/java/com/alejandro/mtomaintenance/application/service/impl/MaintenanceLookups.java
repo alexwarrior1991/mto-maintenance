@@ -64,7 +64,7 @@ class MaintenanceLookups {
     }
 
     Optional<InspectionTemplate> activeTemplate(CatenaryAsset asset) {
-        return templateRepository.findFirstByAssetTypeAndActiveTrueOrderByVersionDesc(asset.getType());
+        return templateRepository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(asset.getType());
     }
 
     /** Resuelve codigos RG/RP; un codigo desconocido es un 400, no un silencio. */

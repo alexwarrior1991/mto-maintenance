@@ -62,6 +62,12 @@ GET/PUT         /inspections/{id}             PUT /inspections/{id}/items/{itemI
 POST            /inspections/{id}/create-defect | /create-corrective-order
 GET             /inspections/{id}/revisions
 GET             /inspection-templates | /inspection-templates/{id}
+                                              every version of every asset type, by asset type and version descending; each
+                                              with version (its number), active, items, lockVersion and audit
+POST            /inspection-templates         the next version of an asset type, born active, with its whole item list; replaces
+                                              the active one. maintenance-supervise on top of maintenance-write
+PATCH           /inspection-templates/{id}    only name and active (merge-patch with the lockVersion read); same roles —
+                                              "Inspection templates" below
 
 GET/POST        /defects                      severity, status, assetId, trackId, stationId, executionPackageId, detectedFrom, detectedTo, orderId
 GET/PUT         /defects/{id}
@@ -336,6 +342,7 @@ their items, defects, material lines — takes the same body two ways:
 | Asset | `description`, `preventiveIntervalDays`, and on an own section `executionPackageId` and `stationId` |
 | Material line | nothing: the `PATCH` is there for the `version` |
 | Task type | `requiredEquipment` |
+| Inspection template | nothing (its lock is `lockVersion`, not `version`: "Inspection templates" below) |
 
 Each of those resources returns its `version` (a check item its own), and both bodies accept it,
 optional. With it, a request made on an older version answers 409 `CON-001` and writes nothing: read
@@ -373,6 +380,71 @@ value is accepted) and the order's `stockProjectId` are 409 `MAT-001`, and a lin
 doubt cannot be removed (the material may have left already). `FAILED` lines are retried on their own
 every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-domain-model.md`.
 
+## Inspection templates
+
+The checklist an inspection copies is the **active** template of its asset's type; there is at most
+one per type, and a type may have none (the inspection is then created without items, as always).
+Reading is `maintenance-read`; writing is `maintenance-supervise` **and** `maintenance-write`.
+
+A version is never edited in what is copied from it. To change a checklist, create the next version:
+
+```jsonc
+POST /inspection-templates
+{
+  "assetType": "DISCONNECTOR",          // required: PROFILE, DISCONNECTOR, SECTION_INSULATOR, TRACK_SECTION
+  "name": "Disconnector inspection",    // required, 1..120
+  "replacesVersion": 1,                 // optional: the "version" of the active template that was read
+  "items": [                            // required, 1..100, the whole list; the order is the position
+    {"code": "CONTACTS", "label": "Main contacts state and alignment"},
+    {"code": "CONTINUITY", "label": "Electrical continuity / contact resistance", "unit": "uOhm",
+     "maxValue": 100, "requiresMeasure": true}
+  ]
+}
+```
+
+| Item field | Rule |
+|---|---|
+| `code` | required, 1..32, `[A-Z0-9][A-Z0-9_.-]*`, not repeated in the list |
+| `label` | required, 1..255 |
+| `unit` | optional, ≤ 32; blank is none |
+| `minValue`, `maxValue` | optional, `numeric(12,3)` (9 integer digits, 3 decimals), signed; with both, `minValue ≤ maxValue` |
+| `requiresMeasure` | optional, `false` when absent |
+
+`orderIndex` is not sent: it is the position in the list, from 1. The answer is 201 with `Location`
+and the new version: `version` is the last one of the type plus one, `active` is `true`, and the
+version that was active is now inactive (read the list again). With `replacesVersion`, if the active
+version of the type is another one, or there is none, the answer is 409 `CON-001` and nothing is
+written; without it, nothing is checked. A repeated code or a range upside down is 400 `VAL-001` with
+the item in the message (`items[2].code: …`); the rest is 400 `REQ-VALIDATION` on its field
+(`items[0].label`).
+
+`PATCH /inspection-templates/{id}` (`application/merge-patch+json`) changes, of one version, only:
+
+| Field | Meaning |
+|---|---|
+| `name` | 1..120; cannot be emptied |
+| `active` | `true`: this version becomes the active one of its type and the one that was stops being it. `false`: it stops being active; if it was the active one the type is left without a template. Saying what it already is changes nothing |
+| `lockVersion` | optional: the `lockVersion` read; another one is 409 `CON-001`. `null` is not sending it |
+
+Any other field (`items`, `assetType`, `version`) is 400 `VAL-001`: the items of a version do not
+change. There is no `DELETE` (405): inspections reference the version they copied.
+
+A template answers:
+
+```jsonc
+{"id": "0195a000-0000-7000-8000-00000000a002", "assetType": "DISCONNECTOR",
+ "version": 2,                          // the number of the version within its asset type — NOT the optimistic lock
+ "name": "Disconnector inspection", "active": true,
+ "items": [{"id": "…", "code": "CONTACTS", "label": "Main contacts state and alignment", "unit": null,
+            "minValue": null, "maxValue": null, "requiresMeasure": false, "orderIndex": 1}, …],
+ "lockVersion": 0,                      // the optimistic lock: send it back in the PATCH
+ "audit": {"createdAt": "…", "updatedAt": "…", "createdBy": "supervisor", "updatedBy": "supervisor"}}
+```
+
+`lockVersion` and `audit` are new keys (`V28`); the others are as they were. `audit.createdBy` /
+`createdAt` say who made the version and when; `updatedBy` / `updatedAt`, who renamed, activated or
+deactivated it last.
+
 ## Status codes
 
 | Code | When |
@@ -395,7 +467,7 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 | 409 `MAT-001` | Over-consumption (also taking `allowOverConsumption` off a line consumed above plan), duplicated line, `FAILED` or `REJECTED` line without `force`, changing or removing a consumed line, removing a line of a completed or cancelled order; while a line has a request to stock without an answer (`stockRequestInDoubt`), changing its planned or consumed quantity, changing the order's `stockProjectId`, or removing it with an output in doubt |
 | 409 `STK-001` | `mto-stock` has not enough stock, on an explicit `sync` (the line stays `REJECTED` with the reason) |
 | 409 `<AGG>-409` | Duplicated code |
-| 409 `CON-001` | The `version` of the request is not the one stored, or two writes crossed: nothing was written |
+| 409 `CON-001` | The `version` of the request is not the one stored, or two writes crossed: nothing was written. For an inspection template, its `lockVersion` in a `PATCH`, or `replacesVersion` in a `POST` when the active version of the type is no longer that one |
 | 409 `APP-409` | A database constraint caught what the validation did not |
 | 415 `REQ-415` | Unsupported media type (a `PATCH` is only `application/merge-patch+json`) |
 | 422 `INS-001` | Inconsistent inspection result / checklist |
@@ -410,6 +482,6 @@ every 5 minutes, the same as a `sync`; `sync` still does it on demand. See `02-d
 |---|---|
 | `GET` | `MAINTENANCE_READ`; `GET /operations/{id}` also needs to be who asked for it, `MAINTENANCE_SUPERVISE` or `OPS_WRITE` (404 otherwise) |
 | `POST`, `PUT`, `PATCH` | `MAINTENANCE_WRITE`; a write may also be limited by execution package (`SCP-403`) |
-| `PATCH /task-types/{code}` | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security) |
+| `PATCH /task-types/{code}`, `POST /inspection-templates`, `PATCH /inspection-templates/{id}` | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security) |
 | `DELETE`, and `PUT /assets/{id}` with `enabled=false` (the same decision) | `MAINTENANCE_DELETE` (method security on the `PUT`, on top of `MAINTENANCE_WRITE`) |
 | `cancel` **of an order**, `complete` of an order with `force=true`, `resolve`, `close`, `discard` of a defect | `MAINTENANCE_SUPERVISE` on top of `MAINTENANCE_WRITE` (method security); cancelling a shift or a task, and taking a task out of a shift (`POST .../unassign`), only need `MAINTENANCE_WRITE` |
