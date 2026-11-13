@@ -1,7 +1,7 @@
 # 06 · Messaging
 
 `mto-maintenance` **consumes** the master-data change events that `mto-configuration` publishes and
-the people, teams and vehicles that `mto-resources` publishes, and **publishes** its own events (an
+the people, teams, vehicles and instruments that `mto-resources` publishes, and **publishes** its own events (an
 order created, a defect that changes state, a shift started, closed or cancelled, a material the
 warehouse rejects, the preventives about to fall due) for `mto-notification` and, the shifts, for
 `mto-resources`. The channels are separate: the master-data contract is owned by `mto-configuration`

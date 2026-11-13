@@ -27,12 +27,13 @@ import java.util.UUID;
  *
  * <h2>Por qué esta clase NO lleva {@code @Audited}</h2>
  *
- * <p>La heredan las diez entidades, y solo siete deben tener historial. Anotarla aquí incluiría
- * {@code StockMovement} —que ya es un libro mayor inmutable, así que duplicarlo no añade ni un
- * dato—, {@code InventoryBalance} e {@code InboxMessage}, que se escriben con SQL nativo y por tanto
- * dejarían una tabla de historial permanentemente vacía: eso no es «no hay auditoría», es una
- * auditoría que dice que nunca cambió nada. Además Envers exigiría tres tablas {@code _aud} que la
- * migración no crea, y con {@code ddl-auto: validate} la aplicación no arrancaría. El
+ * <p>La heredan entidades que deben tener historial y otras que no. Anotarla aquí incluiría los
+ * catálogos ({@code MaintenanceTeam}, {@code MaintenanceTaskType}, {@code InspectionTemplate} y sus
+ * puntos), {@code CatenaryAssetSwitch}, que solo se escribe al aplicar datos maestros, e
+ * {@code InboxMessage}, que se escribe con SQL nativo y por tanto dejaría una tabla de historial
+ * permanentemente vacía: eso no es «no hay auditoría», es una auditoría que dice que nunca cambió
+ * nada. Además Envers exigiría tablas {@code _aud} que las migraciones no crean, y con
+ * {@code ddl-auto: validate} la aplicación no arrancaría. El
  * {@code @Audited} va entidad por entidad; {@code JpaEntityModelTest} vigila que el reparto no se
  * mueva.</p>
  *
@@ -40,7 +41,7 @@ import java.util.UUID;
  *
  * <p>{@code audit_revision} ya guarda quién y cuándo, una vez por revisión en lugar de repetido en
  * cada fila de cada tabla gemela, así que copiarlos sería el mismo dato dos veces y cuatro columnas
- * más que mantener en siete tablas. La anotación es explícita, y no confianza en el valor por
+ * más que mantener en cada tabla gemela. La anotación es explícita, y no confianza en el valor por
  * defecto, porque lo que hace Envers con las propiedades de un {@code @MappedSuperclass} sin
  * {@code @Audited} ha cambiado entre versiones: dejarlo al criterio de la versión convierte una
  * subida de Hibernate en un fallo de arranque por una columna que sobra o falta en la gemela.</p>

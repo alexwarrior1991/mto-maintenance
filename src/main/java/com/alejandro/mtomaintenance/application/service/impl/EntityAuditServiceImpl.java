@@ -30,7 +30,7 @@ import java.util.function.Function;
  *
  * <p>Se usa el {@code AuditReader} directamente y no {@code spring-data-envers}: su
  * {@code RevisionRepository} obligaría a cambiar la fábrica de repositorios de todo el paquete —
- * incluidos {@code InventoryBalanceRepository} e {@code InboxMessageRepository}, cuya corrección
+ * incluidos {@code CatenaryAssetRepository} e {@code InboxMessageRepository}, cuya corrección
  * depende de sus consultas nativas — a cambio de poco más que lo que hay aquí.</p>
  */
 @Service

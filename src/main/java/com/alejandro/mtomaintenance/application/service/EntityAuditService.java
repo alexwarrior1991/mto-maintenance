@@ -11,10 +11,10 @@ import java.util.function.Function;
  * Lee el historial de cambios que guarda Hibernate Envers.
  *
  * <p>Es uno solo y genérico, parametrizado por clase de entidad y función de conversión, en lugar de
- * un servicio por entidad: lo que cambia entre un material y una reserva es el Response que se
+ * un servicio por entidad: lo que cambia entre una orden y un turno es el Response que se
  * devuelve, no cómo se consulta el historial.</p>
  *
- * <p>Solo responde por las siete entidades auditadas. Ver {@code docs/07-auditing.md} para qué queda
+ * <p>Solo responde por las entidades auditadas. Ver {@code docs/07-auditing.md} para qué queda
  * fuera y por qué.</p>
  */
 public interface EntityAuditService {
