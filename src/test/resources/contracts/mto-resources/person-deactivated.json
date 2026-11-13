@@ -1,0 +1,42 @@
+{
+  "operationId": "b0000000-0000-4000-8000-000000000003",
+  "referenceId": "person-c0000000-0000-4000-8000-000000000012",
+  "origin": "mto-resources",
+  "creationDate": "2026-10-16T09:00:00Z",
+  "eventType": "RESOURCES_PERSON_DEACTIVATED",
+  "data": {
+    "entityName": "person",
+    "entityId": "c0000000-0000-4000-8000-000000000012",
+    "eventName": "deactivated",
+    "values": {
+      "code": "PER-000012",
+      "firstName": "Avi",
+      "lastName": "Levi",
+      "fullName": "Avi Levi",
+      "username": null,
+      "employeeNumber": null,
+      "category": "WORKER",
+      "employer": "OWN",
+      "company": null,
+      "active": false,
+      "version": 2,
+      "republished": false,
+      "qualifications": [
+        {
+          "code": "LIC-B",
+          "kind": "DRIVING_LICENCE",
+          "drivingLicence": "B",
+          "expiresOn": null
+        }
+      ],
+      "unavailable": []
+    }
+  },
+  "messageHash": "bf8da1532a49f3e79f318341f623e917104b44b187d42f80345b5ff9622c765a",
+  "actor": {
+    "id": "6f1b1c8e-0000-4000-8000-000000000051",
+    "username": "recursos.gestor",
+    "kind": "PERSON"
+  },
+  "correlationId": "8c3b8c1a-1111-4222-8333-555555555555"
+}

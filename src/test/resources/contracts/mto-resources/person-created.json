@@ -1,0 +1,35 @@
+{
+  "operationId": "b0000000-0000-4000-8000-000000000001",
+  "referenceId": "person-c0000000-0000-4000-8000-000000000003",
+  "origin": "mto-resources",
+  "creationDate": "2026-10-16T09:00:00Z",
+  "eventType": "RESOURCES_PERSON_CREATED",
+  "data": {
+    "entityName": "person",
+    "entityId": "c0000000-0000-4000-8000-000000000003",
+    "eventName": "created",
+    "values": {
+      "code": "PER-000003",
+      "firstName": "Yossi",
+      "lastName": "Cohen",
+      "fullName": "Yossi Cohen",
+      "username": "equipo.jefe",
+      "employeeNumber": "E-1042",
+      "category": "TEAM_LEADER",
+      "employer": "OWN",
+      "company": null,
+      "active": true,
+      "version": 0,
+      "republished": false,
+      "qualifications": [],
+      "unavailable": []
+    }
+  },
+  "messageHash": "a46bb0380c3119dbe60ecbd591f998d76b76ecf54ea78eb4c26aae4b9cb3b36e",
+  "actor": {
+    "id": "6f1b1c8e-0000-4000-8000-000000000051",
+    "username": "recursos.gestor",
+    "kind": "PERSON"
+  },
+  "correlationId": "8c3b8c1a-1111-4222-8333-555555555555"
+}
