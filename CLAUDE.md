@@ -285,6 +285,14 @@ expiry warnings (`qualification.*`, `vehicle-document.*`, `calibration.*`) are n
 shift reads the dates from the snapshot. This queue must
 exist before `mto-resources` publishes (`mandatory=true` there): deploy this service first.
 
+The examples both producers version are copied here, as `mto-notification` and `mto-resources` copy
+theirs: `src/test/resources/contracts/mto-configuration/` (the four entities with a handler) and
+`contracts/mto-resources/` (`person`, `team`, `vehicle` and `instrument`, their three events), from each
+producer's `docs/messaging/examples/`. `MessagingLayerTest` reads every copied file with the channel's
+converter and the real consumer, and `MasterDataAssetSyncDataJpaTest` takes them through the consumer,
+the inbox and their handler to the row and asserts what this service reads: a change of those examples
+is copied here in the same change.
+
 Producer of its own events for `mto-notification` (`mto.maintenance.exchange`, routing key
 `mto.maintenance.<entity>.<event>`, no queue here). **`DomainEventPublisher.publish` is the only
 door, and it is called inside the business transaction**: the event goes to `outbox_message`
@@ -439,7 +447,8 @@ A background operation keeps its request's source, URI and correlation in its re
   handlers against PostgreSQL (adoption, the watermark, a team of construction, the `jsonb`
   qualifications and documents, the instruments, the `unavailable` periods and capabilities, the
   packages of a person's teams) of `MasterDataAssetSyncDataJpaTest`; the resources
-  topology of `MessagingLayerTest`; the shift report's appendices in the real .xlsx and .pdf of
+  topology of `MessagingLayerTest`; the producers' examples copied in `src/test/resources/contracts/`,
+  read by the channel in `MessagingLayerTest` and taken to the row in `MasterDataAssetSyncDataJpaTest`; the shift report's appendices in the real .xlsx and .pdf of
   `ReportExportLayerTest`;
 the 202 of `Prefer: respond-async` of `MaintenanceOrderControllerMockMvcTest`. The inspection templates: the
 rules of a new version and of its `PATCH` in `BusinessLayerTest`; against PostgreSQL, a version replacing the

@@ -1,13 +1,22 @@
 # 06 · Messaging
 
 `mto-maintenance` **consumes** the master-data change events that `mto-configuration` publishes and
-the people, teams and vehicles that `mto-resources` publishes, and **publishes** its own events (an
+the people, teams, vehicles and instruments that `mto-resources` publishes, and **publishes** its own events (an
 order created, a defect that changes state, a shift started, closed or cancelled, a material the
 warehouse rejects, the preventives about to fall due) for `mto-notification` and, the shifts, for
 `mto-resources`. The channels are separate: the master-data contract is owned by `mto-configuration`
 (see its `README_MESSAGING.md`) and mirrored here in `application/dto/messaging`; the resources
 contract is owned by `mto-resources` (its `docs/06-messaging.md`); the own-events contract is owned
 by this repository and documented in [Published events](#published-events).
+
+The examples each producer versions in its `docs/messaging/examples/` are copied in
+`src/test/resources/contracts/<producer>/`, only those of the events handled here:
+`mto-configuration/` (`profile`, `disconnector`, `section-insulator`, `track`) and `mto-resources/`
+(`person`, `team`, `vehicle`, `instrument`: created, updated, deactivated). `MessagingLayerTest` reads
+each file with the channel's converter and passes it to the real consumer, and
+`MasterDataAssetSyncDataJpaTest` takes them through the consumer, the inbox and the handler to the row
+and asserts the keys this service reads. When a producer changes its contract, its examples are copied
+here again in the same change, and a key this service reads that moved shows up as a failing test.
 
 ## Consumed: master data from `mto-configuration`
 

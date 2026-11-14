@@ -39,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Lo que se fija aquí es que cada verbo pida su permiso y, sobre todo, que los permisos no se
- * impliquen entre sí: poder escribir no debe bastar para borrar ni para ajustar el inventario.
+ * impliquen entre sí: poder escribir no debe bastar para borrar ni para lo que decide quien supervisa.
  * <p>
  * Se prueba contra controladores sonda montados en rutas con la misma forma que las reales, no
  * contra los controladores de negocio: lo que se verifica son los patrones de la cadena de filtros,
@@ -183,9 +183,8 @@ class ApiAuthorizationRulesTest {
         }
 
         /**
-         * El ajuste es la única escritura que corrige el saldo sin documento con el que
-         * contrastarlo. Sin este permiso aparte, quien pudiera registrar una salida podría además
-         * hacerla desaparecer del saldo.
+         * Cancelar una orden (la ruta sonda) es de quien supervisa. Sin este permiso aparte, quien
+         * pudiera crear una orden podría además cancelarla, o completarla con {@code force}.
          */
         @Test
         void writingDoesNotGrantAdjusting() throws Exception {
@@ -204,8 +203,8 @@ class ApiAuthorizationRulesTest {
         }
 
         /**
-         * El ajuste necesita las dos mitades: la ruta le da el permiso de escribir y la anotación el
-         * de descuadrar.
+         * Lo supervisado necesita las dos mitades: la ruta le da el permiso de escribir y la
+         * anotación el de supervisar.
          */
         @Test
         void adjustingNeedsBothTheWriteAndTheAdjustRole() throws Exception {

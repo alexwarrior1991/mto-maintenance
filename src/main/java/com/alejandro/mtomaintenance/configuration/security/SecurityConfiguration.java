@@ -102,10 +102,12 @@ public class SecurityConfiguration {
                     // HEAD lo sirve el mismo handler que GET y revela si un recurso existe, así que
                     // no puede quedarse en el 'anyRequest().authenticated()' del final.
                     authorize.requestMatchers(HttpMethod.HEAD, API + "/**").hasRole(SecurityRoles.MAINTENANCE_READ);
-                    // Las entradas, salidas, transferencias, reservas y su liberación o consumo son
-                    // escritura ordinaria. El ajuste de inventario también entra por aquí, pero
+                    // Las órdenes, los turnos, las inspecciones, los defectos y sus transiciones son
+                    // escritura ordinaria. Lo que decide quien supervisa (cancelar una orden o
+                    // completarla con force, resolver, cerrar o descartar un defecto, el equipo de un
+                    // tipo de tarea, las plantillas de inspección) también entra por aquí, pero
                     // además pide MAINTENANCE_SUPERVISE mediante @PreAuthorize en el controlador: la ruta le
-                    // da el permiso de escribir y la anotación el de descuadrar.
+                    // da el permiso de escribir y la anotación el de supervisar.
                     authorize.requestMatchers(HttpMethod.POST, API + "/**").hasRole(SecurityRoles.MAINTENANCE_WRITE);
                     authorize.requestMatchers(HttpMethod.PUT, API + "/**").hasRole(SecurityRoles.MAINTENANCE_WRITE);
                     authorize.requestMatchers(HttpMethod.PATCH, API + "/**").hasRole(SecurityRoles.MAINTENANCE_WRITE);

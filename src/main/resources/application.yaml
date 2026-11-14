@@ -252,7 +252,7 @@ app:
   # contra un exchange que nadie usa se declara igual de bien y deja de llegar todo sin ningun
   # error visible. La cola y su DLQ si son de este servicio, que es quien las consume.
   #
-  # De las ocho entidades publicadas, cuatro tienen logica detras (profile, disconnector,
+  # De las nueve entidades publicadas, cuatro tienen logica detras (profile, disconnector,
   # section-insulator y track); el resto se registra y se ignora. Ver MasterDataEntityHandler.
   rabbitmq:
     # Apaga la declaracion de la topologia Y el consumidor. Con esto en false nadie abre una

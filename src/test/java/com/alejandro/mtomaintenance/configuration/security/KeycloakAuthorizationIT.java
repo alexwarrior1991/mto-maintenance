@@ -167,8 +167,8 @@ class KeycloakAuthorizationIT {
      * realm homónimo ha concedido el permiso.
      *
      * <p>No debe concederlo: quien administra el realm no es necesariamente quien escribe el código,
-     * y si lo concediera bastaría con crear allí un rol con el nombre adecuado para poder ajustar el
-     * inventario. Es lo que sostiene que los roles de realm se emitan solo como
+     * y si lo concediera bastaría con crear allí un rol con el nombre adecuado para poder hacer lo
+     * que solo hace quien supervisa. Es lo que sostiene que los roles de realm se emitan solo como
      * {@code ROLE_REALM_*}.</p>
      */
     @Test

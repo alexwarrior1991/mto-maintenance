@@ -21,6 +21,8 @@ import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterData
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataRabbitMqNames;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.RabbitListenerContainerFactoryNames;
 import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.ResourcesRabbitMqNames;
+import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.ResourcesEventConsumer;
+import com.alejandro.mtomaintenance.application.dto.messaging.IncomingEventMessage;
 import com.alejandro.mtomaintenance.application.dto.messaging.AsynchronousMessage;
 import com.alejandro.mtomaintenance.application.dto.messaging.DomainEvent;
 import com.alejandro.mtomaintenance.application.dto.messaging.MessageActor;
@@ -951,6 +953,82 @@ class MessagingLayerTest {
     }
 
     // ---------------------------------------------------------------------------------------
+
+    // ---------------------------------------------------------------------------------------
+    // Los ejemplos de los emisores, copiados en src/test/resources/contracts/<emisor>/
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Cada ejemplo copiado de {@code mto-configuration} se lee con el convertidor del canal y el
+     * consumidor real lo acepta: trae el sobre, la entidad, la operacion y sus valores. Estan los de
+     * las cuatro entidades con manejador y ninguno mas; lo que cada manejador guarda de ellos lo
+     * comprueba {@code MasterDataAssetSyncDataJpaTest}.
+     */
+    @Test
+    void everyCopiedExampleOfMtoConfigurationIsReadByTheChannelAndAcceptedByTheConsumer() throws Exception {
+        List<String> entities = new ArrayList<>();
+        for (java.nio.file.Path example : copiedExamples("mto-configuration")) {
+            byte[] body = java.nio.file.Files.readAllBytes(example);
+            MasterDataChangedMessage message = convert(new String(body, StandardCharsets.UTF_8));
+            RecordingProcessor processor = new RecordingProcessor(InboxProcessingResult.PROCESSED);
+
+            new MasterDataEventConsumer(processor, NO_SIGNATURE_CHECK).onMasterDataChanged(message, rawMessage(new String(body, StandardCharsets.UTF_8)));
+
+            assertEquals("mto-configuration", message.origin(), example.toString());
+            assertNotNull(message.operationId(), example.toString());
+            assertEquals(MasterDataOperation.UPDATED, message.data().operation(), example.toString());
+            assertEquals(message.data().entityId(), String.valueOf(message.data().values().get("id")), example.toString());
+            assertEquals(message.operationId().toString(), processor.commands.getFirst().messageId(), example.toString());
+            assertEquals("mto-configuration", processor.commands.getFirst().sourceService(), example.toString());
+            entities.add(message.data().entityName());
+        }
+        assertEquals(List.of("disconnector", "profile", "section-insulator", "track"), entities.stream().sorted().toList(),
+                "One example per entity with a handler here");
+    }
+
+    /**
+     * Cada ejemplo copiado de {@code mto-resources} se lee como {@code IncomingEventMessage} y el
+     * consumidor real lo acepta: viene de {@code mto-resources}, con su entidad y su evento. Estan los
+     * tres eventos de las cuatro entidades a las que esta atada la cola.
+     */
+    @Test
+    void everyCopiedExampleOfMtoResourcesIsReadByTheChannelAndAcceptedByTheConsumer() throws Exception {
+        List<String> events = new ArrayList<>();
+        for (java.nio.file.Path example : copiedExamples("mto-resources")) {
+            Message raw = rawMessage(java.nio.file.Files.readString(example));
+            raw.getMessageProperties().setContentType(MessageProperties.CONTENT_TYPE_JSON);
+            raw.getMessageProperties().setContentEncoding(StandardCharsets.UTF_8.name());
+            raw.getMessageProperties().setInferredArgumentType(IncomingEventMessage.class);
+            IncomingEventMessage message = (IncomingEventMessage) new RabbitMqConfiguration(
+                    new MasterDataRabbitProperties(null, null, null, null, null, null), new MaintenanceEventsProperties(null),
+                    new ResourcesRabbitProperties(null, null, null, null, null, null), new ConsumerQueueProperties(null, null))
+                    .masterDataMessageConverter(JsonMapper.builder().build()).fromMessage(raw);
+            List<InboxMessageCommand> commands = new ArrayList<>();
+
+            new ResourcesEventConsumer((command, received) -> {
+                commands.add(command);
+                return InboxProcessingResult.PROCESSED;
+            }, NO_SIGNATURE_CHECK).onResourcesEvent(message, raw);
+
+            assertEquals(message.operationId().toString(), commands.getFirst().messageId(), example.toString());
+            assertEquals(ResourcesRabbitMqNames.RESOURCES_SOURCE_SERVICE, commands.getFirst().sourceService(), example.toString());
+            assertFalse(message.data().values().isEmpty(), example.toString());
+            assertNotNull(UUID.fromString(message.data().entityId()), example.toString());
+            assertEquals(example.getFileName().toString(), message.data().entityName() + "-" + message.data().eventName() + ".json");
+            events.add(message.data().entityName() + "." + message.data().eventName());
+        }
+        assertEquals(List.of("instrument.created", "instrument.deactivated", "instrument.updated", "person.created", "person.deactivated",
+                "person.updated", "team.created", "team.deactivated", "team.updated", "vehicle.created", "vehicle.deactivated",
+                "vehicle.updated"), events.stream().sorted().toList(), "The three events of the four entities the queue is bound to");
+    }
+
+    private static List<java.nio.file.Path> copiedExamples(String producer) throws Exception {
+        java.nio.file.Path directory = java.nio.file.Path.of(MessagingLayerTest.class.getResource("/contracts/" + producer).toURI());
+        try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.list(directory)) {
+            return files.filter(file -> file.getFileName().toString().endsWith(".json")).sorted().toList();
+        }
+    }
+
 
     /**
      * Deserializa con el mismo convertidor que usa el contenedor. El emisor publica bytes ya

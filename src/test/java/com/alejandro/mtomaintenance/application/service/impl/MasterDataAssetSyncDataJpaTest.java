@@ -33,6 +33,27 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CrewPe
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.FleetVehicleRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceInstrumentRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTeamRepository;
+import com.alejandro.mtomaintenance.application.dto.messaging.IncomingEventMessage;
+import com.alejandro.mtomaintenance.configuration.messaging.MessagePayloadSignatureVerifier;
+import com.alejandro.mtomaintenance.configuration.messaging.MessageSignatureMode;
+import com.alejandro.mtomaintenance.configuration.messaging.MessageSignatureProperties;
+import com.alejandro.mtomaintenance.configuration.rabbitmq.ConsumerQueueProperties;
+import com.alejandro.mtomaintenance.configuration.rabbitmq.MaintenanceEventsProperties;
+import com.alejandro.mtomaintenance.configuration.rabbitmq.MasterDataRabbitProperties;
+import com.alejandro.mtomaintenance.configuration.rabbitmq.RabbitMqConfiguration;
+import com.alejandro.mtomaintenance.configuration.rabbitmq.ResourcesRabbitProperties;
+import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataEventConsumer;
+import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.MasterDataMessageHeaders;
+import com.alejandro.mtomaintenance.infrastructure.messaging.rabbitmq.ResourcesEventConsumer;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageBuilder;
+import org.springframework.amqp.core.MessageProperties;
+import tools.jackson.databind.json.JsonMapper;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 import com.alejandro.mtomaintenance.support.PostgreSQLTestContainer;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
@@ -1522,5 +1543,253 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
             transaction.executeWithoutResult(status -> entityManager.createNativeQuery(
                     "delete from inspection_template where asset_type = 'TRACK_SECTION'").executeUpdate());
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Los ejemplos que versionan los emisores, copiados en src/test/resources/contracts/<emisor>/
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Los ejemplos de {@code mto-configuration} (su {@code docs/messaging/examples/}, copiados tal cual
+     * en {@code contracts/mto-configuration/}) de las cuatro entidades que aqui tienen manejador pasan
+     * por el camino real: el convertidor del canal, {@code MasterDataEventConsumer}, el inbox y su
+     * manejador, hasta la fila. Si el emisor renombra o quita una clave que este servicio lee, el
+     * ejemplo que se vuelve a copiar deja de dar estos valores y el cambio de contrato se ve aqui.
+     */
+    @Test
+    void theMasterDataExamplesOfMtoConfigurationGoThroughTheRealConsumerAndLeaveWhatThisServiceReads() {
+        deliverMasterData("master-data-profile-updated", "mto.master-data.profile.updated", 100L);
+        deliverMasterData("master-data-disconnector-updated", "mto.master-data.disconnector.updated", 101L);
+        deliverMasterData("master-data-section-insulator-updated", "mto.master-data.section-insulator.updated", 102L);
+        entityManager.flush();
+        entityManager.clear();
+
+        CatenaryAsset profile = asset(CatenaryAssetType.PROFILE, "6802");
+        assertEquals("PRF-6802", profile.getCode());
+        assertEquals("68-2.05", profile.getName(), "profileId");
+        assertEquals(52L, profile.getTrackId(), "track.id");
+        assertEquals(5L, profile.getExecutionPackageId(), "track.executionPackageId");
+        assertEquals(0, new BigDecimal("68205.000").compareTo(profile.getStartKp()), "kp");
+        assertEquals(0, new BigDecimal("68205.000").compareTo(profile.getEndKp()));
+        assertEquals("NS", profile.getSectioning(), "sectionings[].code");
+        assertTrue(profile.getEnabled());
+        assertEquals(100L, profile.getSourceSequenceNumber());
+
+        CatenaryAsset disconnector = asset(CatenaryAssetType.DISCONNECTOR, "701");
+        assertEquals("DSC-701", disconnector.getCode());
+        assertEquals("NAT-NS3", disconnector.getName(), "name");
+        assertEquals(51L, disconnector.getStationId(), "station.id");
+        assertEquals("6802", disconnector.getProfileSourceId(), "profile.id");
+        assertEquals(0, new BigDecimal("68205.000").compareTo(disconnector.getStartKp()), "profile.kp");
+        assertEquals(53L, disconnector.getConnectedTrackId(), "connectedTrack.id");
+        assertEquals(DisconnectorDriveType.MOTOR, disconnector.getDriveType(), "driveType");
+        assertEquals("Disc/IO", disconnector.getDisconnectorFunction(), "disconnectorFunction.code");
+        assertEquals(52L, disconnector.getTrackId(), "track is null in the event: the one of its profile");
+        assertFalse(disconnector.isOwnTrack());
+        assertEquals(5L, disconnector.getExecutionPackageId(), "The package of its profile");
+        assertTrue(disconnector.getEnabled());
+
+        CatenaryAsset insulator = asset(CatenaryAssetType.SECTION_INSULATOR, "8101");
+        assertEquals("SIN-8101", insulator.getCode());
+        assertEquals("SI W31-W41", insulator.getName(), "name");
+        assertEquals(SectionInsulatorInstallation.TRACK_CONNECTION, insulator.getInstallationType(), "installationType");
+        assertEquals(51L, insulator.getStationId(), "station.id");
+        assertEquals(52L, insulator.getTrackId(), "track.id");
+        assertEquals(53L, insulator.getConnectedTrackId(), "connectedTrack.id");
+        assertEquals(0, new BigDecimal("68150.000").compareTo(insulator.getStartKp()), "The lowest kp of its own and its switches");
+        assertEquals(0, new BigDecimal("68210.000").compareTo(insulator.getEndKp()), "The highest kp of its own and its switches");
+        assertEquals(5L, insulator.getExecutionPackageId(), "The package of the profiles of its track");
+        assertTrue(insulator.getEnabled(), "enabled");
+        List<CatenaryAssetSwitch> switches = switchRepository.findByAssetIdOrderByKpAscCodeAsc(insulator.getId());
+        assertEquals(List.of("W31", "W41"), switches.stream().map(CatenaryAssetSwitch::getCode).toList(), "switches[].code");
+        assertEquals(List.of("1:9", "1:12"), switches.stream().map(CatenaryAssetSwitch::turnoutRate).toList(), "switches[].turnoutDenominator");
+        assertEquals(List.of(52L, 53L), switches.stream().map(CatenaryAssetSwitch::getTrackId).toList(), "switches[].trackId");
+        assertEquals(List.of(true, true), switches.stream().map(CatenaryAssetSwitch::getEnabled).toList(), "switches[].enabled");
+
+        // De una via solo se lee su borrado: su UPDATED se apunta en el inbox y no toca ningun activo.
+        deliverMasterData("master-data-track-updated", "mto.master-data.track.updated", 103L);
+        entityManager.flush();
+        entityManager.clear();
+        assertTrue(asset(CatenaryAssetType.PROFILE, "6802").getEnabled());
+        assertEquals(100L, asset(CatenaryAssetType.PROFILE, "6802").getSourceSequenceNumber());
+        assertTrue(asset(CatenaryAssetType.SECTION_INSULATOR, "8101").getEnabled());
+
+        for (String operationId : List.of("9e1f2a3b-4c5d-4e6f-8a7b-0c1d2e3f4a5b", "1b2c3d4e-0005-4000-8000-000000000701",
+                "1b2c3d4e-0006-4000-8000-000000008101", "1b2c3d4e-0003-4000-8000-000000000052")) {
+            assertEquals(InboxMessageStatus.PROCESSED,
+                    inboxMessageRepository.findByMessageIdAndSourceService(operationId, SOURCE_SERVICE).orElseThrow().getStatus());
+        }
+    }
+
+    /**
+     * Los ejemplos de {@code mto-resources} (su {@code docs/messaging/examples/}, copiados tal cual en
+     * {@code contracts/mto-resources/}) de las cuatro entidades a las que esta atada la cola pasan por
+     * el camino real: el convertidor del canal, {@code ResourcesEventConsumer}, el inbox, el
+     * despachador y su manejador, hasta la fila. El equipo del ejemplo es el {@code A}, que aqui esta
+     * sembrado como local: el evento lo adopta.
+     */
+    @Test
+    void theExamplesOfMtoResourcesGoThroughTheRealConsumerAndLeaveWhatThisServiceReads() {
+        UUID localTeamA = teamRepository.findByCode("A").orElseThrow().getId();
+        UUID leaderId = UUID.fromString("c0000000-0000-4000-8000-000000000003");
+        UUID linemanId = UUID.fromString("c0000000-0000-4000-8000-000000000012");
+        UUID vehicleId = UUID.fromString("f0000000-0000-4000-8000-000000000007");
+        UUID instrumentId = UUID.fromString("a3000000-0000-4000-8000-000000000012");
+
+        deliverResources("person-created", "mto.resources.person.created", 1L);
+        deliverResources("person-updated", "mto.resources.person.updated", 2L);
+        deliverResources("team-created", "mto.resources.team.created", 3L);
+        deliverResources("team-updated", "mto.resources.team.updated", 4L);
+        deliverResources("vehicle-created", "mto.resources.vehicle.created", 5L);
+        deliverResources("vehicle-updated", "mto.resources.vehicle.updated", 6L);
+        deliverResources("instrument-created", "mto.resources.instrument.created", 7L);
+        deliverResources("instrument-updated", "mto.resources.instrument.updated", 8L);
+        entityManager.flush();
+        entityManager.clear();
+
+        CrewPerson person = personRepository.findById(leaderId).orElseThrow();
+        assertEquals("PER-000003", person.getCode(), "code");
+        assertEquals("Yossi Cohen", person.getFullName(), "fullName");
+        assertEquals("equipo.jefe", person.getUsername(), "username");
+        assertEquals("SUPERVISOR", person.getCategory(), "category");
+        assertTrue(person.getActive(), "active");
+        assertEquals(List.of(new CrewPerson.Qualification("LIC-C", "DRIVING_LICENCE", "C", LocalDate.of(2031, 6, 14)),
+                new CrewPerson.Qualification("RAIL-DRIVER", "VEHICLE_OPERATION", null, LocalDate.of(2027, 3, 31))),
+                person.getQualifications(), "qualifications[]");
+        assertEquals(List.of(new UnavailablePeriod(LocalDate.of(2026, 11, 2), LocalDate.of(2026, 11, 13))), person.getUnavailable(), "unavailable[]");
+        assertEquals(2L, person.getSourceSequenceNumber());
+
+        MaintenanceTeam team = teamRepository.findByCode("A").orElseThrow();
+        assertEquals(localTeamA, team.getId(), "The local team A is adopted, not duplicated");
+        assertTrue(team.isSynchronized());
+        assertEquals(UUID.fromString("d0000000-0000-4000-8000-000000000003"), team.getSourceEntityId());
+        assertEquals("Team A", team.getName(), "name");
+        assertTrue(team.getActive(), "active");
+        assertEquals("RR-07", team.getVehicle(), "defaultVehicle.code");
+        assertEquals(vehicleId, team.getDefaultVehicleId(), "defaultVehicle.id");
+        assertEquals(leaderId, team.getLeader().getId(), "leader.personId");
+        assertEquals(UUID.fromString("c0000000-0000-4000-8000-000000000002"), team.getSupervisor().getId(), "supervisor.personId");
+        assertEquals("c0000000-0000-4000-8000-000000000001", String.valueOf(entityManager.createNativeQuery(
+                "select chief_supervisor_person_id from maintenance_team where id = :id").setParameter("id", localTeamA).getSingleResult()),
+                "chiefSupervisor.personId");
+        assertEquals(java.util.Set.of("PER-000010", "PER-000011", "PER-000012", "PER-000013"),
+                team.getMembers().stream().map(CrewPerson::getCode).collect(java.util.stream.Collectors.toSet()), "members[]");
+        assertEquals(java.util.Set.of(4L, 5L, 6L), team.getExecutionPackageIds(), "executionPackageIds");
+        assertEquals(4L, team.getSourceSequenceNumber());
+        CrewPerson supervisor = personRepository.findById(UUID.fromString("c0000000-0000-4000-8000-000000000002")).orElseThrow();
+        assertEquals("Dana Mizrahi", supervisor.getFullName(), "A person that arrives inside the team is inserted as it travels there");
+        assertEquals("equipo.supervisor", supervisor.getUsername());
+        assertEquals("SUPERVISOR", supervisor.getCategory());
+
+        FleetVehicle vehicle = vehicleRepository.findById(vehicleId).orElseThrow();
+        assertEquals("RR-07", vehicle.getCode(), "code");
+        assertEquals("Unimog 7", vehicle.getName(), "name");
+        assertEquals("UNIMOG-RR", vehicle.getTypeCode(), "type.code");
+        assertEquals("Unimog road-rail", vehicle.getTypeName(), "type.name");
+        assertEquals("ROAD_RAIL", vehicle.getMobility(), "type.mobility");
+        assertEquals("ROAD_RAIL_TRUCK", vehicle.getCategory(), "type.category");
+        assertTrue(vehicle.getSelfPropelled(), "type.selfPropelled");
+        assertFalse(vehicle.getPortable(), "type.portable");
+        assertTrue(vehicle.getTowing(), "type.capabilities contains TOWING");
+        assertEquals(7, vehicle.getSeats(), "type.seats");
+        assertEquals("RR-OPERATOR", vehicle.getRequiredDriverQualification(), "type.requiredDriverQualification");
+        assertEquals(List.of("CRANE", "CREW_CABIN", "TOWING"), vehicle.getCapabilities(), "type.capabilities");
+        assertEquals("UNDER_REPAIR", vehicle.getOperationalStatus(), "operationalStatus");
+        assertFalse(vehicle.getAvailable(), "available");
+        assertTrue(vehicle.getActive(), "active");
+        assertEquals(List.of(new FleetVehicle.Document("INSURANCE", "POL-55120", LocalDate.of(2026, 12, 31)),
+                new FleetVehicle.Document("ROAD_INSPECTION", "ITV-2026-118", LocalDate.of(2027, 2, 28))), vehicle.getDocuments(), "documents[]");
+        assertEquals(List.of(new UnavailablePeriod(LocalDate.of(2026, 10, 16), null),
+                new UnavailablePeriod(LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 3))), vehicle.getUnavailable(), "unavailable[]");
+
+        MaintenanceInstrument instrument = instrumentRepository.findById(instrumentId).orElseThrow();
+        assertEquals("PT-012", instrument.getCode(), "code");
+        assertEquals("Earthing pole 25 kV", instrument.getName(), "name");
+        assertEquals("EARTHING_POLE", instrument.getKind(), "kind");
+        assertEquals("EP25-88412", instrument.getSerialNumber(), "serialNumber");
+        assertEquals(LocalDate.of(2028, 3, 24), instrument.getCalibrationExpiresOn(), "calibrationExpiresOn");
+        assertTrue(instrument.getActive(), "active");
+
+        // Las bajas: el mismo upsert con active a false.
+        deliverResources("person-deactivated", "mto.resources.person.deactivated", 9L);
+        deliverResources("team-deactivated", "mto.resources.team.deactivated", 10L);
+        deliverResources("vehicle-deactivated", "mto.resources.vehicle.deactivated", 11L);
+        deliverResources("instrument-deactivated", "mto.resources.instrument.deactivated", 12L);
+        entityManager.flush();
+        entityManager.clear();
+
+        CrewPerson lineman = personRepository.findById(linemanId).orElseThrow();
+        assertEquals("Avi Levi", lineman.getFullName());
+        assertFalse(lineman.getActive(), "active");
+        assertEquals(List.of(new CrewPerson.Qualification("LIC-B", "DRIVING_LICENCE", "B", null)), lineman.getQualifications());
+        MaintenanceTeam retired = teamRepository.findByCode("A").orElseThrow();
+        assertFalse(retired.getActive(), "active");
+        assertTrue(retired.getMembers().isEmpty(), "A deactivated team releases its linemen");
+        FleetVehicle retiredVehicle = vehicleRepository.findById(vehicleId).orElseThrow();
+        assertFalse(retiredVehicle.getActive(), "active");
+        assertFalse(retiredVehicle.getAvailable(), "available");
+        assertEquals("OPERATIONAL", retiredVehicle.getOperationalStatus());
+        MaintenanceInstrument retiredInstrument = instrumentRepository.findById(instrumentId).orElseThrow();
+        assertFalse(retiredInstrument.getActive(), "active");
+        assertEquals(LocalDate.of(2027, 3, 31), retiredInstrument.getCalibrationExpiresOn());
+
+        for (int number = 1; number <= 12; number++) {
+            String operationId = "b0000000-0000-4000-8000-0000000000" + String.format("%02d", number);
+            assertEquals(InboxMessageStatus.PROCESSED,
+                    inboxMessageRepository.findByMessageIdAndSourceService(operationId, "mto-resources").orElseThrow().getStatus());
+        }
+    }
+
+    /** Un ejemplo de {@code mto-configuration}, de sus bytes a la fila, por el consumidor real. */
+    private void deliverMasterData(String example, String routingKey, long sequenceNumber) {
+        Message raw = contract("mto-configuration", example, "mto.master-data.exchange", routingKey,
+                "mto.maintenance.master-data.queue", sequenceNumber);
+        MasterDataChangedMessage message = (MasterDataChangedMessage) convert(raw, MasterDataChangedMessage.class);
+        new MasterDataEventConsumer(
+                new IdempotentMasterDataEventProcessor(new InboxMessageServiceImpl(inboxMessageRepository), dispatcher()),
+                NO_SIGNATURE_CHECK).onMasterDataChanged(message, raw);
+    }
+
+    /** Un ejemplo de {@code mto-resources}, de sus bytes a la fila, por el consumidor real. */
+    private void deliverResources(String example, String routingKey, long sequenceNumber) {
+        Message raw = contract("mto-resources", example, "mto.resources.exchange", routingKey,
+                "mto.maintenance.resources.queue", sequenceNumber);
+        IncomingEventMessage message = (IncomingEventMessage) convert(raw, IncomingEventMessage.class);
+        DispatchingIncomingEventHandler dispatcher = new DispatchingIncomingEventHandler(List.of(
+                new ResourcesPersonHandler(personRepository), new ResourcesTeamHandler(teamRepository, personRepository),
+                new ResourcesVehicleHandler(vehicleRepository), new ResourcesInstrumentHandler(instrumentRepository)));
+        new ResourcesEventConsumer(
+                new IdempotentIncomingEventProcessor(new InboxMessageServiceImpl(inboxMessageRepository), dispatcher),
+                NO_SIGNATURE_CHECK).onResourcesEvent(message, raw);
+    }
+
+    private static final MessagePayloadSignatureVerifier NO_SIGNATURE_CHECK =
+            new MessagePayloadSignatureVerifier(new MessageSignatureProperties(null, MessageSignatureMode.DISABLED));
+
+    /** El fichero copiado tal cual, como lo dejaria el broker: sus bytes y las cabeceras del outbox del emisor. */
+    private static Message contract(String producer, String example, String exchange, String routingKey, String queue, long sequenceNumber) {
+        byte[] body;
+        try (InputStream json = MasterDataAssetSyncDataJpaTest.class.getResourceAsStream("/contracts/" + producer + "/" + example + ".json")) {
+            body = Objects.requireNonNull(json, "contracts/" + producer + "/" + example + ".json").readAllBytes();
+        } catch (IOException failure) {
+            throw new UncheckedIOException(failure);
+        }
+        MessageProperties properties = new MessageProperties();
+        properties.setContentType(MessageProperties.CONTENT_TYPE_JSON);
+        properties.setContentEncoding(StandardCharsets.UTF_8.name());
+        properties.setReceivedExchange(exchange);
+        properties.setReceivedRoutingKey(routingKey);
+        properties.setConsumerQueue(queue);
+        properties.setHeader(MasterDataMessageHeaders.SEQUENCE_NUMBER, sequenceNumber);
+        return MessageBuilder.withBody(body).andProperties(properties).build();
+    }
+
+    /** Con el convertidor del canal y el tipo del metodo anotado, que es lo que hace el contenedor. */
+    private static Object convert(Message raw, Class<?> envelope) {
+        raw.getMessageProperties().setInferredArgumentType(envelope);
+        return new RabbitMqConfiguration(
+                new MasterDataRabbitProperties(null, null, null, null, null, null), new MaintenanceEventsProperties(null),
+                new ResourcesRabbitProperties(null, null, null, null, null, null), new ConsumerQueueProperties(null, null))
+                .masterDataMessageConverter(JsonMapper.builder().build()).fromMessage(raw);
     }
 }
