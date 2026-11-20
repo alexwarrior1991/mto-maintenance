@@ -460,6 +460,8 @@ rules of a new version and of its `PATCH` in `BusinessLayerTest`; against Postgr
 active one with an inspection that keeps its items, and eight versions created at once, in
 `MasterDataAssetSyncDataJpaTest` (the DataJpa class that can build the package-private services), and the partial
 index in `PersistenceLayerTest`; the real routes with their two roles in `MaintenanceOrderControllerMockMvcTest`. The
+progress report end to end against PostgreSQL (what counts as worked, with and without a window, by package,
+track and type) and the
 statements an order with many tasks takes (never one per task) are counted in `MasterDataAssetSyncDataJpaTest`,
 the indexes of `V29` are asserted in `PersistenceLayerTest`, and the history of an order with its tasks and
 their types in `EnversAuditDataJpaTest`.

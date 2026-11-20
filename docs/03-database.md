@@ -485,9 +485,14 @@ of two lists:
 | `idx_catenary_defect_resolved_at` on `catenary_defect (resolved_at) WHERE resolved_at IS NOT NULL` | the defects resolved in a month | 22 ms → 1.3 ms |
 | `idx_maintenance_inspection_date` on `maintenance_inspection (inspection_date)` | the default order of the inspection list (`inspectionDate,desc`); `(result, inspection_date)` of `V1` does not serve it without a result | 53 ms → 1 ms (150,000 rows) |
 
-Not covered by an index, on purpose: the progress report **without a window** still reads every
-completed task and every inspection (`findAssetIdsWorkedBetween`); that needs the query to change, not
-an index.
+The progress report **without a window** needed its queries changed, not an index: it read every
+inspection and every completed task ever recorded to keep those of its assets, and loaded every asset
+as an entity. It now asks, for the assets of the report only, whether each has an inspection or a
+completed task (`exists`, two queries, one per source: `idx_maintenance_inspection_asset` and
+`idx_maintenance_task_asset_status`), and reads the six columns it uses. Same figures; what it costs
+without a window follows the assets asked for, not the years of history (at the volume above: 170 ms
+for any report before; now 8 ms for a track of 1,000 assets, 57 ms for a package of 10,000 and 208 ms
+for all 60,000). With a window PostgreSQL still starts from the dates (29 ms before; 12–37 ms now).
 
 The migration is plain `CREATE INDEX IF NOT EXISTS` inside Flyway's transaction, which blocks writes
 to each table while its index is built: instant on the tables of today. **If it is ever applied to

@@ -904,14 +904,14 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertEquals(0, reportRepository.countDefectsResolvedBetween(from, to, executionPackageId + 2));
         assertEquals(List.of("GA70"), reportRepository.findMaterialsOfOrders(List.of(completed.getId())).stream().map(MaintenanceMaterialUsage::getMaterialCode).toList());
         assertTrue(reportRepository.findMaterialsOfOrders(List.of()).isEmpty());
-        assertEquals(List.of(profile.getId()), reportRepository.findReportableAssets(executionPackageId, null, null).stream().map(CatenaryAsset::getId).toList(),
+        assertEquals(List.of(profile.getId()), reportRepository.findReportableAssets(executionPackageId, null, null).stream().map(MaintenanceReportRepository.ReportableAsset::id).toList(),
                 "Track sections are not reportable assets");
         assertEquals(1, reportRepository.findReportableAssets(executionPackageId, trackId, CatenaryAssetType.PROFILE).size());
         assertTrue(reportRepository.findReportableAssets(executionPackageId, trackId, CatenaryAssetType.DISCONNECTOR).isEmpty());
-        assertTrue(reportRepository.findAssetIdsWorkedBetween(from, to, java.time.ZoneId.of("UTC")).contains(profile.getId()));
-        assertTrue(reportRepository.findAssetIdsWorkedBetween(null, null, java.time.ZoneId.of("UTC")).contains(profile.getId()), "No window: everything ever worked");
-        assertTrue(reportRepository.findAssetIdsWorkedBetween(null, to, java.time.ZoneId.of("UTC")).contains(profile.getId()));
-        assertFalse(reportRepository.findAssetIdsWorkedBetween(to, null, java.time.ZoneId.of("UTC")).contains(profile.getId()));
+        assertTrue(reportRepository.findAssetIdsWorkedBetween(executionPackageId, null, null, from, to, java.time.ZoneId.of("UTC")).contains(profile.getId()));
+        assertTrue(reportRepository.findAssetIdsWorkedBetween(executionPackageId, null, null, null, null, java.time.ZoneId.of("UTC")).contains(profile.getId()), "No window: whatever was ever worked, of the assets of the report");
+        assertTrue(reportRepository.findAssetIdsWorkedBetween(null, trackId, null, null, to, java.time.ZoneId.of("UTC")).contains(profile.getId()));
+        assertFalse(reportRepository.findAssetIdsWorkedBetween(executionPackageId, trackId, CatenaryAssetType.PROFILE, to, null, java.time.ZoneId.of("UTC")).contains(profile.getId()));
     }
 
     @Test
@@ -940,8 +940,8 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
         assertEquals(Set.of(disconnector.getId()), ids(reportRepository.findReportableAssets(executionPackageId, trackId, CatenaryAssetType.DISCONNECTOR)));
     }
 
-    private static Set<UUID> ids(List<CatenaryAsset> assets) {
-        return assets.stream().map(CatenaryAsset::getId).collect(Collectors.toSet());
+    private static Set<UUID> ids(List<MaintenanceReportRepository.ReportableAsset> assets) {
+        return assets.stream().map(MaintenanceReportRepository.ReportableAsset::id).collect(Collectors.toSet());
     }
 
     @Test

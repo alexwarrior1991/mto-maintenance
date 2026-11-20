@@ -4749,8 +4749,8 @@ class BusinessLayerTest {
         CatenaryAsset disconnector = disconnector("HSA-NS5");
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-01-31T23:59:59Z");
-        when(repository.findReportableAssets(6L, null, null)).thenReturn(List.of(first, second, third, disconnector));
-        when(repository.findAssetIdsWorkedBetween(from, to, UTC)).thenReturn(Set.of(first.getId()));
+        when(repository.findReportableAssets(6L, null, null)).thenReturn(java.util.stream.Stream.of(first, second, third, disconnector).map(MaintenanceReportRepository.ReportableAsset::of).toList());
+        when(repository.findAssetIdsWorkedBetween(6L, null, null, from, to, UTC)).thenReturn(Set.of(first.getId()));
 
         ProgressReportResponse report = service.progress(6L, null, null, from, to);
 
@@ -4772,7 +4772,7 @@ class BusinessLayerTest {
 
         // Fuera de la ventana el preventivo antiguo ya no cuenta.
         Instant laterFrom = Instant.parse("2026-02-01T00:00:00Z");
-        when(repository.findAssetIdsWorkedBetween(laterFrom, null, UTC)).thenReturn(Set.of());
+        when(repository.findAssetIdsWorkedBetween(6L, null, null, laterFrom, null, UTC)).thenReturn(Set.of());
         assertEquals(0, service.progress(6L, null, null, laterFrom, null).checkedAssets());
     }
 
@@ -4785,8 +4785,8 @@ class BusinessLayerTest {
         CatenaryAsset insulator = CatenaryAsset.builder().code("SIN-12").name("SI-12").type(CatenaryAssetType.SECTION_INSULATOR)
                 .trackId(2L).connectedTrackId(4L).executionPackageId(6L).build();
         ReflectionTestUtils.setField(insulator, "id", UUID.randomUUID());
-        when(repository.findReportableAssets(null, 4L, null)).thenReturn(List.of(profile, insulator));
-        when(repository.findAssetIdsWorkedBetween(null, null, UTC)).thenReturn(Set.of());
+        when(repository.findReportableAssets(null, 4L, null)).thenReturn(java.util.stream.Stream.of(profile, insulator).map(MaintenanceReportRepository.ReportableAsset::of).toList());
+        when(repository.findAssetIdsWorkedBetween(null, 4L, null, null, null, UTC)).thenReturn(Set.of());
 
         ProgressReportResponse report = service.progress(null, 4L, null, null, null);
 
@@ -4981,7 +4981,7 @@ class BusinessLayerTest {
         verify(repository).findTasksCompletedBetween(Instant.parse("2026-01-31T22:00:00Z"), Instant.parse("2026-02-28T22:00:00Z"), 6L);
 
         service.progress(6L, null, null, Instant.parse("2026-02-01T00:00:00Z"), null);
-        verify(repository).findAssetIdsWorkedBetween(Instant.parse("2026-02-01T00:00:00Z"), null, jerusalem);
+        verify(repository).findAssetIdsWorkedBetween(6L, null, null, Instant.parse("2026-02-01T00:00:00Z"), null, jerusalem);
     }
 
     @Test

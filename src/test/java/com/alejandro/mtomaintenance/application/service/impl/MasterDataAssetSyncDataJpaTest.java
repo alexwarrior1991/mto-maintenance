@@ -87,7 +87,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ImportAutoConfiguration(FlywayAutoConfiguration.class)
 // Las agujas se escriben con JPA, no con SQL nativo como el activo, asi que necesitan el
 // listener de auditoria que rellena created_at/created_by. Mismo @Import que EnversAuditDataJpaTest.
-@Import(JpaAuditingConfiguration.class)
+@Import({JpaAuditingConfiguration.class, com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceReportRepository.class})
 class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
 
     private static final String SOURCE_SERVICE = "mto-configuration";
@@ -129,6 +129,9 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
 
     @Autowired
     private MaintenanceInstrumentRepository instrumentRepository;
+
+    @Autowired
+    private com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceReportRepository reportRepository;
 
     @Autowired
     private com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceOrderRepository orderRepository;
@@ -248,6 +251,137 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         } finally {
             statistics.setStatisticsEnabled(statisticsWereEnabled);
         }
+    }
+
+    /**
+     * El informe de avance, de punta a punta contra PostgreSQL, con lo que cuenta como revisado y lo que
+     * no: una tarea completada o una inspeccion (en la ventana, o alguna vez si no hay ventana), o el
+     * ultimo preventivo del activo; no una tarea pendiente, ni un activo desactivado, ni un tramo. Por
+     * paquete, por via (con el aislador que llega por su otra via y el perfil de otro paquete) y por tipo,
+     * con ventana y sin ella. Las cifras son las que daba el informe cuando leia todo el historico de
+     * tareas e inspecciones: restringirlo a los activos del informe no cambia ninguna.
+     */
+    @Test
+    void theProgressReportCountsWhatWasWorkedInTheWindowOrEverByPackageTrackAndType() {
+        long ep = System.nanoTime();
+        long otherEp = ep + 1;
+        long track = ep + 2;
+        long otherTrack = ep + 3;
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        Instant from = Instant.parse("2026-03-01T00:00:00Z");
+        Instant to = Instant.parse("2026-03-31T23:59:59Z");
+        Instant inside = Instant.parse("2026-03-15T22:30:00Z");
+        Instant before = Instant.parse("2026-02-10T22:30:00Z");
+
+        CatenaryAsset section = assetRepository.save(CatenaryAsset.builder().code("SEC-PR-" + suffix).name("Section")
+                .type(CatenaryAssetType.TRACK_SECTION).trackId(track).executionPackageId(ep).startKp(new BigDecimal("100.000"))
+                .endKp(new BigDecimal("900.000")).trackKind(TrackKind.MAIN).build());
+        CatenaryAsset taskInside = progressAsset("P1-" + suffix, CatenaryAssetType.PROFILE, ep, track, "100.000");
+        CatenaryAsset taskBefore = progressAsset("P2-" + suffix, CatenaryAssetType.PROFILE, ep, track, "160.000");
+        CatenaryAsset inspectedInside = progressAsset("P3-" + suffix, CatenaryAssetType.PROFILE, ep, track, "220.000");
+        CatenaryAsset inspectedBefore = progressAsset("P4-" + suffix, CatenaryAssetType.PROFILE, ep, track, "280.000");
+        CatenaryAsset preventiveInside = progressAsset("P5-" + suffix, CatenaryAssetType.PROFILE, ep, track, "340.000");
+        preventiveInside.setLastPreventiveCompletedAt(inside);
+        CatenaryAsset pendingOnly = progressAsset("P6-" + suffix, CatenaryAssetType.PROFILE, ep, track, "400.000");
+        CatenaryAsset untouched = progressAsset("P7-" + suffix, CatenaryAssetType.PROFILE, ep, track, "460.000");
+        CatenaryAsset disabled = progressAsset("P8-" + suffix, CatenaryAssetType.PROFILE, ep, track, "520.000");
+        CatenaryAsset disconnector = progressAsset("D1-" + suffix, CatenaryAssetType.DISCONNECTOR, ep, track, null);
+        CatenaryAsset insulator = progressAsset("S1-" + suffix, CatenaryAssetType.SECTION_INSULATOR, ep, otherTrack, null);
+        insulator.setConnectedTrackId(track);
+        CatenaryAsset ofAnotherPackage = progressAsset("P9-" + suffix, CatenaryAssetType.PROFILE, otherEp, track, "580.000");
+        CatenaryAsset onAnotherTrack = progressAsset("P10-" + suffix, CatenaryAssetType.PROFILE, ep, otherTrack, "100.000");
+
+        var order = orderRepository.save(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder.builder().code("MO-PR-" + suffix).title("Preventive")
+                .type(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType.PREVENTIVE).priority(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority.LOW).asset(section).trackId(track)
+                .executionPackageId(ep).build());
+        int sequence = 0;
+        progressTask(order, ++sequence, taskInside, inside);
+        progressTask(order, ++sequence, taskInside, before);
+        progressTask(order, ++sequence, taskBefore, before);
+        progressTask(order, ++sequence, pendingOnly, null);
+        progressTask(order, ++sequence, disabled, inside);
+        progressTask(order, ++sequence, section, inside);
+        progressTask(order, ++sequence, disconnector, inside);
+        progressTask(order, ++sequence, ofAnotherPackage, before);
+        progressTask(order, ++sequence, onAnotherTrack, inside);
+        progressInspection("I1-" + suffix, inspectedInside, LocalDate.of(2026, 3, 31));
+        progressInspection("I2-" + suffix, inspectedBefore, LocalDate.of(2026, 2, 10));
+        progressInspection("I3-" + suffix, insulator, LocalDate.of(2026, 3, 10));
+        progressInspection("I4-" + suffix, taskBefore, LocalDate.of(2026, 4, 1));
+        entityManager.flush();
+        disabled.disableLocally();
+        entityManager.flush();
+        entityManager.clear();
+
+        MaintenanceReportServiceImpl service = new MaintenanceReportServiceImpl(reportRepository,
+                new com.alejandro.mtomaintenance.configuration.reports.ReportProperties("UTC"));
+        String e = String.valueOf(ep);
+        String t = String.valueOf(track);
+        String o = String.valueOf(otherTrack);
+
+        assertEquals(List.of("total 10 checked 6 ratio 0.6000 km 0.180/0.360",
+                        e + "|" + t + "|PROFILE 7/3 0.4286 km 0.180/0.360",
+                        e + "|" + t + "|DISCONNECTOR 1/1 1.0000 km 0/0",
+                        e + "|" + o + "|PROFILE 1/1 1.0000 km 0/0",
+                        e + "|" + o + "|SECTION_INSULATOR 1/1 1.0000 km 0/0"),
+                progressLines(service.progress(ep, null, null, from, to)), "By package, in the window");
+        assertEquals(List.of("total 10 checked 8 ratio 0.8000 km 0.300/0.360",
+                        e + "|" + t + "|PROFILE 7/5 0.7143 km 0.300/0.360",
+                        e + "|" + t + "|DISCONNECTOR 1/1 1.0000 km 0/0",
+                        e + "|" + o + "|PROFILE 1/1 1.0000 km 0/0",
+                        e + "|" + o + "|SECTION_INSULATOR 1/1 1.0000 km 0/0"),
+                progressLines(service.progress(ep, null, null, null, null)), "By package, without a window: whatever was ever worked");
+        assertEquals(List.of("total 10 checked 5 ratio 0.5000 km 0.180/0.360",
+                        e + "|" + t + "|PROFILE 7/3 0.4286 km 0.180/0.360",
+                        e + "|" + t + "|DISCONNECTOR 1/1 1.0000 km 0/0",
+                        e + "|" + t + "|SECTION_INSULATOR 1/1 1.0000 km 0/0",
+                        (ep + 1) + "|" + t + "|PROFILE 1/0 0.0000 km 0/0"),
+                progressLines(service.progress(null, track, null, from, to)), "By track, in the window");
+        assertEquals(List.of("total 10 checked 8 ratio 0.8000 km 0.300/0.360",
+                        e + "|" + t + "|PROFILE 7/5 0.7143 km 0.300/0.360",
+                        e + "|" + t + "|DISCONNECTOR 1/1 1.0000 km 0/0",
+                        e + "|" + t + "|SECTION_INSULATOR 1/1 1.0000 km 0/0",
+                        (ep + 1) + "|" + t + "|PROFILE 1/1 1.0000 km 0/0"),
+                progressLines(service.progress(null, track, null, null, null)), "By track, without a window");
+        assertEquals(List.of("total 7 checked 5 ratio 0.7143 km 0.300/0.360",
+                        e + "|" + t + "|PROFILE 7/5 0.7143 km 0.300/0.360"),
+                progressLines(service.progress(ep, track, CatenaryAssetType.PROFILE, null, to)), "By package, track and type, until a date");
+        assertEquals(List.of("total 1 checked 0 ratio 0.0000 km 0/0",
+                        e + "|" + o + "|SECTION_INSULATOR 1/0 0.0000 km 0/0"),
+                progressLines(service.progress(ep, null, CatenaryAssetType.SECTION_INSULATOR, to, null)), "Of a type, from a date on");
+        assertEquals(List.of("total 7 checked 2 ratio 0.2857 km 0.120/0.360",
+                        e + "|" + t + "|PROFILE 7/2 0.2857 km 0.120/0.360"),
+                progressLines(service.progress(ep, track, CatenaryAssetType.PROFILE, to, null)),
+                "From a date on: the profile inspected the day after, and the one inspected that day (an inspection only has a date)");
+    }
+
+    private CatenaryAsset progressAsset(String code, CatenaryAssetType type, long executionPackageId, long trackId, String kp) {
+        return assetRepository.save(CatenaryAsset.builder().code(code).name(code).type(type).executionPackageId(executionPackageId)
+                .trackId(trackId).startKp(kp == null ? null : new BigDecimal(kp)).build());
+    }
+
+    private void progressTask(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder order, int sequence, CatenaryAsset asset, Instant completedAt) {
+        var task = com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask.builder().order(order).sequence(sequence).description("Task " + sequence).asset(asset).build();
+        if (completedAt != null) {
+            task.setStatus(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskStatus.COMPLETED);
+            task.setCompletedAt(completedAt);
+        }
+        taskRepository.save(task);
+    }
+
+    private void progressInspection(String code, CatenaryAsset asset, LocalDate date) {
+        inspectionRepository.save(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspection.builder().code("INS-PR-" + code).asset(asset).inspectionDate(date)
+                .result(com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionResult.OK).build());
+    }
+
+    /** El informe entero como lineas: los totales y una fila por paquete, via y tipo, en su orden. */
+    private static List<String> progressLines(com.alejandro.mtomaintenance.application.dto.report.ProgressReportResponse report) {
+        List<String> lines = new java.util.ArrayList<>();
+        lines.add("total " + report.totalAssets() + " checked " + report.checkedAssets() + " ratio " + report.completionRatio()
+                + " km " + report.coveredKm() + "/" + report.totalKm());
+        report.rows().forEach(row -> lines.add(row.executionPackageId() + "|" + row.trackId() + "|" + row.assetType() + " "
+                + row.totalAssets() + "/" + row.checkedAssets() + " " + row.completionRatio() + " km " + row.coveredKm() + "/" + row.totalKm()));
+        return lines;
     }
 
     @Test

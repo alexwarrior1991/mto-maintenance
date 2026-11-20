@@ -15,6 +15,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.ShiftStatus;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceReportRepository;
+import com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceReportRepository.ReportableAsset;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,16 +48,16 @@ class MaintenanceReportServiceImpl implements MaintenanceReportService {
     @Override
     @Transactional(readOnly = true)
     public ProgressReportResponse progress(Long executionPackageId, Long trackId, CatenaryAssetType assetType, Instant from, Instant to) {
-        List<CatenaryAsset> assets = repository.findReportableAssets(executionPackageId, trackId, assetType);
-        Set<UUID> worked = repository.findAssetIdsWorkedBetween(from, to, properties.zone());
+        List<ReportableAsset> assets = repository.findReportableAssets(executionPackageId, trackId, assetType);
+        Set<UUID> worked = repository.findAssetIdsWorkedBetween(executionPackageId, trackId, assetType, from, to, properties.zone());
 
         // Agrupado por (EP, via, tipo). Un perfil cuenta como revisado si tuvo una tarea completada o
         // una inspeccion en el rango; sin rango, si alguna vez lo tuvo (lastPreventiveCompletedAt).
         // Con filtro de via todo va en esa via, tambien el aislador que llega por su otra via.
-        Map<String, List<CatenaryAsset>> groups = new LinkedHashMap<>();
-        for (CatenaryAsset asset : assets) {
-            Long track = trackId == null ? asset.getTrackId() : trackId;
-            groups.computeIfAbsent(asset.getExecutionPackageId() + "|" + track + "|" + asset.getType(), key -> new ArrayList<>()).add(asset);
+        Map<String, List<ReportableAsset>> groups = new LinkedHashMap<>();
+        for (ReportableAsset asset : assets) {
+            Long track = trackId == null ? asset.trackId() : trackId;
+            groups.computeIfAbsent(asset.executionPackageId() + "|" + track + "|" + asset.type(), key -> new ArrayList<>()).add(asset);
         }
 
         List<ProgressRowResponse> rows = new ArrayList<>();
@@ -64,27 +65,27 @@ class MaintenanceReportServiceImpl implements MaintenanceReportService {
         long checked = 0;
         BigDecimal coveredKm = BigDecimal.ZERO;
         BigDecimal totalKm = BigDecimal.ZERO;
-        for (List<CatenaryAsset> group : groups.values()) {
-            CatenaryAsset first = group.getFirst();
+        for (List<ReportableAsset> group : groups.values()) {
+            ReportableAsset first = group.getFirst();
             long groupChecked = group.stream().filter(asset -> isChecked(asset, worked, from, to)).count();
             BigDecimal groupTotalKm = BigDecimal.ZERO;
             BigDecimal groupCoveredKm = BigDecimal.ZERO;
-            if (first.getType() == CatenaryAssetType.PROFILE) {
+            if (first.type() == CatenaryAssetType.PROFILE) {
                 // Cada perfil "cubre" el vano hasta el siguiente; el ultimo no cubre nada.
                 for (int index = 0; index < group.size() - 1; index++) {
-                    CatenaryAsset profile = group.get(index);
-                    CatenaryAsset next = group.get(index + 1);
-                    if (profile.getStartKp() == null || next.getStartKp() == null) {
+                    ReportableAsset profile = group.get(index);
+                    ReportableAsset next = group.get(index + 1);
+                    if (profile.startKp() == null || next.startKp() == null) {
                         continue;
                     }
-                    BigDecimal span = next.getStartKp().subtract(profile.getStartKp()).divide(THOUSAND, 3, RoundingMode.HALF_UP);
+                    BigDecimal span = next.startKp().subtract(profile.startKp()).divide(THOUSAND, 3, RoundingMode.HALF_UP);
                     groupTotalKm = groupTotalKm.add(span);
                     if (isChecked(profile, worked, from, to)) {
                         groupCoveredKm = groupCoveredKm.add(span);
                     }
                 }
             }
-            rows.add(new ProgressRowResponse(first.getExecutionPackageId(), trackId == null ? first.getTrackId() : trackId, first.getType(),
+            rows.add(new ProgressRowResponse(first.executionPackageId(), trackId == null ? first.trackId() : trackId, first.type(),
                     group.size(), groupChecked, ratio(groupChecked, group.size()), groupCoveredKm, groupTotalKm));
             total += group.size();
             checked += groupChecked;
@@ -151,11 +152,11 @@ class MaintenanceReportServiceImpl implements MaintenanceReportService {
         );
     }
 
-    private static boolean isChecked(CatenaryAsset asset, Set<UUID> worked, Instant from, Instant to) {
-        if (worked.contains(asset.getId())) {
+    private static boolean isChecked(ReportableAsset asset, Set<UUID> worked, Instant from, Instant to) {
+        if (worked.contains(asset.id())) {
             return true;
         }
-        Instant last = asset.getLastPreventiveCompletedAt();
+        Instant last = asset.lastPreventiveCompletedAt();
         if (last == null) {
             return false;
         }
