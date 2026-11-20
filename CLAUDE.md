@@ -410,9 +410,16 @@ Not audited on purpose: `MaintenanceStatusHistory`
 `InspectionTemplate`/`Item` (catalogues; a template is written through the API, but its history is its versions, which never
 change their items and say who created each). `JpaEntityModelTest` guards the split. History at
 `GET /<resource>/{id}/revisions`. The `asset` of an order, a task, an inspection and a defect is
-`@Audited(targetAuditMode = NOT_AUDITED)`, like a shift's disconnectors: an asset that only arrived
+`@Audited(targetAuditMode = NOT_AUDITED)`: an asset that only arrived
 by master data has no revision (native SQL), so a revision reads it as it is now instead of looking
-for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`). The leader, supervisor,
+for it in `catenary_asset_aud` and failing (`EnversAuditDataJpaTest`). **Envers honours that mode only on a
+to-one relation**: on a collection whose target is an audited entity it joins the target's `_aud` twin
+whatever the annotation says, and what has no revision silently disappears from the history. So a shift
+keeps the **ids** of its blocking disconnectors (`blockingDisconnectorIds`, an `@ElementCollection` like
+`trackIds`, same `maintenance_shift_disconnector` tables) and `MaintenanceShiftServiceImpl.response` reads
+those assets as they are now (`MaintenanceLookups.assets`; one read for a whole page of the list), also
+for each revision. Never a `@ManyToMany`/`@OneToMany` with `NOT_AUDITED` towards an audited entity
+(`JpaEntityModelTest` refuses it). The leader, supervisor,
 linemen and instruments of a shift and the vehicle of each `MaintenanceShiftVehicle` are `NOT_AUDITED`
 targets for the same reason (`JpaEntityModelTest` guards them). A shift's vehicles are `@OrderBy("id ASC")`, never by an audit column: Envers applies the
 `@OrderBy` to `maintenance_shift_vehicle_aud`, which has none; `vehiclesByCode()` orders what is shown.

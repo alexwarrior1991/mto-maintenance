@@ -63,6 +63,39 @@ class JpaEntityModelTest {
         assertTrue(vehicle != null && vehicle.targetAuditMode() == RelationTargetAuditMode.NOT_AUDITED, "MaintenanceShiftVehicle.vehicle");
     }
 
+    /**
+     * Ninguna coleccion de una entidad auditada apunta a otra entidad auditada con NOT_AUDITED: Envers solo
+     * atiende a ese modo en una relacion a uno (el activo de una orden, una tarea, una inspeccion o un
+     * defecto), y en una coleccion une con la {@code _aud} del destino, donde un activo que solo llego por
+     * datos maestros no esta. Por eso un turno guarda los ids de sus seccionadores de bloqueo, como sus vias.
+     */
+    @Test
+    void noAuditedCollectionPointsAtAnAuditedEntityThatMayHaveNoRevisions() throws NoSuchFieldException {
+        java.lang.reflect.Field disconnectors = MaintenanceShift.class.getDeclaredField("blockingDisconnectorIds");
+        assertTrue(disconnectors.isAnnotationPresent(jakarta.persistence.ElementCollection.class));
+        assertEquals("java.util.Set<java.util.UUID>", disconnectors.getGenericType().getTypeName());
+
+        for (Class<?> entity : List.of(CatenaryAsset.class, MaintenanceShift.class, MaintenanceOrder.class, MaintenanceTask.class,
+                MaintenanceTaskCheckItem.class, MaintenanceInspection.class, MaintenanceInspectionItem.class,
+                CatenaryDefect.class, MaintenanceMaterialUsage.class, MaintenanceShiftVehicle.class)) {
+            for (java.lang.reflect.Field field : entity.getDeclaredFields()) {
+                Audited audited = field.getAnnotation(Audited.class);
+                if (audited == null || audited.targetAuditMode() != RelationTargetAuditMode.NOT_AUDITED
+                        || !java.util.Collection.class.isAssignableFrom(field.getType())) {
+                    continue;
+                }
+                Class<?> target = (Class<?>) ((java.lang.reflect.ParameterizedType) field.getGenericType()).getActualTypeArguments()[0];
+                assertFalse(target.isAnnotationPresent(Audited.class), entity.getSimpleName() + "." + field.getName()
+                        + " is a collection of the audited " + target.getSimpleName() + ": Envers ignores NOT_AUDITED there");
+            }
+        }
+        // A uno si vale: el activo se lee como esta ahora.
+        for (Class<?> entity : List.of(MaintenanceOrder.class, MaintenanceTask.class, MaintenanceInspection.class, CatenaryDefect.class)) {
+            Audited asset = entity.getDeclaredField("asset").getAnnotation(Audited.class);
+            assertTrue(asset != null && asset.targetAuditMode() == RelationTargetAuditMode.NOT_AUDITED, entity.getSimpleName() + ".asset");
+        }
+    }
+
     @Test
     void assetValidationRejectsBlankCodeAndNonPositiveInterval() {
         CatenaryAsset asset = CatenaryAsset.builder().code(" ").name("Profile").type(CatenaryAssetType.PROFILE).preventiveIntervalDays(0).build();

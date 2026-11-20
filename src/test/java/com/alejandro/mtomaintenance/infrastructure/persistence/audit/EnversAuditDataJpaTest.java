@@ -178,7 +178,7 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
             CatenaryAsset disconnector = CatenaryAsset.builder().code("DSC-AUD-" + suffix).name("HSA-NS5").type(CatenaryAssetType.DISCONNECTOR)
                     .trackId(2L).build();
             em.persist(disconnector);
-            shift.getBlockingDisconnectors().add(disconnector);
+            shift.getBlockingDisconnectorIds().add(disconnector.getId());
             em.persist(shift);
             return shift.getId();
         });
@@ -194,7 +194,7 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         List<Object> crewAtFirst = reading(reader -> {
             MaintenanceShift first = reader.find(MaintenanceShift.class, shiftId, shiftRevisions.getFirst());
             return List.of(first.getTeamLeader().getFullName(), first.getLinemen().size(), first.getVehicles().size(),
-                    List.copyOf(first.getTrackIds()), first.getBlockingDisconnectors().size());
+                    List.copyOf(first.getTrackIds()), first.getBlockingDisconnectorIds().size());
         });
         assertEquals(List.of("Yossi Cohen", 2, 1, List.of(2L), 1), crewAtFirst, "With its tracks and its blocking disconnectors of then");
         List<Number> vehicleRevisions = reading(reader -> reader.getRevisions(MaintenanceShiftVehicle.class, shiftVehicleId));
@@ -321,6 +321,70 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
             return rows.stream().map(row -> ((MaintenanceInspection) row[0]).getItems().size()).toList();
         });
         assertEquals(List.of(itemCount), itemsByRevision);
+    }
+
+    /**
+     * Los seccionadores de bloqueo de un turno salen en cada revision del turno, hayan llegado solo por
+     * datos maestros (SQL nativo, sin revision: lo normal) o se hayan editado por la API, y se leen como
+     * estan ahora. El turno guarda sus ids, como sus vias: Envers no atiende a
+     * {@code targetAuditMode = NOT_AUDITED} en un {@code @ManyToMany} cuyo destino es una entidad
+     * auditada (unia la tabla de la relacion con {@code catenary_asset_aud}), y el seccionador sin
+     * revision desaparecia del historial sin error.
+     */
+    @Test
+    void theBlockingDisconnectorsOfAShiftAreInEveryRevisionWhetherTheyHaveRevisionsOfTheirOwnOrOnlyArrivedByMasterData() {
+        String sourceId = "dsc-" + UUID.randomUUID();
+        inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "DSC-" + sourceId, "HSA-NS5", "DISCONNECTOR",
+                6L, 2L, false, null, null, null, null, null, null, null, null, null, true, 10L));
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UUID[] ids = inTransaction(em -> {
+            CatenaryAsset fromMasterData = assetRepository.findBySourceServiceAndTypeAndSourceEntityId("mto-configuration",
+                    CatenaryAssetType.DISCONNECTOR, sourceId).orElseThrow();
+            CatenaryAsset withRevisions = CatenaryAsset.builder().code("DSC-API-" + suffix).name("HSA-NS6").type(CatenaryAssetType.DISCONNECTOR)
+                    .trackId(2L).build();
+            em.persist(withRevisions);
+            MaintenanceShift shift = MaintenanceShift.builder().code("SH-DSC-" + suffix).shiftDate(LocalDate.of(2026, 10, 16))
+                    .possessionType(PossessionType.FULL).trackIds(new java.util.LinkedHashSet<>(List.of(2L)))
+                    .blockingDisconnectorIds(new java.util.LinkedHashSet<>(List.of(fromMasterData.getId(), withRevisions.getId()))).build();
+            em.persist(shift);
+            return new UUID[] {shift.getId(), fromMasterData.getId(), withRevisions.getId()};
+        });
+        UUID shiftId = ids[0];
+        assertTrue(reading(reader -> reader.getRevisions(CatenaryAsset.class, ids[1])).isEmpty(), "Master data leaves no revision of the asset");
+        assertEquals(1, reading(reader -> reader.getRevisions(CatenaryAsset.class, ids[2])).size());
+
+        // Segunda revision: el turno cambia sin tocar sus seccionadores. Tercera: pierde el de la API.
+        inTransaction(em -> {
+            em.find(MaintenanceShift.class, shiftId).setObservations("Cut confirmed");
+            return null;
+        });
+        inTransaction(em -> {
+            MaintenanceShift shift = em.find(MaintenanceShift.class, shiftId);
+            shift.getBlockingDisconnectorIds().remove(ids[2]);
+            shift.setObservations("One disconnector closed again");
+            return null;
+        });
+        // Y lo que se lee de cada uno es lo de ahora: el evento siguiente renombra el de datos maestros.
+        inTransaction(em -> assetRepository.upsertFromMasterData("mto-configuration", sourceId, "DSC-" + sourceId, "HSA-NS5 renamed", "DISCONNECTOR",
+                6L, 2L, false, null, null, null, null, null, null, null, null, null, true, 11L));
+
+        // Como lo lee el historial del servicio: los ids de cada revision, y de cada id el activo de ahora.
+        List<List<String>> namesByRevision = reading(reader -> {
+            List<Object[]> rows = reader.createQuery().forRevisionsOfEntity(MaintenanceShift.class, false, true)
+                    .add(org.hibernate.envers.query.AuditEntity.id().eq(shiftId))
+                    .addOrder(org.hibernate.envers.query.AuditEntity.revisionNumber().asc()).getResultList();
+            return rows.stream().map(row -> assetRepository.findAllById(((MaintenanceShift) row[0]).getBlockingDisconnectorIds()).stream()
+                    .map(CatenaryAsset::getName).sorted().toList()).toList();
+        });
+        assertEquals(List.of(List.of("HSA-NS5 renamed", "HSA-NS6"), List.of("HSA-NS5 renamed", "HSA-NS6"), List.of("HSA-NS5 renamed")),
+                namesByRevision);
+        assertEquals(java.util.Set.of(ids[1]), inTransaction(em -> java.util.Set.copyOf(em.find(MaintenanceShift.class, shiftId).getBlockingDisconnectorIds())),
+                "And the shift itself keeps only the one left");
+        // Una revision no vuelve a escribir lo que no cambio: la fila del que sigue es la del alta.
+        Number rowsOfTheOneThatStayed = inTransaction(em -> (Number) em.createNativeQuery(
+                        "select count(*) from maintenance_shift_disconnector_aud where shift_id = :shift and disconnector_id = :disconnector")
+                .setParameter("shift", shiftId).setParameter("disconnector", ids[1]).getSingleResult());
+        assertEquals(1, rowsOfTheOneThatStayed.intValue());
     }
 
     @Test

@@ -49,10 +49,24 @@ Known gap: master-data upserts are native SQL and leave no revision, and there i
 revision either. An asset that only arrived by master data therefore has no history of its own
 (`/assets/{id}/revisions` answers 404 `AST-404`), and what hangs from it cannot look it up in
 `catenary_asset_aud`: the `asset` of an order, a task, an inspection and a defect is
-`@Audited(targetAuditMode = NOT_AUDITED)`, like the blocking disconnectors of a shift, so a
+`@Audited(targetAuditMode = NOT_AUDITED)`, so a
 revision reads the asset as it is now. No request changes the asset of any of them. Before that,
 the history of an order, an inspection or a defect on a profile, a disconnector or a section
-insulator answered 500. The crew of a shift is read the same way: its `teamLeader` and `supervisor`
+insulator answered 500.
+
+**That mode only works on a to-one relation.** On a collection Envers does not look at
+`targetAuditMode`: it asks whether the target entity is audited (`AbstractCollectionMetadataGenerator
+.createMiddleIdData` → `hasAuditedEntityConfiguration`) and, when it is, joins the audited join table
+with the target's `_aud` twin. The blocking disconnectors of a shift were a `@ManyToMany` to
+`CatenaryAsset` with `NOT_AUDITED`, so every revision of a shift joined
+`maintenance_shift_disconnector_aud` with `catenary_asset_aud` and a disconnector without a revision
+of its own — the normal case — was missing from the history, with no error. They are now an
+`@ElementCollection` of the asset ids (`MaintenanceShift.blockingDisconnectorIds`, like its
+`trackIds`) over the same two tables: a revision keeps the ids the shift had then, and the service
+reads those assets as they are now (`MaintenanceLookups.assets`). The linemen and the instruments
+are collections too, but their targets (`CrewPerson`, `MaintenanceInstrument`) are not audited, which
+is the one case where a collection reads the live table. `JpaEntityModelTest` refuses a `NOT_AUDITED`
+collection of an audited entity. The crew of a shift is read the same way: its `teamLeader` and `supervisor`
 (columns of `maintenance_shift_aud`), its `linemen` (the join is audited, the person is not) and the
 `vehicle` of each `MaintenanceShiftVehicle` are `NOT_AUDITED` targets, and so are its `instruments`
 (`V23`; the join is audited, the instrument is not), so a revision shows the snapshot of

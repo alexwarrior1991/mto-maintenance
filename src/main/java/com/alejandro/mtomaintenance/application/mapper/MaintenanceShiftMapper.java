@@ -14,6 +14,7 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.Maintenanc
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 
@@ -22,11 +23,11 @@ public interface MaintenanceShiftMapper {
 
     @Mapping(target = "audit", source = "shift")
     @Mapping(target = "trackIds", expression = "java(sortedTracks(shift))")
-    @Mapping(target = "blockingDisconnectors", expression = "java(toSummaries(sortedDisconnectors(shift)))")
+    @Mapping(target = "blockingDisconnectors", expression = "java(toSummaries(sortedDisconnectors(blockingDisconnectors)))")
     @Mapping(target = "linemen", expression = "java(linemen(shift))")
     @Mapping(target = "vehicles", expression = "java(vehicles(shift))")
     @Mapping(target = "instruments", expression = "java(instruments(shift))")
-    MaintenanceShiftResponse toResponse(MaintenanceShift shift);
+    MaintenanceShiftResponse toResponse(MaintenanceShift shift, Collection<CatenaryAsset> blockingDisconnectors);
 
     /** Por codigo, como los seccionadores: el parte los lista siempre igual. */
     default List<CrewPersonSummary> linemen(MaintenanceShift shift) {
@@ -73,12 +74,15 @@ public interface MaintenanceShiftMapper {
         return shift.getTrackIds() == null ? List.of() : shift.getTrackIds().stream().sorted().toList();
     }
 
-    /** Por codigo, para que la cabecera del parte los liste siempre en el mismo orden. */
-    default List<CatenaryAsset> sortedDisconnectors(MaintenanceShift shift) {
-        if (shift.getBlockingDisconnectors() == null) {
+    /**
+     * Por codigo, para que la cabecera del parte los liste siempre en el mismo orden. Los da el servicio:
+     * el turno guarda sus ids (y su historial, los de entonces), y el activo se lee como esta ahora.
+     */
+    default List<CatenaryAsset> sortedDisconnectors(Collection<CatenaryAsset> blockingDisconnectors) {
+        if (blockingDisconnectors == null) {
             return List.of();
         }
-        return shift.getBlockingDisconnectors().stream()
+        return blockingDisconnectors.stream()
                 .sorted(Comparator.comparing(CatenaryAsset::getCode, Comparator.nullsLast(Comparator.naturalOrder())))
                 .toList();
     }
