@@ -74,6 +74,8 @@ thread, so the author is the person who asked. The events it publishes carry the
 History is read at `GET /<resource>/{id}/revisions` (`assets`, `orders`, `shifts`, `inspections`,
 `defects`), paged, each entry with the revision metadata and the entity as it was.
 
+Each revision is read with its collections as they were: the tasks of an order and the task types of each, the items of an inspection, the tracks, disconnectors, linemen, instruments and vehicles of a shift. Envers looks them up in the `_aud` twins by the parent's column, and `V29` gave each of those lookups its index (`03-database.md`, *Indexes for what grows*); a new audited collection needs its own. What is not audited (the asset, the task types, the people) is read as it is now, in batches (`hibernate.default_batch_fetch_size`).
+
 ## Why a status changed
 
 `maintenance_status_history`: one row per transition of an order or a defect with

@@ -999,6 +999,54 @@ class PersistenceLayerTest extends PostgreSQLTestContainer {
     }
 
     /**
+     * V29: los indices de lo que crece existen con la definicion con la que se comprobaron. El historial
+     * busca en las {@code _aud} por la columna del padre; el parte de un turno, los defectos y el material
+     * por su tarea y los defectos por el turno en que se resolvieron; los informes, por fecha.
+     */
+    @Test
+    void theIndexesForTheHistoryTheShiftReportAndTheReportsByDateExistAsTheyWereProven() {
+        Map<String, String> expected = Map.ofEntries(
+                Map.entry("idx_maintenance_task_aud_order", "maintenance_task_aud USING btree (order_id)"),
+                Map.entry("idx_maintenance_task_task_type_aud_task", "maintenance_task_task_type_aud USING btree (task_id, task_type_id, rev)"),
+                Map.entry("idx_maintenance_inspection_item_aud_inspection", "maintenance_inspection_item_aud USING btree (inspection_id)"),
+                Map.entry("idx_maintenance_shift_track_aud_shift", "maintenance_shift_track_aud USING btree (shift_id, track_id, rev)"),
+                Map.entry("idx_maintenance_shift_disconnector_aud_shift",
+                        "maintenance_shift_disconnector_aud USING btree (shift_id, disconnector_id, rev)"),
+                Map.entry("idx_maintenance_shift_lineman_aud_shift", "maintenance_shift_lineman_aud USING btree (shift_id, person_id, rev)"),
+                Map.entry("idx_maintenance_shift_instrument_aud_shift",
+                        "maintenance_shift_instrument_aud USING btree (shift_id, instrument_id, rev)"),
+                Map.entry("idx_maintenance_shift_vehicle_aud_shift", "maintenance_shift_vehicle_aud USING btree (shift_id)"),
+                Map.entry("idx_maintenance_shift_vehicle_aud_id_rev", "maintenance_shift_vehicle_aud USING btree (id, rev)"),
+                Map.entry("idx_catenary_defect_found_in_task",
+                        "catenary_defect USING btree (found_in_task_id) WHERE (found_in_task_id IS NOT NULL)"),
+                Map.entry("idx_catenary_defect_resolved_in_shift",
+                        "catenary_defect USING btree (resolved_in_shift_id) WHERE (resolved_in_shift_id IS NOT NULL)"),
+                Map.entry("idx_maintenance_material_usage_task",
+                        "maintenance_material_usage USING btree (task_id) WHERE (task_id IS NOT NULL)"),
+                Map.entry("idx_maintenance_task_completed_at",
+                        "maintenance_task USING btree (completed_at) INCLUDE (asset_id) WHERE (completed_at IS NOT NULL)"),
+                Map.entry("idx_maintenance_order_actual_end_date",
+                        "maintenance_order USING btree (actual_end_date) WHERE (actual_end_date IS NOT NULL)"),
+                Map.entry("idx_maintenance_order_created_at", "maintenance_order USING btree (created_at)"),
+                Map.entry("idx_catenary_defect_resolved_at", "catenary_defect USING btree (resolved_at) WHERE (resolved_at IS NOT NULL)"),
+                Map.entry("idx_maintenance_inspection_date", "maintenance_inspection USING btree (inspection_date)"));
+
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery(
+                "select indexname, indexdef from pg_indexes where schemaname = current_schema() and indexname in (:names)")
+                .setParameter("names", expected.keySet()).getResultList();
+        Map<String, String> found = rows.stream().collect(Collectors.toMap(row -> (String) row[0], row -> (String) row[1]));
+
+        expected.forEach((name, definition) -> {
+            assertTrue(found.containsKey(name), "Missing index " + name);
+            String actual = found.get(name);
+            // pg_indexes pone el esquema delante de la tabla: se compara lo que va detras.
+            assertEquals(definition, actual.substring(actual.indexOf(" ON ") + 4).replaceFirst("^[a-z_0-9]+\\.", ""),
+                    name + " is defined as " + actual);
+        });
+    }
+
+    /**
      * V28: como mucho una plantilla activa por tipo de activo, y lo dice la base. Las tres sembradas siguen
      * siendo las que eran, con su id, su version 1 y activas.
      */

@@ -46,6 +46,7 @@ Indexes follow the API filters: asset `(track_id, start_kp)`, `(type, enabled)`;
 `maintenance_shift_track (track_id)`, `maintenance_shift_disconnector (disconnector_id)`; inspection `(result, inspection_date)`,
 `(shift_id)` (`V15`, the inspections of a shift's report); defect `(severity, status)`,
 `(detected_at)`; material `(stock_sync_status)`.
+`V29` added the ones for what grows (below, *Indexes for what grows*).
 
 `preventive_due_at(last_completed, interval_days)` is a SQL function used by the
 `preventiveDueBefore` filter: `NULL` when there is no interval, `-infinity` when never done.
@@ -439,6 +440,61 @@ meant for the other entity of the same id has to be moved by hand.
 - A new version takes `max(version) + 1` of its asset type under the advisory lock of that type
   (`mto-maintenance:inspection-template:<TYPE>`); `uq (asset_type, version)` and the partial index are
   what would stop a write that skipped the lock (409 `APP-409`).
+
+## Indexes for what grows (`V29`)
+
+Seventeen indexes and no column: the history, the shift report and the reports by date searched large
+tables by columns nothing indexed. Each was proven with `EXPLAIN (ANALYZE)` of the SQL Hibernate
+emits, before and after, on 1.2 M tasks, 2.4 M rows of `maintenance_task_aud`, 3.6 M of
+`maintenance_task_task_type_aud`, 1.5 M of `maintenance_inspection_item_aud`, 200,000 defects and
+600,000 material lines.
+
+**The history** (`GET /<resource>/{id}/revisions`). Envers rebuilds every revision with its
+collections as they were, and looks them up by the parent's column: `... from maintenance_task_aud
+where order_id = ? and rev = (select max(rev) ... where rev <= ? and id = ...)`. The `_aud` twins only
+had `(rev, id)` and `(id, rev)`, and the collection ones only their key `(rev, parent, child)`, with
+`rev` first, so each lookup read the whole table: once per revision of an order, and once per task of
+each revision for its task types.
+
+| Index | Serves | Before → after |
+|---|---|---|
+| `idx_maintenance_task_aud_order` on `maintenance_task_aud (order_id)` | the tasks of an order at a revision | 318 ms → 1.1 ms |
+| `idx_maintenance_task_task_type_aud_task` on `maintenance_task_task_type_aud (task_id, task_type_id, rev)` | the task types of a task at a revision; the `max(rev)` comes from the same index | 785 ms → 0.09 ms |
+| `idx_maintenance_inspection_item_aud_inspection` on `maintenance_inspection_item_aud (inspection_id)` | the items of an inspection at a revision | 129 ms → 0.2 ms |
+| `idx_maintenance_shift_track_aud_shift` `(shift_id, track_id, rev)`, `idx_maintenance_shift_disconnector_aud_shift` `(shift_id, disconnector_id, rev)`, `idx_maintenance_shift_lineman_aud_shift` `(shift_id, person_id, rev)`, `idx_maintenance_shift_instrument_aud_shift` `(shift_id, instrument_id, rev)` | the tracks, disconnectors, linemen and instruments of a shift at a revision | 8–136 ms → 0.05–0.1 ms (120,000–300,000 rows each) |
+| `idx_maintenance_shift_vehicle_aud_shift` on `maintenance_shift_vehicle_aud (shift_id)` and `idx_maintenance_shift_vehicle_aud_id_rev` `(id, rev)` | the vehicles of a shift at a revision, and the `max(rev)` of each: `V20` created this twin without the `(id, rev)` every twin of `V4` has | 58 ms → 0.1 ms |
+
+**The shift report** (`GET /shifts/{id}/report`), three partial indexes (most defects come from no
+task and are resolved in no shift; a material line may have no task). An `=` or an `in (...)` already
+implies `IS NOT NULL`, so the generic plan of a prepared statement uses them too.
+
+| Index | Serves | Before → after |
+|---|---|---|
+| `idx_catenary_defect_found_in_task` on `catenary_defect (found_in_task_id) WHERE found_in_task_id IS NOT NULL` | `findByFoundInTaskIdIn` | 44 ms → 0.08 ms |
+| `idx_catenary_defect_resolved_in_shift` on `catenary_defect (resolved_in_shift_id) WHERE resolved_in_shift_id IS NOT NULL` | `countByResolvedInShiftId` | 33 ms → 0.07 ms |
+| `idx_maintenance_material_usage_task` on `maintenance_material_usage (task_id) WHERE task_id IS NOT NULL` | `findByTaskIdIn` | 43 ms → 0.13 ms |
+
+**The reports by date** (`/reports/monthly`, `/reports/progress` with a window) and the default order
+of two lists:
+
+| Index | Serves | Before → after |
+|---|---|---|
+| `idx_maintenance_task_completed_at` on `maintenance_task (completed_at) INCLUDE (asset_id) WHERE completed_at IS NOT NULL` | the tasks completed in a window, and the distinct assets worked in it | 73 ms → 14 ms (21,000 of 1.2 M rows) |
+| `idx_maintenance_order_actual_end_date` on `maintenance_order (actual_end_date) WHERE actual_end_date IS NOT NULL` | the orders completed in a month | 2.6 ms → 0.25 ms (20,000 orders) |
+| `idx_maintenance_order_created_at` on `maintenance_order (created_at)` | the orders created in a month, and the default order of the order list (`createdAt,desc`) | 1.9 ms → 0.18 ms; the list 12.5 ms → 1 ms |
+| `idx_catenary_defect_resolved_at` on `catenary_defect (resolved_at) WHERE resolved_at IS NOT NULL` | the defects resolved in a month | 22 ms → 1.3 ms |
+| `idx_maintenance_inspection_date` on `maintenance_inspection (inspection_date)` | the default order of the inspection list (`inspectionDate,desc`); `(result, inspection_date)` of `V1` does not serve it without a result | 53 ms → 1 ms (150,000 rows) |
+
+Not covered by an index, on purpose: the progress report **without a window** still reads every
+completed task and every inspection (`findAssetIdsWorkedBetween`); that needs the query to change, not
+an index.
+
+The migration is plain `CREATE INDEX IF NOT EXISTS` inside Flyway's transaction, which blocks writes
+to each table while its index is built: instant on the tables of today. **If it is ever applied to
+tables that are already large**, create each index by hand first with `CREATE INDEX CONCURRENTLY IF
+NOT EXISTS` and the same name and definition (outside a transaction; drop and repeat one left
+`INVALID`), and let the migration run afterwards as a no-op. `PersistenceLayerTest` checks the
+seventeen definitions.
 
 ## Auditing (`V4`)
 
