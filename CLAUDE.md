@@ -203,6 +203,11 @@ as a DELETED revision), releasing its reservation first; it is never cancelled.
 
 ### Persistence rules
 
+- Lazy associations are loaded in batches (`hibernate.default_batch_fetch_size: 100`, `application.yaml`): the
+  answer of an order walks its tasks and the task types and asset of each, and without it that was a
+  statement per task. `V29` holds the indexes of what grows (the `_aud` lookups of the history by the
+  parent's column, the shift report, the reports by date; `docs/03-database.md`): an audited collection
+  added to an entity needs its index on the parent's column in its `_aud` twin.
 - UUID ids, `AuditableEntity` (`created_at`/`updated_at`/`created_by`/`updated_by`), snake_case
   tables, PostgreSQL enums for every status/type, `numeric(12,3)` for kp, `numeric(19,6)` for
   quantities, `timestamptz` for instants.
@@ -454,4 +459,9 @@ the 202 of `Prefer: respond-async` of `MaintenanceOrderControllerMockMvcTest`. T
 rules of a new version and of its `PATCH` in `BusinessLayerTest`; against PostgreSQL, a version replacing the
 active one with an inspection that keeps its items, and eight versions created at once, in
 `MasterDataAssetSyncDataJpaTest` (the DataJpa class that can build the package-private services), and the partial
-index in `PersistenceLayerTest`; the real routes with their two roles in `MaintenanceOrderControllerMockMvcTest`.
+index in `PersistenceLayerTest`; the real routes with their two roles in `MaintenanceOrderControllerMockMvcTest`. The
+progress report end to end against PostgreSQL (what counts as worked, with and without a window, by package,
+track and type) and the
+statements an order with many tasks takes (never one per task) are counted in `MasterDataAssetSyncDataJpaTest`,
+the indexes of `V29` are asserted in `PersistenceLayerTest`, and the history of an order with its tasks and
+their types in `EnversAuditDataJpaTest`.

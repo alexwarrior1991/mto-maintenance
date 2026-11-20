@@ -13,6 +13,7 @@ import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.TypedQuery;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -32,69 +33,117 @@ public class MaintenanceReportRepository {
     private EntityManager entityManager;
 
     /**
-     * Activos revisables (todo menos los tramos), habilitados, con los filtros opcionales. El filtro
-     * por tipo se anade solo cuando viene: un parametro de enum a null no tiene tipo para PostgreSQL
-     * ({@code could not determine data type of parameter}), al contrario que los bigint.
+     * Lo que el informe de avance lee de un activo, y nada mas: sin ventana y sin filtros son todos los
+     * activos habilitados de la red, y cargarlos como entidades era traer treinta columnas de cada uno
+     * para usar seis.
+     */
+    public record ReportableAsset(UUID id, Long executionPackageId, Long trackId, CatenaryAssetType type, BigDecimal startKp,
+                                  Instant lastPreventiveCompletedAt) {
+
+        public static ReportableAsset of(CatenaryAsset asset) {
+            return new ReportableAsset(asset.getId(), asset.getExecutionPackageId(), asset.getTrackId(), asset.getType(),
+                    asset.getStartKp(), asset.getLastPreventiveCompletedAt());
+        }
+    }
+
+    /**
+     * Los activos de un informe de avance: revisables (todo menos los tramos), habilitados, con los
+     * filtros opcionales. El filtro por tipo se anade solo cuando viene: un parametro de enum a null no
+     * tiene tipo para PostgreSQL ({@code could not determine data type of parameter}), al contrario que
+     * los bigint. Lo comparten {@link #findReportableAssets} y {@link #findAssetIdsWorkedBetween}, que
+     * tienen que hablar de los mismos activos.
      *
      * <p>Por via entra tambien el aislador que la conecta con otra: esta sobre las dos.</p>
      */
-    public List<CatenaryAsset> findReportableAssets(Long executionPackageId, Long trackId, CatenaryAssetType assetType) {
-        String typeFilter = assetType == null ? "" : "  and asset.type = :assetType\n";
-        TypedQuery<CatenaryAsset> query = entityManager.createQuery("""
-                select asset from CatenaryAsset asset
+    private static String reportableAssets(CatenaryAssetType assetType) {
+        return """
                 where asset.enabled = true
                   and asset.type <> :section
                   and (:executionPackageId is null or asset.executionPackageId = :executionPackageId)
                   and (:trackId is null or asset.trackId = :trackId or asset.connectedTrackId = :trackId)
-                """ + typeFilter + """
-                order by asset.executionPackageId, asset.trackId, asset.type, asset.startKp, asset.code
-                """, CatenaryAsset.class);
+                """ + (assetType == null ? "" : "  and asset.type = :assetType\n");
+    }
+
+    private static <T> TypedQuery<T> ofReportableAssets(TypedQuery<T> query, Long executionPackageId, Long trackId, CatenaryAssetType assetType) {
         query.setParameter("section", CatenaryAssetType.TRACK_SECTION);
         query.setParameter("executionPackageId", executionPackageId);
         query.setParameter("trackId", trackId);
         if (assetType != null) {
             query.setParameter("assetType", assetType);
         }
-        return query.getResultList();
+        return query;
+    }
+
+    /** Los activos del informe, en su orden (paquete, via, tipo, kp, codigo), con lo que el informe lee de cada uno. */
+    public List<ReportableAsset> findReportableAssets(Long executionPackageId, Long trackId, CatenaryAssetType assetType) {
+        return ofReportableAssets(entityManager.createQuery("""
+                select new com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceReportRepository$ReportableAsset(
+                    asset.id, asset.executionPackageId, asset.trackId, asset.type, asset.startKp, asset.lastPreventiveCompletedAt)
+                from CatenaryAsset asset
+                """ + reportableAssets(assetType) + """
+                order by asset.executionPackageId, asset.trackId, asset.type, asset.startKp, asset.code
+                """, ReportableAsset.class), executionPackageId, trackId, assetType).getResultList();
     }
 
     /**
-     * Activos con una inspeccion o una tarea completada dentro del rango. Los estados van como
-     * parametro y no como literal JPQL: Hibernate traduce el literal a {@code 'COMPLETED'::MaintenanceTaskStatus}
-     * y ese tipo no existe en PostgreSQL (el enum de la base es {@code maintenance_task_status}).
+     * De los activos del informe, los que tienen una inspeccion o una tarea completada dentro del rango
+     * (o alguna vez, sin rango). Se pregunta por los activos del informe ({@code exists}) en vez de leer
+     * todas las inspecciones y todas las tareas completadas de la historia para quedarse despues con las
+     * de esos activos: el resultado del informe es el mismo, y sin rango lo que cuesta ya no crece con
+     * los anos sino con los activos que se piden ({@code idx_maintenance_inspection_asset} e
+     * {@code idx_maintenance_task_asset_status}, una lectura de indice por activo); con rango PostgreSQL
+     * sigue partiendo de las fechas ({@code idx_maintenance_inspection_date},
+     * {@code idx_maintenance_task_completed_at}).
+     *
+     * <p>Son dos consultas, una por origen, y no una con los dos {@code exists} unidos por un
+     * {@code or}: asi cada una es un semi-join que el planificador sabe costear. Con el {@code or} los
+     * deja como subplanes, les calcula un coste desorbitado y, con el JIT activo, compilarlos costaba
+     * mas que la consulta (0,2 s de 0,24 medidos).</p>
+     *
+     * <p>Los estados van como parametro y no como literal JPQL: Hibernate traduce el literal a
+     * {@code 'COMPLETED'::MaintenanceTaskStatus} y ese tipo no existe en PostgreSQL (el enum de la base
+     * es {@code maintenance_task_status}). Las fechas opcionales se anaden solo cuando vienen: un
+     * parametro temporal a null tampoco tiene tipo para PostgreSQL.</p>
      *
      * @param zone la de los informes: una inspeccion solo tiene fecha, y el rango pasa a dias en ella
      */
-    public Set<UUID> findAssetIdsWorkedBetween(Instant from, Instant to, ZoneId zone) {
-        // Las fechas opcionales se anaden solo cuando vienen: un parametro temporal a null tampoco
-        // tiene tipo para PostgreSQL, y el informe de avance se pide casi siempre sin ventana.
-        TypedQuery<UUID> inspections = entityManager.createQuery("""
-                select distinct inspection.asset.id from MaintenanceInspection inspection
-                where 1 = 1
-                """ + (from == null ? "" : "  and inspection.inspectionDate >= :fromDate\n")
-                    + (to == null ? "" : "  and inspection.inspectionDate <= :toDate\n"), UUID.class);
+    public Set<UUID> findAssetIdsWorkedBetween(Long executionPackageId, Long trackId, CatenaryAssetType assetType,
+                                               Instant from, Instant to, ZoneId zone) {
+        TypedQuery<UUID> inspected = ofReportableAssets(entityManager.createQuery("""
+                select asset.id from CatenaryAsset asset
+                """ + reportableAssets(assetType) + """
+                  and exists (select 1 from MaintenanceInspection inspection
+                              where inspection.asset = asset
+                """ + (from == null ? "" : "                and inspection.inspectionDate >= :fromDate\n")
+                    + (to == null ? "" : "                and inspection.inspectionDate <= :toDate\n") + """
+                             )
+                """, UUID.class), executionPackageId, trackId, assetType);
         if (from != null) {
-            inspections.setParameter("fromDate", LocalDate.ofInstant(from, zone));
+            inspected.setParameter("fromDate", LocalDate.ofInstant(from, zone));
         }
         if (to != null) {
-            inspections.setParameter("toDate", LocalDate.ofInstant(to, zone));
+            inspected.setParameter("toDate", LocalDate.ofInstant(to, zone));
         }
-        Set<UUID> ids = new HashSet<>(inspections.getResultList());
+        Set<UUID> ids = new HashSet<>(inspected.getResultList());
 
-        TypedQuery<UUID> tasks = entityManager.createQuery("""
-                select distinct task.asset.id from MaintenanceTask task
-                where task.asset is not null
-                  and task.status = :completed
-                """ + (from == null ? "" : "  and task.completedAt >= :from\n")
-                    + (to == null ? "" : "  and task.completedAt <= :to\n"), UUID.class)
+        TypedQuery<UUID> withTask = ofReportableAssets(entityManager.createQuery("""
+                select asset.id from CatenaryAsset asset
+                """ + reportableAssets(assetType) + """
+                  and exists (select 1 from MaintenanceTask task
+                              where task.asset = asset
+                                and task.status = :completed
+                """ + (from == null ? "" : "                and task.completedAt >= :from\n")
+                    + (to == null ? "" : "                and task.completedAt <= :to\n") + """
+                             )
+                """, UUID.class), executionPackageId, trackId, assetType)
                 .setParameter("completed", MaintenanceTaskStatus.COMPLETED);
         if (from != null) {
-            tasks.setParameter("from", from);
+            withTask.setParameter("from", from);
         }
         if (to != null) {
-            tasks.setParameter("to", to);
+            withTask.setParameter("to", to);
         }
-        ids.addAll(tasks.getResultList());
+        ids.addAll(withTask.getResultList());
         return ids;
     }
 

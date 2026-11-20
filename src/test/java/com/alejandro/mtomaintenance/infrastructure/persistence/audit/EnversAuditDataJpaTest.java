@@ -6,12 +6,15 @@ import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryAs
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CatenaryDefect;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.DefectSeverity;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionResult;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.InspectionTemplate;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspection;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceInspectionItem;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceMaterialUsage;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask;
+import com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskType;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.TrackKind;
 import com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryAssetRepository;
 import com.alejandro.mtomaintenance.infrastructure.persistence.entity.CrewPerson;
@@ -172,6 +175,10 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
             shift.getLinemen().add(em.find(CrewPerson.class, linemanA));
             shift.getLinemen().add(em.find(CrewPerson.class, linemanB));
             shift.getVehicles().add(MaintenanceShiftVehicle.of(shift, em.find(FleetVehicle.class, vehicleId)));
+            CatenaryAsset disconnector = CatenaryAsset.builder().code("DSC-AUD-" + suffix).name("HSA-NS5").type(CatenaryAssetType.DISCONNECTOR)
+                    .trackId(2L).build();
+            em.persist(disconnector);
+            shift.getBlockingDisconnectors().add(disconnector);
             em.persist(shift);
             return shift.getId();
         });
@@ -186,9 +193,10 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
         assertEquals(1, shiftRevisions.size(), "Parking a vehicle changes the vehicle line, not the shift");
         List<Object> crewAtFirst = reading(reader -> {
             MaintenanceShift first = reader.find(MaintenanceShift.class, shiftId, shiftRevisions.getFirst());
-            return List.of(first.getTeamLeader().getFullName(), first.getLinemen().size(), first.getVehicles().size());
+            return List.of(first.getTeamLeader().getFullName(), first.getLinemen().size(), first.getVehicles().size(),
+                    List.copyOf(first.getTrackIds()), first.getBlockingDisconnectors().size());
         });
-        assertEquals(List.of("Yossi Cohen", 2, 1), crewAtFirst);
+        assertEquals(List.of("Yossi Cohen", 2, 1, List.of(2L), 1), crewAtFirst, "With its tracks and its blocking disconnectors of then");
         List<Number> vehicleRevisions = reading(reader -> reader.getRevisions(MaintenanceShiftVehicle.class, shiftVehicleId));
         assertEquals(2, vehicleRevisions.size());
         assertNull(reading(reader -> reader.find(MaintenanceShiftVehicle.class, shiftVehicleId, vehicleRevisions.getFirst()).getParkingTrackId()));
@@ -244,6 +252,75 @@ class EnversAuditDataJpaTest extends PostgreSQLTestContainer {
 
     private <T> T reading(Function<AuditReader, T> work) {
         return inTransaction(em -> work.apply(AuditReaderFactory.get(em)));
+    }
+
+    /**
+     * El historial de una orden se lee como lo lee {@code GET /orders/{id}/revisions}: cada revision trae
+     * sus tareas de entonces y, de cada una, sus tipos; el de una inspeccion, sus puntos. Envers busca esas
+     * colecciones en las {@code _aud} por la columna del padre (los indices de V29), y las asociaciones
+     * que no se auditan (el activo, los tipos de tarea) se cargan por lotes como estan ahora.
+     */
+    @Test
+    void theHistoryOfAnOrderBringsItsTasksWithTheirTypesAndThatOfAnInspectionItsItemsAsTheyWereThen() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UUID[] ids = inTransaction(em -> {
+            CatenaryAsset section = CatenaryAsset.builder().code("SEC-HIS-" + suffix).name("Section").type(CatenaryAssetType.TRACK_SECTION)
+                    .trackId(2L).startKp(new BigDecimal("100.000")).endKp(new BigDecimal("900.000")).trackKind(TrackKind.MAIN).build();
+            em.persist(section);
+            MaintenanceOrder order = MaintenanceOrder.builder().code("MO-HIS-" + suffix).title("Preventive").type(MaintenanceOrderType.PREVENTIVE)
+                    .priority(MaintenancePriority.LOW).asset(section).trackId(2L).build();
+            em.persist(order);
+            List<MaintenanceTaskType> types = em.createQuery("select t from MaintenanceTaskType t where t.code in ('RG-01', 'RG-08')",
+                    MaintenanceTaskType.class).getResultList();
+            for (int index = 1; index <= 3; index++) {
+                CatenaryAsset profile = CatenaryAsset.builder().code("PRF-HIS-" + suffix + "-" + index).name("12-2.0" + index)
+                        .type(CatenaryAssetType.PROFILE).trackId(2L).startKp(new BigDecimal(100 * index)).build();
+                em.persist(profile);
+                MaintenanceTask task = MaintenanceTask.builder().order(order).sequence(index).description("Profile " + index).asset(profile)
+                        .taskTypes(new java.util.LinkedHashSet<>(types)).build();
+                em.persist(task);
+            }
+            MaintenanceInspection inspection = MaintenanceInspection.builder().code("INS-HIS-" + suffix).asset(section)
+                    .inspectionDate(LocalDate.of(2026, 3, 1)).result(InspectionResult.OK).build();
+            InspectionTemplate template = em.createQuery("select t from InspectionTemplate t where t.active = true and t.assetType = :type",
+                    InspectionTemplate.class).setParameter("type", CatenaryAssetType.PROFILE).getSingleResult();
+            template.getItems().forEach(item -> inspection.getItems().add(MaintenanceInspectionItem.fromTemplate(inspection, item)));
+            em.persist(inspection);
+            return new UUID[] {order.getId(), inspection.getId()};
+        });
+        UUID orderId = ids[0];
+        UUID inspectionId = ids[1];
+        // Segunda revision de la orden: una tarea pierde un tipo, y la propia orden cambia de titulo.
+        inTransaction(em -> {
+            MaintenanceOrder order = em.find(MaintenanceOrder.class, orderId);
+            order.setTitle("Preventive, second pass");
+            MaintenanceTask first = order.getTasks().getFirst();
+            first.getTaskTypes().removeIf(type -> "RG-08".equals(type.getCode()));
+            return null;
+        });
+        int itemCount = inTransaction(em -> em.find(MaintenanceInspection.class, inspectionId).getItems().size());
+        assertTrue(itemCount > 0, "The seeded checklist of a profile has items");
+
+        List<List<Integer>> typesPerTaskByRevision = reading(reader -> {
+            List<Object[]> rows = reader.createQuery().forRevisionsOfEntity(MaintenanceOrder.class, false, true)
+                    .add(org.hibernate.envers.query.AuditEntity.id().eq(orderId))
+                    .addOrder(org.hibernate.envers.query.AuditEntity.revisionNumber().asc()).getResultList();
+            return rows.stream().map(row -> ((MaintenanceOrder) row[0]).getTasks().stream()
+                    .sorted(java.util.Comparator.comparing(MaintenanceTask::getSequence))
+                    .map(task -> {
+                        assertTrue(task.getAsset().getCode().startsWith("PRF-HIS-" + suffix), "The asset is read as it is now");
+                        return task.getTaskTypes().size();
+                    }).toList()).toList();
+        });
+        assertEquals(List.of(List.of(2, 2, 2), List.of(1, 2, 2)), typesPerTaskByRevision,
+                "Each revision of the order sees its tasks with the task types they had then");
+
+        List<Integer> itemsByRevision = reading(reader -> {
+            List<Object[]> rows = reader.createQuery().forRevisionsOfEntity(MaintenanceInspection.class, false, true)
+                    .add(org.hibernate.envers.query.AuditEntity.id().eq(inspectionId)).getResultList();
+            return rows.stream().map(row -> ((MaintenanceInspection) row[0]).getItems().size()).toList();
+        });
+        assertEquals(List.of(itemCount), itemsByRevision);
     }
 
     @Test

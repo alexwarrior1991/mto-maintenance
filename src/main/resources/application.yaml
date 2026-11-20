@@ -74,6 +74,12 @@ spring:
   # con el format_sql que anade el perfil dev.
   jpa:
     properties:
+      hibernate:
+        # Las asociaciones perezosas se cargan por lotes: al leer la primera de una pagina, Hibernate
+        # trae con un solo IN las de hasta 100 entidades ya cargadas. Sin esto, la respuesta de una
+        # orden (sus tareas, y de cada tarea sus tipos y su activo) y la lista de sus tareas costaban
+        # una consulta por tarea: una orden de 500 perfiles, mas de mil. No cambia ningun resultado.
+        default_batch_fetch_size: 100
       org.hibernate.envers:
         # En minusculas a proposito. El sufijo por defecto es _AUD y el nombre final depende de como
         # trate la estrategia de nombres a los identificadores de Envers; fijarlo aqui hace que la
