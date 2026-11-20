@@ -130,6 +130,21 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
     @Autowired
     private MaintenanceInstrumentRepository instrumentRepository;
 
+    @Autowired
+    private com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceOrderRepository orderRepository;
+
+    @Autowired
+    private com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTaskRepository taskRepository;
+
+    @Autowired
+    private com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceShiftRepository shiftRepository;
+
+    @Autowired
+    private com.alejandro.mtomaintenance.infrastructure.persistence.repository.MaintenanceTaskTypeRepository taskTypeRepository;
+
+    @Autowired
+    private com.alejandro.mtomaintenance.infrastructure.persistence.repository.CatenaryDefectRepository defectRepository;
+
     @Test
     void twoDeliveriesOfAProfileLeaveASingleSynchronizedAssetAndOneProcessedInboxRow() {
         InboxMessageService inbox = new InboxMessageServiceImpl(inboxMessageRepository);
@@ -157,6 +172,82 @@ class MasterDataAssetSyncDataJpaTest extends PostgreSQLTestContainer {
         assertEquals("A/S S/A", asset.getSectioning());
         assertEquals(10L, asset.getSourceSequenceNumber());
         assertEquals(InboxMessageStatus.PROCESSED, inboxMessageRepository.findByMessageIdAndSourceService(messageId.toString(), SOURCE_SERVICE).orElseThrow().getStatus());
+    }
+
+    /**
+     * La respuesta de una orden y la lista de sus tareas no cuestan una consulta por tarea. Los servicios
+     * de verdad, con sus mappers de verdad, contra PostgreSQL: una orden con cuarenta tareas, cada una en
+     * su perfil, con dos tipos (uno por kilometro, que lee el activo) y su checklist. Las asociaciones
+     * perezosas se cargan por lotes ({@code hibernate.default_batch_fetch_size}, application.yaml): sin
+     * el, la ficha eran mas de ochenta sentencias y la lista mas de ciento veinte, y crecian con la orden.
+     */
+    @Test
+    void anOrderWithManyTasksAndTheListOfItsTasksAreReadInAHandfulOfStatementsNotOnePerTask() {
+        int taskCount = 40;
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        CatenaryAsset section = assetRepository.save(CatenaryAsset.builder().code("SEC-N1-" + suffix).name("Section")
+                .type(CatenaryAssetType.TRACK_SECTION).trackId(2L).startKp(new BigDecimal("1000.000")).endKp(new BigDecimal("9000.000"))
+                .trackKind(TrackKind.MAIN).build());
+        var order = orderRepository.save(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrder.builder().code("MO-N1-" + suffix).title("Preventive")
+                .type(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceOrderType.PREVENTIVE).priority(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenancePriority.LOW).asset(section).trackId(2L)
+                .startKp(new BigDecimal("1000.000")).endKp(new BigDecimal("9000.000")).build());
+        var types = taskTypeRepository.findByCodeIn(List.of("RG-01", "RG-08"));
+        assertEquals(2, types.size());
+        var template = templateRepository.findFirstByAssetTypeAndActiveTrueOrderByTemplateVersionDesc(CatenaryAssetType.PROFILE).orElseThrow();
+        for (int index = 1; index <= taskCount; index++) {
+            CatenaryAsset profile = assetRepository.save(CatenaryAsset.builder().code("PRF-N1-" + suffix + "-" + index).name("12-2." + index)
+                    .type(CatenaryAssetType.PROFILE).trackId(2L).startKp(new BigDecimal(1000 + index * 60)).build());
+            var task = com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTask.builder().order(order).sequence(index).description("Profile " + index).asset(profile)
+                    .taskTypes(new java.util.LinkedHashSet<>(types)).build();
+            template.getItems().forEach(item -> task.getCheckItems().add(com.alejandro.mtomaintenance.infrastructure.persistence.entity.MaintenanceTaskCheckItem.fromTemplate(task, item)));
+            taskRepository.save(task);
+        }
+        UUID orderId = order.getId();
+        entityManager.flush();
+        entityManager.clear();
+
+        MaintenanceLookups lookups = new MaintenanceLookups(assetRepository, orderRepository, shiftRepository, teamRepository,
+                taskTypeRepository, templateRepository);
+        MaintenanceScope scope = org.mockito.Mockito.mock(MaintenanceScope.class);
+        MaterialStockSynchronizer stock = org.mockito.Mockito.mock(MaterialStockSynchronizer.class);
+        org.hibernate.stat.Statistics statistics = entityManager.getEntityManagerFactory().unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        boolean statisticsWereEnabled = statistics.isStatisticsEnabled();
+        try (var mappers = new org.springframework.context.annotation.AnnotationConfigApplicationContext(
+                com.alejandro.mtomaintenance.application.mapper.AuditableMapperImpl.class, com.alejandro.mtomaintenance.application.mapper.CatenaryAssetMapperImpl.class, com.alejandro.mtomaintenance.application.mapper.MaintenanceTeamMapperImpl.class,
+                com.alejandro.mtomaintenance.application.mapper.ChecklistMapperImpl.class, com.alejandro.mtomaintenance.application.mapper.MaintenanceOrderMapperImpl.class, com.alejandro.mtomaintenance.application.mapper.MaintenanceTaskMapperImpl.class)) {
+            MaintenanceOrderServiceImpl orders = new MaintenanceOrderServiceImpl(orderRepository, assetRepository, defectRepository,
+                    inspectionRepository, mappers.getBean(com.alejandro.mtomaintenance.application.mapper.MaintenanceOrderMapper.class), lookups,
+                    org.mockito.Mockito.mock(com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator.class), org.mockito.Mockito.mock(com.alejandro.mtomaintenance.application.service.StatusHistoryService.class),
+                    new WorkloadEstimatorImpl(), stock, org.mockito.Mockito.mock(com.alejandro.mtomaintenance.application.service.EntityAuditService.class), scope);
+            MaintenanceTaskServiceImpl tasks = new MaintenanceTaskServiceImpl(taskRepository, assetRepository, defectRepository,
+                    mappers.getBean(com.alejandro.mtomaintenance.application.mapper.MaintenanceTaskMapper.class), lookups, org.mockito.Mockito.mock(com.alejandro.mtomaintenance.application.service.MaintenanceCodeGenerator.class),
+                    org.mockito.Mockito.mock(com.alejandro.mtomaintenance.application.service.StatusHistoryService.class), new WorkloadEstimatorImpl(),
+                    org.mockito.Mockito.mock(MaterialLineFactory.class), stock, org.mockito.Mockito.mock(PreventiveTaskSelector.class),
+                    org.mockito.Mockito.mock(org.springframework.transaction.support.TransactionOperations.class),
+                    org.mockito.Mockito.mock(GenerationLocks.class), scope);
+            statistics.setStatisticsEnabled(true);
+
+            statistics.clear();
+            var response = orders.findById(orderId);
+            long forTheOrder = statistics.getPrepareStatementCount();
+            assertEquals(taskCount, response.taskCount());
+            assertTrue(response.estimatedMinutes().signum() > 0, "The estimate walked the task types of every task");
+
+            entityManager.clear();
+            statistics.clear();
+            var list = tasks.findByOrder(orderId);
+            long forTheList = statistics.getPrepareStatementCount();
+            assertEquals(taskCount, list.size());
+            assertEquals(List.of("RG-01", "RG-08"), list.getFirst().taskTypeCodes());
+            assertEquals("PRF-N1-" + suffix + "-1", list.getFirst().asset().code());
+            assertEquals(template.getItems().size(), list.getLast().checkItems().size());
+
+            assertTrue(forTheOrder > 0 && forTheList > 0, "The statistics counted the statements");
+            assertTrue(forTheOrder <= 10, "An order of " + taskCount + " tasks took " + forTheOrder + " statements: one per task is an N+1");
+            assertTrue(forTheList <= 10, "The " + taskCount + " tasks of an order took " + forTheList + " statements: one per task is an N+1");
+        } finally {
+            statistics.setStatisticsEnabled(statisticsWereEnabled);
+        }
     }
 
     @Test
