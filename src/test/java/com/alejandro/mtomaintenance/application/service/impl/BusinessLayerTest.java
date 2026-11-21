@@ -2104,6 +2104,47 @@ class BusinessLayerTest {
 
     // ------------------------------------------------------------- shifts (2)
 
+    /**
+     * Un turno guarda los ids de sus seccionadores de bloqueo, y su respuesta los lee como estan ahora:
+     * la de la ficha, la de cada fila de la lista (todos los de la pagina en una lectura) y la de cada
+     * revision de su historial, que lleva los ids de entonces. Asi el historial enseña tambien el
+     * seccionador que solo llego por datos maestros y no tiene revisiones propias.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void theResponseOfAShiftItsListAndItsHistoryReadTheBlockingDisconnectorsAsTheyAreNowFromTheirIds() {
+        ShiftFixture fixture = new ShiftFixture();
+        CatenaryAsset first = disconnector("HSA-NS5");
+        CatenaryAsset second = disconnector("HSA-NS7");
+        MaintenanceShift shift = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        shift.getBlockingDisconnectorIds().addAll(List.of(first.getId(), second.getId()));
+        when(fixture.lookups.shift(shift.getId())).thenReturn(shift);
+        when(fixture.lookups.assets(Set.of(first.getId(), second.getId()))).thenReturn(List.of(first, second));
+
+        fixture.service.findById(shift.getId());
+        verify(fixture.mapper).toResponse(shift, List.of(first, second));
+
+        // El historial: la revision es otro objeto, con los ids que el turno tenia entonces.
+        MaintenanceShift revision = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        revision.getBlockingDisconnectorIds().add(second.getId());
+        when(fixture.lookups.assets(Set.of(second.getId()))).thenReturn(List.of(second));
+        fixture.service.findRevisions(shift.getId(), org.springframework.data.domain.PageRequest.of(0, 20));
+        ArgumentCaptor<java.util.function.Function<MaintenanceShift, MaintenanceShiftResponse>> toResponse =
+                ArgumentCaptor.forClass(java.util.function.Function.class);
+        verify(fixture.auditService).findRevisions(eq(MaintenanceShift.class), eq(shift.getId()), toResponse.capture(), any());
+        toResponse.getValue().apply(revision);
+        verify(fixture.mapper).toResponse(revision, List.of(second));
+
+        // La lista: una lectura para toda la pagina, y a cada turno los suyos.
+        MaintenanceShift other = shift(2L, PossessionType.FULL, ShiftStatus.PLANNED);
+        when(fixture.repository.findAll(any(Specification.class), any(org.springframework.data.domain.Pageable.class))).thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(shift, revision, other)));
+        fixture.service.search(null, null, null, null, null, null, null, null, org.springframework.data.domain.PageRequest.of(0, 20));
+        verify(fixture.mapper, times(2)).toResponse(shift, List.of(first, second));
+        verify(fixture.mapper, times(2)).toResponse(revision, List.of(second));
+        verify(fixture.mapper).toResponse(other, List.of());
+        verify(fixture.lookups, times(2)).assets(Set.of(first.getId(), second.getId()));
+    }
+
     @Test
     void aShiftOpensAsManyBlockingDisconnectorsAsTheCutNeedsAndRejectsAnythingElse() {
         ShiftFixture fixture = new ShiftFixture();
@@ -2120,7 +2161,7 @@ class BusinessLayerTest {
 
         fixture.service.create(shiftRequestWith(null, Set.of(first.getId(), second.getId(), third.getId()), start, end, null, null));
         MaintenanceShift saved = fixture.savedShift();
-        assertEquals(Set.of(first, second, third), saved.getBlockingDisconnectors());
+        assertEquals(Set.of(first.getId(), second.getId(), third.getId()), saved.getBlockingDisconnectorIds());
 
         assertThrows(ValidationException.class,
                 () -> fixture.service.create(shiftRequestWith(null, Set.of(first.getId(), profile.getId()), start, end, null, null)),
@@ -2130,10 +2171,10 @@ class BusinessLayerTest {
         when(fixture.lookups.shift(saved.getId())).thenReturn(saved);
         fixture.service.update(saved.getId(), new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null));
-        assertEquals(3, saved.getBlockingDisconnectors().size());
+        assertEquals(3, saved.getBlockingDisconnectorIds().size());
         fixture.service.update(saved.getId(), new MaintenanceShiftUpdateRequest(null, null, null, null, null, null, null, Set.of(), null, null, null, null,
                 null, null, null, null, null, null));
-        assertTrue(saved.getBlockingDisconnectors().isEmpty());
+        assertTrue(saved.getBlockingDisconnectorIds().isEmpty());
     }
 
     @Test
@@ -2155,7 +2196,7 @@ class BusinessLayerTest {
         assertEquals("SH-000001", saved.getCode());
         assertEquals("Rishpon", saved.getBaseName(), "Base and vehicle default to the team's");
         assertEquals("Vehicle A", saved.getVehicle());
-        assertEquals(Set.of(disconnector), saved.getBlockingDisconnectors());
+        assertEquals(Set.of(disconnector.getId()), saved.getBlockingDisconnectorIds());
         assertEquals(ShiftStatus.PLANNED, saved.getStatus());
         assertEquals(Set.of(2L), saved.getTrackIds());
 
@@ -5513,6 +5554,8 @@ class BusinessLayerTest {
         final FleetVehicleRepository vehicles = mock(FleetVehicleRepository.class);
         final MaintenanceInstrumentRepository instruments = mock(MaintenanceInstrumentRepository.class);
         final RecordingEventPublisher events = new RecordingEventPublisher();
+        final MaintenanceShiftMapper mapper = mock(MaintenanceShiftMapper.class);
+        final EntityAuditService auditService = mock(EntityAuditService.class);
         final MaintenanceShiftServiceImpl service;
 
         ShiftFixture() {
@@ -5525,7 +5568,7 @@ class BusinessLayerTest {
                         asset.getExecutionPackageId(), asset.getStationId(), asset.getDriveType(), asset.getDisconnectorFunction());
             });
             service = new MaintenanceShiftServiceImpl(repository, taskRepository, defectRepository, materialRepository, inspectionRepository,
-                    mock(MaintenanceShiftMapper.class), assetMapper, lookups, codeGenerator, mock(EntityAuditService.class), events,
+                    mapper, assetMapper, lookups, codeGenerator, auditService, events,
                     new ShiftCrew(people, vehicles, repository, instruments, new ShiftProperties(Duration.ofHours(12))), scopeMocks.scope());
         }
 

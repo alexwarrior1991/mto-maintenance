@@ -67,6 +67,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Objects;
+import org.springframework.data.domain.Page;
 import java.util.stream.Stream;
 import java.util.stream.Collectors;
 
@@ -108,7 +110,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
                 .possessionType(request.possessionType())
                 .plannedStart(request.plannedStart())
                 .plannedEnd(request.plannedEnd())
-                .blockingDisconnectors(disconnectors(request.blockingDisconnectorIds()))
+                .blockingDisconnectorIds(disconnectorIds(request.blockingDisconnectorIds()))
                 .earthingPoints(request.earthingPoints())
                 .parkingPlace(request.parkingPlace())
                 .executionPackageId(request.executionPackageId())
@@ -137,7 +139,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         crew.check(shift, false);
         MaintenanceShift saved = repository.save(shift);
         LOGGER.info("Shift created: code={}, date={}, tracks={}, possession={}", saved.getCode(), saved.getShiftDate(), saved.getTrackIds(), saved.getPossessionType());
-        return mapper.toResponse(saved);
+        return response(saved);
     }
 
     @Override
@@ -177,10 +179,9 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         PatchRules.set(patch, "plannedEnd", request.plannedEnd(), shift::setPlannedEnd);
         if (request.blockingDisconnectorIds() != null || patch.clears("blockingDisconnectorIds")) {
             // Se sustituye el conjunto entero: null en un PUT = no tocar; vacio, o null en un PATCH = ninguno abierto.
-            shift.getBlockingDisconnectors().clear();
-            if (request.blockingDisconnectorIds() != null) {
-                shift.getBlockingDisconnectors().addAll(disconnectors(request.blockingDisconnectorIds()));
-            }
+            Set<UUID> disconnectors = disconnectorIds(request.blockingDisconnectorIds());
+            shift.getBlockingDisconnectorIds().retainAll(disconnectors);
+            shift.getBlockingDisconnectorIds().addAll(disconnectors);
         }
         PatchRules.set(patch, "earthingPoints", request.earthingPoints(), shift::setEarthingPoints);
         PatchRules.set(patch, "parkingPlace", request.parkingPlace(), shift::setParkingPlace);
@@ -227,13 +228,13 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
                 || !equipmentBefore.equals(equipmentOf(shift))) {
             requireAssignedTasksStillFit(shift);
         }
-        return mapper.toResponse(repository.save(shift));
+        return response(repository.save(shift));
     }
 
     @Override
     @Transactional(readOnly = true)
     public MaintenanceShiftResponse findById(UUID id) {
-        return mapper.toResponse(lookups.shift(id));
+        return response(lookups.shift(id));
     }
 
     @Override
@@ -249,7 +250,13 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
                 .and(MaintenanceShiftSpecification.executionPackageIdEquals(executionPackageId))
                 .and(MaintenanceShiftSpecification.statusEquals(status))
                 .and(MaintenanceShiftSpecification.possessionTypeEquals(possessionType));
-        return PageMapper.toPageResponse(repository.findAll(specification, pageable), mapper::toResponse);
+        // Los seccionadores de toda la pagina en una lectura, no en una por turno.
+        Page<MaintenanceShift> page = repository.findAll(specification, pageable);
+        Map<UUID, CatenaryAsset> disconnectors = lookups.assets(page.getContent().stream()
+                        .flatMap(shift -> shift.getBlockingDisconnectorIds().stream()).collect(Collectors.toSet())).stream()
+                .collect(Collectors.toMap(CatenaryAsset::getId, asset -> asset));
+        return PageMapper.toPageResponse(page, shift -> mapper.toResponse(shift,
+                shift.getBlockingDisconnectorIds().stream().map(disconnectors::get).filter(Objects::nonNull).toList()));
     }
 
     @Override
@@ -271,7 +278,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         LOGGER.info("Shift {} started at {}", shift.getCode(), shift.getActualStart());
         MaintenanceShift saved = repository.save(shift);
         events.publish(MaintenanceEvents.shiftStarted(saved));
-        return mapper.toResponse(saved);
+        return response(saved);
     }
 
     @Override
@@ -310,7 +317,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         LOGGER.info("Shift {} closed: net minutes={}", shift.getCode(), shift.getNetWorkMinutes());
         MaintenanceShift saved = repository.save(shift);
         events.publish(MaintenanceEvents.shiftClosed(saved));
-        return mapper.toResponse(saved);
+        return response(saved);
     }
 
     @Override
@@ -327,7 +334,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         MaintenanceShift saved = repository.save(shift);
         // mto-resources devuelve a su sitio los vehiculos de un turno cancelado que llego a empezar.
         events.publish(MaintenanceEvents.shiftCancelled(saved));
-        return mapper.toResponse(saved);
+        return response(saved);
     }
 
     @Override
@@ -386,7 +393,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         List<ShiftReportInspectionResponse> inspections = inspectionRepository.findByShiftIdOrderByInspectionDateAscCodeAsc(id).stream()
                 .map(MaintenanceShiftServiceImpl::reportLine)
                 .toList();
-        return new ShiftReportResponse(mapper.toResponse(shift), completed, pendingTasks, profilesReviewed, defectsFound, defectsResolved, rows,
+        return new ShiftReportResponse(response(shift), completed, pendingTasks, profilesReviewed, defectsFound, defectsResolved, rows,
                 inspections.size(), inspections);
     }
 
@@ -463,7 +470,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<EntityRevisionResponse<MaintenanceShiftResponse>> findRevisions(UUID id, Pageable pageable) {
-        return auditService.findRevisions(MaintenanceShift.class, id, mapper::toResponse, pageable);
+        return auditService.findRevisions(MaintenanceShift.class, id, this::response, pageable);
     }
 
     private void releaseOpenTasks(MaintenanceShift shift) {
@@ -473,9 +480,18 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
         }
     }
 
-    /** Resuelve los ids a activos y exige que todos sean seccionadores. */
-    private Set<CatenaryAsset> disconnectors(Set<UUID> ids) {
-        Set<CatenaryAsset> resolved = new LinkedHashSet<>();
+    /**
+     * La respuesta de un turno, con sus seccionadores de bloqueo como estan ahora. El turno guarda sus
+     * ids; tambien el de una revision de su historial, que asi enseña los que tenia entonces aunque el
+     * activo no tenga revisiones propias (lo normal: llega por datos maestros).
+     */
+    private MaintenanceShiftResponse response(MaintenanceShift shift) {
+        return mapper.toResponse(shift, lookups.assets(shift.getBlockingDisconnectorIds()));
+    }
+
+    /** Exige que todos los ids sean de seccionadores y los devuelve, sin nulos. */
+    private Set<UUID> disconnectorIds(Set<UUID> ids) {
+        Set<UUID> resolved = new LinkedHashSet<>();
         if (ids == null) {
             return resolved;
         }
@@ -487,7 +503,7 @@ class MaintenanceShiftServiceImpl implements MaintenanceShiftService {
             if (asset.getType() != CatenaryAssetType.DISCONNECTOR) {
                 throw new ValidationException("Asset " + asset.getCode() + " is not a disconnector");
             }
-            resolved.add(asset);
+            resolved.add(asset.getId());
         }
         return resolved;
     }

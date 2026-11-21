@@ -124,9 +124,10 @@ class MapperLayerTest {
             CatenaryAsset near = CatenaryAsset.builder().code("DSC-1").name("HSA-NS5").type(CatenaryAssetType.DISCONNECTOR).build();
             MaintenanceShift shift = MaintenanceShift.builder().code("SH-000001").shiftDate(LocalDate.of(2026, 1, 27))
                     .possessionType(PossessionType.PARTIAL).trackIds(new java.util.LinkedHashSet<>(java.util.List.of(2L, 1L)))
-                    .blockingDisconnectors(new java.util.LinkedHashSet<>(java.util.List.of(far, near))).build();
+                    .build();
 
-            MaintenanceShiftResponse response = mapper.toResponse(shift);
+            // Los seccionadores los da el servicio (el turno guarda sus ids); el mapper los ordena.
+            MaintenanceShiftResponse response = mapper.toResponse(shift, java.util.List.of(far, near));
 
             assertEquals(java.util.List.of(1L, 2L), response.trackIds(), "Las vias salen ordenadas");
 
@@ -146,7 +147,7 @@ class MapperLayerTest {
             shift.getInstruments().add(instrument("VD-02", "VOLTAGE_DETECTOR", null));
             shift.getInstruments().add(instrument("EP-07", "EARTHING_POLE", LocalDate.of(2027, 1, 10)));
 
-            MaintenanceShiftResponse response = mapper.toResponse(shift);
+            MaintenanceShiftResponse response = mapper.toResponse(shift, java.util.List.of());
 
             assertEquals(List.of("EP-07", "VD-02"), response.instruments().stream().map(instrument -> instrument.code()).toList());
             assertEquals("EARTHING_POLE", response.instruments().getFirst().kind());

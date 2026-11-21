@@ -89,7 +89,9 @@ so one night can cover several tracks; existing rows were copied over. Envers tw
 `maintenance_shift.block_a_disconnector_id` / `block_b_disconnector_id` moved to the join table
 `maintenance_shift_disconnector (shift_id, disconnector_id)`: a safe cut opens every disconnector
 that isolates the zone, not two. Existing rows were copied. Envers twin
-`maintenance_shift_disconnector_aud`.
+`maintenance_shift_disconnector_aud`. The entity maps it as a collection of asset ids, not as a
+relation to `CatenaryAsset` (`07-auditing.md`: Envers would read the history through
+`catenary_asset_aud`); the foreign key to the asset stays in the table.
 
 ## Section insulator switches (`V7`)
 

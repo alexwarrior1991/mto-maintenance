@@ -43,6 +43,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Turno nocturno: la unidad real de ejecucion y el origen del informe diario. Cubre UNA via; con
@@ -117,19 +118,27 @@ public class MaintenanceShift extends VersionedEntity {
     private Integer netWorkMinutes;
 
     /**
-     * Seccionadores abiertos para bloquear la zona de trabajo. Son todos los que aislan la zona, no
-     * dos fijos: con varias vias por turno pueden ser bastantes. Siempre activos de tipo
-     * DISCONNECTOR; lo comprueba el servicio al resolver cada id.
+     * Seccionadores abiertos para bloquear la zona de trabajo, por su id de {@code catenary_asset}. Son
+     * todos los que aislan la zona, no dos fijos: con varias vias por turno pueden ser bastantes.
+     * Siempre activos de tipo DISCONNECTOR; lo comprueba el servicio al resolver cada id, y la clave
+     * ajena {@code fk_maintenance_shift_disconnector_asset} que existan.
+     *
+     * <p>Son ids y no un {@code @ManyToMany} hacia {@link CatenaryAsset} por el historial. Envers solo
+     * atiende a {@code targetAuditMode = NOT_AUDITED} en una relacion a uno; en una coleccion mira si la
+     * entidad de destino es auditada y, si lo es (un activo lo es), une la tabla de la relacion con su
+     * {@code _aud}. Un seccionador casi nunca tiene revision (llega por datos maestros, con SQL nativo),
+     * asi que desaparecia del historial del turno sin error. Como coleccion de valores, igual que
+     * {@link #trackIds}, cada revision guarda los ids, y el servicio lee los activos como estan ahora.
+     * Las tablas son las mismas: {@code maintenance_shift_disconnector} y su {@code _aud}.</p>
      */
-    @ManyToMany(fetch = FetchType.LAZY)
-    @JoinTable(
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(
             name = "maintenance_shift_disconnector",
-            joinColumns = @JoinColumn(name = "shift_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_disconnector_shift")),
-            inverseJoinColumns = @JoinColumn(name = "disconnector_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_disconnector_asset"))
+            joinColumns = @JoinColumn(name = "shift_id", foreignKey = @ForeignKey(name = "fk_maintenance_shift_disconnector_shift"))
     )
-    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
+    @Column(name = "disconnector_id", nullable = false)
     @Builder.Default
-    private Set<CatenaryAsset> blockingDisconnectors = new LinkedHashSet<>();
+    private Set<UUID> blockingDisconnectorIds = new LinkedHashSet<>();
 
     @Size(max = 500)
     @Column(name = "earthing_points", length = 500)

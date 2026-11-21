@@ -42,6 +42,11 @@ class MaintenanceLookups {
         return assetRepository.findById(id).orElseThrow(() -> new NotFoundException("Catenary asset", id));
     }
 
+    /** Los activos de esos ids, como estan ahora, en una sola lectura. Sin ids no se pregunta nada. */
+    List<CatenaryAsset> assets(Collection<UUID> ids) {
+        return ids == null || ids.isEmpty() ? List.of() : assetRepository.findAllById(ids);
+    }
+
     /** Un activo desactivado no admite ordenes ni inspecciones nuevas. */
     CatenaryAsset enabledAsset(UUID id) {
         CatenaryAsset asset = asset(id);
